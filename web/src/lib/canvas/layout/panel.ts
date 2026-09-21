@@ -2,9 +2,15 @@
 //
 // A long file laid out as one column becomes a useless ribbon: 2000 lines are
 // 28000 world units tall next to maybe 600 units of width. So a panel wraps its
-// lines into newspaper style columns until it hits a sane aspect ratio. At full
-// zoom the columns read like facing pages, and when zoomed out the panel is a
-// compact block whose area is proportional to the size of the file.
+// lines into newspaper style columns. At full zoom the columns read like facing
+// pages, and zoomed out the panel is a compact block whose area is proportional
+// to the size of the file.
+//
+// Two functions produce geometry, for two different questions.
+// `panelGeometry` is the shape a file would choose if nothing constrained it,
+// and it exists only to give the treemap a weight. `fillSlot` is the real
+// layout: it takes the rectangle the treemap assigned and derives the text
+// layout from it, so the panel ends up exactly the size of its slot.
 
 import { metrics } from '$lib/metrics';
 
@@ -16,8 +22,19 @@ export const MAX_COLUMNS = 12;
  *  than it looks: it is the floor on a panel's height, and a slot flatter
  *  than that floor is one no column count can fit. */
 export const MIN_COLUMN_LINES = 4;
-/** Columns are never narrower than this, so short-line files stay readable. */
-export const MIN_PANEL_COLS = 24;
+/**
+ * Column widths, in characters.
+ *
+ * `PREFERRED` is what the layout tries for and what the fitting passes grow a
+ * file's area to reach. `HARD_MIN` is the point below which a panel is not
+ * worth drawing, and it is much lower on purpose: treating the preference as a
+ * hard floor made the fitting loop chase a handful of tiny files forever,
+ * when a 16 character column is cramped rather than broken.
+ */
+export const PREFERRED_MIN_COLS = 24;
+export const HARD_MIN_COLS = 12;
+/** Kept as the old name for the stub geometry, which wants the preference. */
+export const MIN_PANEL_COLS = PREFERRED_MIN_COLS;
 /** Nor wider, so one runaway line does not blow up the panel. */
 export const MAX_PANEL_COLS = 120;
 /** Gutter between two text columns, in world units. */
@@ -77,16 +94,6 @@ export function panelCols(maxCols: number): number {
   return Math.min(MAX_PANEL_COLS, Math.max(MIN_PANEL_COLS, quantize(Math.max(1, maxCols), 8)));
 }
 
-/** Outer size of a panel with its lines wrapped into `columns` columns. */
-function sizeFor(lineCount: number, cols: number, columns: number): { w: number; h: number; linesPerColumn: number } {
-  const linesPerColumn = quantize(Math.ceil(Math.max(1, lineCount) / columns), MIN_COLUMN_LINES);
-  return {
-    w: columns * cols * metrics.charWidth + (columns - 1) * COLUMN_GUTTER + 2 * metrics.panelPadX,
-    h: linesPerColumn * metrics.lineHeight + 2 * metrics.panelPadY + metrics.titleHeight,
-    linesPerColumn,
-  };
-}
-
 /** Treemap weight for a file: the exact outer area of the panel in its
  *  preferred shape, padding, title bar and line quantization included. A
  *  fudge factor here shows up directly as panels overflowing their slots. */
@@ -96,36 +103,81 @@ export function panelArea(lineCount: number, maxCols: number): number {
 }
 
 /**
- * Pick the column count that fits the given slot best.
+ * Fill the slot.
  *
- * This is the step that makes the treemap work: the slot's aspect ratio is
- * whatever the subdivision produced, and the panel adapts to it instead of the
- * other way round. Preference goes to the candidate that fits and leaves the
- * least slack; if nothing fits, the one that overflows least wins.
+ * The first version of this picked whichever column count fit inside the slot
+ * and left the panel centred in the leftover space. That is what produced the
+ * gaps: every panel had a different natural size, so every panel had a
+ * different margin, and no two edges lined up anywhere on the canvas. A
+ * treemap tiles its rectangle exactly, so the only way to inherit that
+ * alignment is for the panel to be the rectangle.
+ *
+ * So the slot is the input and the text layout is the output:
+ *
+ *   rows    = how many lines fit in the slot's height
+ *   columns = how many such columns the file needs
+ *   cols    = how many characters fit in the resulting column width
+ *
+ * Line height stays global, because the level-of-detail system is defined in
+ * pixels per line and would fall apart if it varied per panel. What varies is
+ * the character width available, which is why `cols` is an output here.
+ *
+ * `ok` says the result reached the preferred column width, and a false value
+ * asks the layout for another pass with more area. `usable` says the panel is
+ * wide enough to draw at all, and that is the invariant the layout check
+ * asserts; the gap between the two is what stops the fitting loop from
+ * chasing a few pathological files forever.
  */
-export function fitPanel(lineCount: number, maxCols: number, slotW: number, slotH: number): PanelGeometry {
-  const cols = panelCols(maxCols);
-  let best: PanelGeometry | null = null;
-  let bestScore = Infinity;
-  let bestOverflow: PanelGeometry | null = null;
-  let bestOverflowScore = Infinity;
+export interface SlotFit extends PanelGeometry {
+  /** Reached the preferred column width; false asks for another fitting pass. */
+  ok: boolean;
+  /** Wide enough to be worth drawing at all. This is the invariant. */
+  usable: boolean;
+}
 
-  for (let columns = 1; columns <= MAX_COLUMNS; columns++) {
-    const { w, h, linesPerColumn } = sizeFor(lineCount, cols, columns);
-    const g: PanelGeometry = { cols, columns, linesPerColumn, w, h };
-    const over = Math.max(0, w - slotW) + Math.max(0, h - slotH);
-    if (over === 0) {
-      const slack = slotW * slotH - w * h;
-      if (slack < bestScore) {
-        bestScore = slack;
-        best = g;
-      }
-    } else if (over < bestOverflowScore) {
-      bestOverflowScore = over;
-      bestOverflow = g;
-    }
+export function fillSlot(lineCount: number, slotW: number, slotH: number): SlotFit {
+  const innerW = slotW - 2 * metrics.panelPadX;
+  const innerH = slotH - metrics.titleHeight - 2 * metrics.panelPadY;
+  const lines = Math.max(1, lineCount);
+
+  if (innerW < metrics.charWidth * HARD_MIN_COLS || innerH < metrics.lineHeight) {
+    return {
+      cols: HARD_MIN_COLS,
+      columns: 1,
+      linesPerColumn: Math.max(1, Math.floor(innerH / metrics.lineHeight)),
+      w: slotW,
+      h: slotH,
+      ok: false,
+      usable: false,
+    };
   }
-  return best ?? bestOverflow!;
+
+  const linesPerColumn = Math.max(1, Math.floor(innerH / metrics.lineHeight));
+  const columns = Math.max(1, Math.ceil(lines / linesPerColumn));
+  if (columns > MAX_COLUMNS) {
+    return {
+      cols: PREFERRED_MIN_COLS,
+      columns: MAX_COLUMNS,
+      linesPerColumn,
+      w: slotW,
+      h: slotH,
+      ok: false,
+      usable: false,
+    };
+  }
+
+  const columnWidth = (innerW - (columns - 1) * COLUMN_GUTTER) / columns;
+  const cols = Math.floor(columnWidth / metrics.charWidth);
+
+  return {
+    cols: Math.min(MAX_PANEL_COLS, cols),
+    columns,
+    linesPerColumn,
+    w: slotW,
+    h: slotH,
+    ok: cols >= PREFERRED_MIN_COLS,
+    usable: cols >= HARD_MIN_COLS,
+  };
 }
 
 export function panelGeometry(lineCount: number, maxCols: number): PanelGeometry {
@@ -160,12 +212,26 @@ export function panelGeometry(lineCount: number, maxCols: number): PanelGeometry
 export const textOriginX = metrics.panelPadX;
 export const textOriginY = metrics.titleHeight + metrics.panelPadY;
 
+/**
+ * Advance from one code column to the next, in world units.
+ *
+ * Derived from the panel's own width rather than from `cols * charWidth`: the
+ * panel fills its slot, so the columns have to be spread across the real width
+ * or the last one would not end at the right edge.
+ */
+export function columnPitch(g: PanelGeometry): number {
+  const innerW = g.w - 2 * metrics.panelPadX;
+  return (innerW + COLUMN_GUTTER) / g.columns;
+}
+
+/** Usable text width of one code column, in world units. */
+export function columnWidth(g: PanelGeometry): number {
+  return columnPitch(g) - COLUMN_GUTTER;
+}
+
 /** Where line `i` sits inside the panel's text area, in world units. */
 export function linePosition(g: PanelGeometry, i: number): [number, number] {
   const col = Math.min(g.columns - 1, Math.floor(i / g.linesPerColumn));
   const row = i - col * g.linesPerColumn;
-  return [
-    textOriginX + col * (g.cols * metrics.charWidth + COLUMN_GUTTER),
-    textOriginY + row * metrics.lineHeight,
-  ];
+  return [textOriginX + col * columnPitch(g), textOriginY + row * metrics.lineHeight];
 }

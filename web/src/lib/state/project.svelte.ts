@@ -44,6 +44,11 @@ class ProjectState {
 	shownLines = $derived(
 		this.groups.filter((g) => g.mode === 'full').reduce((s, g) => s + g.lines, 0)
 	);
+	/** Lines actually drawn as stubs, which is not the same as lines the filter
+	 *  classified as generated: the mode can be overridden either way. */
+	stubbedLines = $derived(
+		this.groups.filter((g) => g.mode === 'reduced').reduce((s, g) => s + g.lines, 0)
+	);
 	artefactLines = $derived(
 		this.groups.filter((g) => g.artefact).reduce((s, g) => s + g.lines, 0)
 	);

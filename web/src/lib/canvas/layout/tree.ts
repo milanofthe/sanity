@@ -6,12 +6,21 @@
 
 import { metrics } from '$lib/metrics';
 import {
-  fitPanel, panelArea, panelGeometry, stubArea, stubGeometry, type PanelGeometry,
+  fillSlot, panelArea, panelGeometry, stubArea, stubGeometry, type PanelGeometry,
 } from './panel';
-import { layoutTreemap, type Rect } from './treemap';
+import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
 
 /** Width over height the whole canvas aims for; screens are wide. */
 const ROOT_ASPECT = 16 / 9;
+
+/** Inset between a panel and the edge of its slot, in world units. Small on
+ *  purpose: the point of filling the slot is that edges line up, and a wide
+ *  margin would hide that they do. */
+const PANEL_INSET = 2;
+
+/** Directory frame, in grid cells, so the nesting also lands on the lattice. */
+const DIR_PAD_CELLS = 1;
+const DIR_LABEL_CELLS = 1;
 
 export interface FileEntry {
   path: string;
@@ -32,6 +41,12 @@ export interface FileNode {
   geom: PanelGeometry;
   /** Laid out as a fixed-size placeholder rather than drawn. */
   stub: boolean;
+  /** False when the slot did not reach the preferred column width; the fitting
+   *  passes grow such a file's area and try again. */
+  fits: boolean;
+  /** False when the panel is too narrow to draw at all. The layout check
+   *  asserts this is never false. */
+  usable: boolean;
   /** Treemap weight: the area this file needs. Corrected by the fitting
    *  passes when the shape it was given turns out to need more. */
   area: number;
@@ -101,6 +116,8 @@ function buildTree(entries: FileEntry[]): DirNode {
       maxCols: e.maxCols,
       geom: e.stub ? stubGeometry() : panelGeometry(e.lineCount, e.maxCols),
       stub: Boolean(e.stub),
+      fits: true,
+      usable: true,
       area: e.stub ? stubArea() : panelArea(e.lineCount, e.maxCols),
       slotW: 0,
       slotH: 0,
@@ -159,21 +176,38 @@ function sortChildren(dir: DirNode): void {
   for (const sub of subs) sortChildren(sub);
 }
 
-function placeFile(f: FileNode, r: Rect): void {
-  f.slotW = r.w;
-  f.slotH = r.h;
-  // A stub never reshapes: its geometry is the point.
-  f.geom = f.stub ? stubGeometry() : fitPanel(f.lineCount, f.maxCols, r.w, r.h);
-  f.w = f.geom.w;
-  f.h = f.geom.h;
-  // Centre in the slot, but never start outside it: a panel that could not be
-  // fitted should overflow to the right and bottom, where it is least likely
-  // to collide with a sibling.
-  f.x = Math.max(r.x, r.x + (r.w - f.w) / 2);
-  f.y = Math.max(r.y, r.y + (r.h - f.h) / 2);
+function placeFile(f: FileNode, slot: IntRect): void {
+  const r = toWorld(slot);
+  const w = Math.max(CELL, r.w - PANEL_INSET);
+  const h = Math.max(CELL, r.h - PANEL_INSET);
+  f.slotW = w;
+  f.slotH = h;
+  f.x = r.x;
+  f.y = r.y;
+
+  if (f.stub) {
+    // A stub never reshapes: its fixed size is the point. It still sits at the
+    // slot origin, so it lines up with everything around it.
+    f.geom = stubGeometry();
+    f.w = Math.min(w, f.geom.w);
+    f.h = Math.min(h, f.geom.h);
+    f.fits = true;
+    f.usable = true;
+    return;
+  }
+
+  // The panel is the slot. Everything about its text layout is derived from
+  // the rectangle it was given, which is what makes the edges align.
+  const fit = fillSlot(f.lineCount, w, h);
+  f.geom = fit;
+  f.w = w;
+  f.h = h;
+  f.fits = fit.ok;
+  f.usable = fit.usable;
 }
 
-function placeDir(dir: DirNode, r: Rect): void {
+function placeDir(dir: DirNode, slot: IntRect): void {
+  const r = toWorld(slot);
   dir.x = r.x;
   dir.y = r.y;
   dir.w = r.w;
@@ -182,19 +216,19 @@ function placeDir(dir: DirNode, r: Rect): void {
   // Degrade gracefully: a directory whose slot is barely larger than its own
   // frame drops the frame rather than handing its children a negative region.
   const roomy =
-    r.w > 4 * metrics.dirPad && r.h > 4 * metrics.dirPad + metrics.dirLabelHeight;
-  const pad = roomy ? metrics.dirPad : 0;
-  const label = roomy ? metrics.dirLabelHeight : 0;
-  const inner: Rect = {
-    x: r.x + pad,
-    y: r.y + pad + label,
-    w: Math.max(1, r.w - 2 * pad),
-    h: Math.max(1, r.h - 2 * pad - label),
+    slot.w > 2 * DIR_PAD_CELLS + 2 && slot.h > 2 * DIR_PAD_CELLS + DIR_LABEL_CELLS + 2;
+  const pad = roomy ? DIR_PAD_CELLS : 0;
+  const label = roomy ? DIR_LABEL_CELLS : 0;
+  const inner: IntRect = {
+    x: slot.x + pad,
+    y: slot.y + pad + label,
+    w: Math.max(1, slot.w - 2 * pad),
+    h: Math.max(1, slot.h - 2 * pad - label),
   };
 
-  layoutTreemap(dir.children, inner, (child, slot) => {
-    if (child.kind === 'file') placeFile(child, slot);
-    else placeDir(child, slot);
+  layoutTreemap(dir.children, inner, (child, childSlot) => {
+    if (child.kind === 'file') placeFile(child, childSlot);
+    else placeDir(child, childSlot);
   });
 }
 
@@ -225,20 +259,22 @@ function fitPasses(root: DirNode, files: FileNode[]): number {
   for (let pass = 0; pass < FIT_PASSES; pass++) {
     const area = computeAreas(root);
     const w = Math.sqrt(area * ROOT_ASPECT);
-    placeDir(root, { x: 0, y: 0, w, h: area / w });
+    placeDir(root, { x: 0, y: 0, w: cells(w), h: cells(area / w) });
 
     remaining = 0;
     for (const f of files) {
-      if (f.w <= f.slotW + 0.5 && f.h <= f.slotH + 0.5) continue;
+      if (f.fits) continue;
       remaining++;
-      // Ask for the area a slot of this aspect ratio would need in order to
-      // contain the panel. Asking merely for the panel's own area is what
-      // made an earlier version of this loop fail to converge: a panel that
-      // overflows a flat slot usually has the same area as the slot, so the
-      // correction was a few percent when a factor of three was needed.
+      // Ask for the area a slot of this aspect ratio would need to hold the
+      // panel at its natural shape. Asking merely for the panel's own area is
+      // what made an earlier version of this loop fail to converge: a panel
+      // that cannot use a flat slot usually has the same area as the slot, so
+      // the correction was a few percent when a factor of three was needed.
+      const natural = panelGeometry(f.lineCount, f.maxCols);
       const aspect = f.slotW / Math.max(1, f.slotH);
-      const need = Math.max(f.w, f.h * aspect) * Math.max(f.h, f.w / aspect);
-      f.area = Math.max(f.area, need) * 1.02;
+      const need =
+        Math.max(natural.w, natural.h * aspect) * Math.max(natural.h, natural.w / aspect);
+      f.area = Math.max(f.area, need) * 1.06;
     }
     if (remaining === 0) break;
   }
@@ -276,37 +312,64 @@ export interface LayoutStats {
   fill: number;
   /** Root box width over height. */
   aspect: number;
-  /** Panels that did not fit the slot they were given, as a fraction. */
-  overflow: number;
-  /** Sibling pairs that overlap, which must be zero. */
+  /** Panels that did not reach the preferred column width. Cosmetic. */
+  misfits: number;
+  /** Panels too narrow to draw. This one has to be zero. */
+  unusable: number;
+  /** Sibling pairs that overlap. Must be zero: the treemap tiles exactly, so
+   *  anything here means the integer split lost or double-counted a cell. */
   overlaps: number;
+  /** Panel edges that do not sit on the grid. Must be zero. */
+  offGrid: number;
   dirCount: number;
-  /** Mean of each panel's own aspect ratio, as a sanity check on shape. */
+  /** Mean of each panel's own aspect ratio, as a check on shape. */
   meanAspect: number;
+  /** Mean characters per code column; a panel that fills a narrow slot gets
+   *  fewer, and if this drops far below the natural width the treemap is
+   *  handing out badly shaped slots. */
+  meanCols: number;
+  /** The directory with the most children among those that had an overlap,
+   *  with its size in cells. Points straight at whether the integer split ran
+   *  out of cells or got the arithmetic wrong. */
+  worstOverlap: { path: string; children: number; cellsW: number; cellsH: number };
 }
 
 export function layoutStats(l: Layout): LayoutStats {
   let panelArea = 0;
   let aspectSum = 0;
+  let colsSum = 0;
+  let misfits = 0;
+  let unusable = 0;
   for (const f of l.files) {
     panelArea += f.w * f.h;
     aspectSum += f.w / Math.max(1, f.h);
+    colsSum += f.geom.cols;
+    if (!f.fits) misfits++;
+    if (!f.usable) unusable++;
   }
 
-  let overflow = 0;
   let overlaps = 0;
+  let offGrid = 0;
+  let worst = { path: '', children: 0, cellsW: 0, cellsH: 0 };
+  const onGrid = (v: number) => Math.abs(v / CELL - Math.round(v / CELL)) < 1e-6;
   for (const d of l.dirs) {
     const kids = d.children;
     for (let i = 0; i < kids.length; i++) {
       const a = kids[i];
-      if (a.x < d.x || a.y < d.y || a.x + a.w > d.x + d.w + 0.5 || a.y + a.h > d.y + d.h + 0.5) {
-        overflow++;
-      }
+      if (!onGrid(a.x) || !onGrid(a.y)) offGrid++;
       for (let j = i + 1; j < kids.length; j++) {
         const b = kids[j];
         if (a.x < b.x + b.w - 0.5 && b.x < a.x + a.w - 0.5 &&
             a.y < b.y + b.h - 0.5 && b.y < a.y + a.h - 0.5) {
           overlaps++;
+          if (kids.length > worst.children) {
+            worst = {
+              path: d.path || '/',
+              children: kids.length,
+              cellsW: Math.round(d.w / CELL),
+              cellsH: Math.round(d.h / CELL),
+            };
+          }
         }
       }
     }
@@ -315,9 +378,13 @@ export function layoutStats(l: Layout): LayoutStats {
   return {
     fill: panelArea / Math.max(1, l.root.w * l.root.h),
     aspect: l.root.w / Math.max(1, l.root.h),
-    overflow: overflow / Math.max(1, l.files.length + l.dirs.length),
+    misfits,
+    unusable,
     overlaps,
+    offGrid,
     dirCount: l.dirs.length,
     meanAspect: aspectSum / Math.max(1, l.files.length),
+    meanCols: colsSum / Math.max(1, l.files.length),
+    worstOverlap: worst,
   };
 }

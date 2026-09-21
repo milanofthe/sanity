@@ -111,8 +111,24 @@ export class CanvasApp {
     this.labels?.destroy();
     this.decoded.clear();
 
+    const t0 = performance.now();
     this.layout = computeLayout(source.entries);
-    this.fill = layoutStats(this.layout).fill;
+    const st = layoutStats(this.layout);
+    this.fill = st.fill;
+    // Logged rather than hidden: fill, overlaps and off-grid edges are the
+    // three numbers that say whether the layout is doing its job, and they
+    // are what scripts/layout-check.mjs asserts on.
+    console.log(
+      `layout: fill ${(st.fill * 100).toFixed(1)}% · aspect ${st.aspect.toFixed(2)} · ` +
+      `${st.dirCount} dirs · misfits ${st.misfits} · unusable ${st.unusable} · ` +
+      `overlaps ${st.overlaps} · ` +
+      `offgrid ${st.offGrid} · mean aspect ${st.meanAspect.toFixed(2)} · ` +
+      `mean cols ${st.meanCols.toFixed(1)} · ${(performance.now() - t0).toFixed(0)} ms` +
+      (st.overlaps > 0
+        ? ` · worst ${st.worstOverlap.path} ${st.worstOverlap.children} kids in ` +
+          `${st.worstOverlap.cellsW}x${st.worstOverlap.cellsH} cells`
+        : ''),
+    );
 
     for (const e of source.entries) {
       const buf = source.payload(e.path);

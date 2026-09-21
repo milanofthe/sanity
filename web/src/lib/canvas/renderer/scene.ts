@@ -12,7 +12,7 @@ import { Camera } from '$lib/canvas/camera';
 import { lodThresholds, metrics, timing } from '$lib/metrics';
 import { rgb, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
-import { COLUMN_GUTTER, textOriginX, textOriginY } from '$lib/canvas/layout/panel';
+import { columnPitch, columnWidth, textOriginX, textOriginY } from '$lib/canvas/layout/panel';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { GlyphAtlas } from './glyphatlas';
 import { OverviewTextures, type Slot } from './codetex';
@@ -367,7 +367,8 @@ export class Scene {
     const g = n.geom;
     const b = this.overviewBuffer(slot.classIdx, slot.chunkIdx);
     const vTotal = this.textures.vExtent(slot);
-    const colWidth = g.cols * metrics.charWidth;
+    const pitch = columnPitch(g);
+    const colW = columnWidth(g);
     const colHeight = g.linesPerColumn * metrics.lineHeight;
 
     for (let c = 0; c < g.columns; c++) {
@@ -382,9 +383,9 @@ export class Scene {
 
       const o = b.alloc();
       const d = b.data;
-      d[o] = n.x + textOriginX + c * (colWidth + COLUMN_GUTTER);
+      d[o] = n.x + textOriginX + c * pitch;
       d[o + 1] = n.y + textOriginY;
-      d[o + 2] = colWidth;
+      d[o + 2] = colW;
       d[o + 3] = h;
       d[o + 4] = 0; d[o + 5] = v0; d[o + 6] = 1; d[o + 7] = v1;
       d[o + 8] = slot.layer;
@@ -422,11 +423,12 @@ export class Scene {
     f: SceneFile, vx0: number, vy0: number, vx1: number, vy1: number,
   ): Generator<[column: number, colX: number, first: number, last: number]> {
     const g = f.node.geom;
-    const colWidth = g.cols * metrics.charWidth;
+    const pitch = columnPitch(g);
+    const colW = columnWidth(g);
     const yBase = f.node.y + textOriginY;
     for (let c = 0; c < g.columns; c++) {
-      const colX = f.node.x + textOriginX + c * (colWidth + COLUMN_GUTTER);
-      if (colX > vx1 || colX + colWidth < vx0) continue;
+      const colX = f.node.x + textOriginX + c * pitch;
+      if (colX > vx1 || colX + colW < vx0) continue;
       const rowFrom = Math.max(0, Math.floor((vy0 - yBase) / metrics.lineHeight));
       const rowTo = Math.min(
         g.linesPerColumn - 1,
@@ -457,11 +459,17 @@ export class Scene {
         const s1 = d0.spanStart[i + 1];
         for (let s = s0; s < s1; s++) {
           const p = d0.spans[s];
+          const col = spanCol(p);
+          if (col >= g.cols) break;
+          // Clip to the column: the panel is the size of its slot, so a line
+          // longer than the columns available has to stop at the edge rather
+          // than bleed into the neighbouring panel.
+          const len = Math.min(spanLen(p), g.cols - col);
           const o = b.alloc();
           const dd = b.data;
-          dd[o] = colX + spanCol(p) * metrics.charWidth;
+          dd[o] = colX + col * metrics.charWidth;
           dd[o + 1] = y;
-          dd[o + 2] = spanLen(p) * metrics.charWidth;
+          dd[o + 2] = len * metrics.charWidth;
           dd[o + 3] = h;
           dd[o + 4] = spanKind(p);
           dd[o + 5] = fade;
@@ -502,7 +510,8 @@ export class Scene {
         for (let s = s0; s < s1; s++) {
           const p = d0.spans[s];
           const col = spanCol(p);
-          const len = spanLen(p);
+          if (col >= g.cols) break;
+          const len = Math.min(spanLen(p), g.cols - col);
           const kind = spanKind(p);
           for (let k = 0; k < len; k++) {
             const idx = GlyphAtlas.index(text.charCodeAt(col + k));
@@ -561,11 +570,11 @@ export class Scene {
   private pushGutter(f: SceneFile, vy0: number, vy1: number): void {
     const g = f.node.geom;
     const yBase = f.node.y + textOriginY;
-    const colWidth = g.cols * metrics.charWidth;
+    const pitch = columnPitch(g);
     const w = Math.max(2, metrics.charWidth * 0.4);
 
     for (let c = 0; c < g.columns; c++) {
-      const colX = f.node.x + textOriginX + c * (colWidth + COLUMN_GUTTER);
+      const colX = f.node.x + textOriginX + c * pitch;
       const rowFrom = Math.max(0, Math.floor((vy0 - yBase) / metrics.lineHeight));
       const rowTo = Math.min(g.linesPerColumn - 1, Math.ceil((vy1 - yBase) / metrics.lineHeight));
       for (let r = rowFrom; r <= rowTo; r++) {

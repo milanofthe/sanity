@@ -16,9 +16,9 @@
 			<b>{n(stats.files)}</b> files
 			<span class="dot">·</span>
 			<b>{n(stats.totalLines)}</b> lines
-			{#if project.artefactLines > 0}
+			{#if project.stubbedLines > 0}
 				<span class="dot">·</span>
-				<span class="dim">{n(project.artefactLines)} stubbed</span>
+				<span class="dim">{n(project.stubbedLines)} stubbed</span>
 			{/if}
 		</span>
 		<span class="group">
