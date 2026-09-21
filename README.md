@@ -23,12 +23,6 @@ agents work in the repository.
   textured quad per column, sampled from a saturation-weighted mip chain.
   From 1.8 to 3.2 it hands over to one quad per token. From 4 to 6 it hands
   over to text.
-- **Language by colour** where a file is too small to read. Below half a pixel
-  per line the texture is tinted by language family at its own luminance, so
-  the shape of the code survives and the panel says what it is: measured over
-  423 panels, a panel's colour goes from 1.9 to 15 times closer to its own
-  family than to another, while 89 percent of the within-panel contrast is
-  kept. Six languages get a family, the rest one colour between them.
 - **Changes per save.** A line diff against the version on screen, not against
   git: the lines that are going away are banded and fade out, then the new
   content lands and the lines that arrived are banded and settle. The marks
@@ -89,16 +83,15 @@ way to see them: a Tauri window has no console a terminal can read.
 npm run check-all
 ```
 
-Type checks, clippy with warnings denied, 79 TypeScript tests and 58 Rust
-tests, then eleven checks that drive a real browser and assert on pixels: the
+Type checks, clippy with warnings denied, 72 TypeScript tests and 58 Rust
+tests, then ten checks that drive a real browser and assert on pixels: the
 layout invariants, the dropdown geometry, that borders do not shimmer under a
 subpixel pan, that the glow reacts to a change and fades, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
 animate and come to rest, that an idle canvas draws nothing, that the overview
-texture is not smeared vertically, that a change plays as remove then add, and
-that the outermost zoom separates the languages without flattening the
-texture. Last, a pass over this repository asserting that every language gets
-a colour on at least as much of its text as it should.
+texture is not smeared vertically, and that a change plays as remove then add.
+Last, a pass over this repository asserting that every language gets a colour
+on at least as much of its text as it should.
 
 `npm run icons` regenerates the mark: one description produces the app icon,
 the favicon and the toolbar component.

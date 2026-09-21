@@ -115,25 +115,6 @@ export function lodWeights(pxPerLine: number): LodWeights {
   };
 }
 
-/**
- * How much of a file's colour comes from its language rather than its tokens,
- * over the range where the tokens stop being worth showing.
- *
- * Measured on a 988 file project, 40 panels sampled at three zooms: with a
- * file a few pixels tall the luminance varies by 0.106 to 0.167 *within* a
- * panel and by 0.024 to 0.041 *between* panels, so three to four times as much
- * of it is the shape of the code as is the identity of the file. The shape is
- * worth keeping and the identity is worth adding. At this distance the useful
- * questions are what language, how big, and has it moved: area answers the
- * second and the treemap already gives it.
- */
-const LANG_TINT_FROM = 0.5;
-const LANG_TINT_TO = 1.6;
-
-export function languageTint(pxPerLine: number): number {
-  return 1 - smoothstep(LANG_TINT_FROM, LANG_TINT_TO, pxPerLine);
-}
-
 /** Which representation dominates, for the status bar. */
 export function lodName(pxPerLine: number): LodName {
   const w = lodWeights(pxPerLine);
