@@ -16,7 +16,7 @@ import {
 } from '$lib/canvas/anim';
 import { diffLines, seams, signatures, type Seam, type Signature } from '$lib/canvas/linediff';
 import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
-import { bandColour, mixToward } from '$lib/canvas/colour';
+import { bandColour, lerp, mixToward } from '$lib/canvas/colour';
 import { rgb, UiInk, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
 import {
@@ -159,6 +159,15 @@ const CHANGE_MIX = 0.4;
 const GAP_PX = 2;
 const GAP_OF_LINE = 0.16;
 
+/**
+ * How much of its brightness a panel keeps while a search passes it by.
+ *
+ * Far enough down that the matches read as the only thing on the canvas, not
+ * so far that the project's shape disappears: the point of searching on a map
+ * is still the map.
+ */
+const SEARCH_DIM = 0.22;
+
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
 
@@ -294,6 +303,52 @@ export class Scene {
   /** Sharpen the overview texture's vertical interpolation. Off only for the
    *  measurement that shows what it is worth. */
   sharpen = true;
+
+  /**
+   * Paths matching the search, or null when nothing is being searched.
+   *
+   * Everything else is drawn dimmed rather than hidden. Hiding would answer
+   * "where is this file" by removing the thing that makes the answer legible:
+   * the shape of the project around it. Dimming keeps the map and marks the
+   * destination on it.
+   */
+  private matched: Set<string> | null = null;
+  /** Directories holding a match, so a lit panel is not inside a dark box. */
+  private matchedDirs = new Set<string>();
+  /** Scratch transform for a dimmed panel, so dimming allocates nothing. */
+  private dimTf: Transform = { scale: 1, bx: 0, by: 0, alpha: 1 };
+
+  /** Take a set of matching paths, or null to stop searching. */
+  setSearch(paths: Set<string> | null): void {
+    this.matched = paths;
+    this.matchedDirs.clear();
+    if (!paths) return;
+    // Every directory on the way to a match, so the boxes around it stay lit.
+    for (const path of paths) {
+      let cut = path.indexOf('/');
+      while (cut > 0) {
+        this.matchedDirs.add(path.slice(0, cut));
+        cut = path.indexOf('/', cut + 1);
+      }
+    }
+    this.matchedDirs.add('');
+  }
+
+  /** Whether a search is running. */
+  get searching(): boolean {
+    return this.matched !== null;
+  }
+
+  /** Dim what the search did not match, by folding it into the transform the
+   *  settle animation already applies. */
+  private dim(): void {
+    const tf = this.tf;
+    this.dimTf.scale = tf.scale;
+    this.dimTf.bx = tf.bx;
+    this.dimTf.by = tf.by;
+    this.dimTf.alpha = tf.alpha * SEARCH_DIM;
+    this.tf = this.dimTf;
+  }
 
   /** Transform in force while the current panel's geometry is pushed. */
   private tf: Transform = IDENTITY;
@@ -748,12 +803,18 @@ export class Scene {
     d[o + 5] = ((fill >> 8) & 0xff) / 255;
     d[o + 6] = (fill & 0xff) / 255;
     d[o + 7] = fillA * tf.alpha;
+    // A border has no alpha of its own in the instance data, so a transform
+    // that fades something out has to fade the border by blending it into the
+    // background instead. Without this a dimmed panel kept its bright outline,
+    // and a search that dimmed nine hundred panels still showed nine hundred
+    // frames at full strength: the grid, not the matches, was what you saw.
+    const edge = tf.alpha < 1 ? lerp(border, this.pal.surface.bg, 1 - tf.alpha) : border;
     // The border width is in device pixels, so it is the one thing that must
     // not scale: a hairline is a hairline at every zoom, and that is what
     // keeps it from shimmering.
-    d[o + 8] = ((border >> 16) & 0xff) / 255;
-    d[o + 9] = ((border >> 8) & 0xff) / 255;
-    d[o + 10] = (border & 0xff) / 255;
+    d[o + 8] = ((edge >> 16) & 0xff) / 255;
+    d[o + 9] = ((edge >> 8) & 0xff) / 255;
+    d[o + 10] = (edge & 0xff) / 255;
     d[o + 11] = borderPx;
   }
 
@@ -815,6 +876,9 @@ export class Scene {
       ) {
         continue;
       }
+      // A directory with nothing matching inside it recedes with its files,
+      // so the lit panels are not sitting in bright boxes.
+      if (this.matched && !this.matchedDirs.has(d.path)) this.dim();
       this.pushDir(d, cam.zoom);
     }
     this.tf = IDENTITY;
@@ -872,6 +936,9 @@ export class Scene {
       }
       visibleFiles++;
 
+      const hit = this.matched?.has(n.path) ?? true;
+      if (!hit) this.dim();
+
       // A stub is a frame and a hatch, at every zoom level. It says the file
       // is there and stops: no overview texture, no tokens, no glyphs, and no
       // area proportional to its size. That is the whole point of the mode.
@@ -883,7 +950,7 @@ export class Scene {
       this.pushPanel(f);
       this.pushColumnRules(f, cam.zoom);
       this.pushHeader(f, cam.zoom, f.node.path === this.hoveredPath);
-      this.pushPanelBorder(f);
+      this.pushPanelBorder(f, this.matched !== null && hit);
       if (overviewFade > 0.004) this.pushOverview(f, overviewFade);
       if (spanFade > 0.004) this.pushSpans(f, spanFade, pxPerLine, vx0, vy0, vx1, vy1);
       if (glyphFade > 0.004) {
@@ -1154,7 +1221,7 @@ export class Scene {
    * panels looking broken along their edges. A border that encloses its
    * contents has to be painted after them.
    */
-  private pushPanelBorder(f: SceneFile): void {
+  private pushPanelBorder(f: SceneFile, found: boolean): void {
     const n = f.node;
     // Two signals, deliberately different in strength.
     //
@@ -1171,9 +1238,16 @@ export class Scene {
     // One signal now, not two: a panel is warm for a while after it was
     // written and cools off. The standing "differs from a baseline" tint went
     // with the baseline itself, since changes are shown per save.
+    //
+    // A search match takes the accent and the extra weight for as long as the
+    // query stands. It reads as one of the same family of signals rather than
+    // a mode of its own, and it outranks recency while it is on: someone who
+    // typed a name is looking for that file, not for the last thing written.
     const hot = f.heat > 0.02;
-    const border = hot ? this.pal.surface.heat : this.pal.surface.border;
-    const borderPx = hot ? HAIRLINE_PX + 2 * f.heat : HAIRLINE_PX;
+    const border = found
+      ? this.pal.surface.accent
+      : hot ? this.pal.surface.heat : this.pal.surface.border;
+    const borderPx = found ? HAIRLINE_PX + 2 : hot ? HAIRLINE_PX + 2 * f.heat : HAIRLINE_PX;
     // Transparent fill, so this draws only the outline over what is there.
     this.pushRect(this.fgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 0, border, borderPx);
   }

@@ -28,6 +28,22 @@ export const luminance = (hex: number): number => {
 };
 
 /**
+ * A plain channel-wise blend, `t` of the way from `from` to `to`.
+ *
+ * Deliberately not `mixToward`, which matches the target's luminance to the
+ * base first. That is what a directory tint wants and the opposite of what
+ * fading something out wants: fading has to reach the background, luminance
+ * and all, or it never disappears.
+ */
+export function lerp(from: number, to: number, t: number): number {
+  if (t <= 0) return from;
+  if (t >= 1) return to;
+  const [fr, fg, fb] = rgb(from);
+  const [tr, tg, tb] = rgb(to);
+  return pack(fr + (tr - fr) * t, fg + (tg - fg) * t, fb + (tb - fb) * t);
+}
+
+/**
  * The same colour at a different luminance, keeping its hue.
  *
  * Two directions, because neither one works on its own. Scaling the channels

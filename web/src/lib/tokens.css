@@ -115,6 +115,9 @@
 	--sp-3: 12px;
 	--sp-4: 16px;
 	--radius: 0px;
+	/* Height of a single line control, so a field and a button in the same row
+	   line up without either of them setting a padding that happens to match. */
+	--field-h: 24px;
 	--sep-w: 1px;
 
 	/* chrome dimensions */

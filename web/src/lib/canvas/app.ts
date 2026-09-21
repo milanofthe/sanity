@@ -16,6 +16,7 @@ import { metrics } from '$lib/metrics';
 import {
   bandsFromQuery, lodBands, lodName, lodWeights, setBands, type LodName,
 } from '$lib/canvas/lod';
+import { rank, type Ranked } from '$lib/canvas/search';
 import { readPalette, type Palette } from '$lib/theme';
 
 export type { LodName };
@@ -114,6 +115,8 @@ export class CanvasApp {
    *  also count as a click on whatever was under the cursor. */
   private moved = false;
   private hovered: FileNode | null = null;
+  /** Path under the pointer, header or body; see `onHover`. */
+  private hoverPath: string | null = null;
 
   /** Called when a panel header is clicked. */
   onOpenFile: ((path: string) => void) | null = null;
@@ -130,6 +133,9 @@ export class CanvasApp {
 
   /** Called after each frame so the chrome can render the status bar. */
   onStats: ((s: CanvasStats) => void) | null = null;
+  /** The file under the pointer, for the breadcrumb in the status bar. Null
+   *  when the pointer is over background. */
+  onHover: ((path: string | null) => void) | null = null;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.gl = createContext(canvas);
@@ -306,6 +312,48 @@ export class CanvasApp {
   }
 
   /** Fit one file, at a zoom where its text is readable if it will fit. */
+  /**
+   * Filter by a typed query: matches stay lit, everything else dims.
+   *
+   * Returns the matches, best first, so the chrome can say how many there are
+   * and the camera can be sent to one. The scene is told about the set rather
+   * than the query, because matching is a question about paths and belongs in
+   * a pure function with tests, not in the renderer.
+   */
+  search(query: string): Ranked[] {
+    const q = query.trim();
+    if (!this.layout || !this.scene) return [];
+    if (!q) {
+      this.scene.setSearch(null);
+      this.matches = [];
+      this.invalidate();
+      return [];
+    }
+    this.matches = rank(q, this.layout.files.map((f) => f.path));
+    this.scene.setSearch(new Set(this.matches.map((m) => m.path)));
+    this.invalidate();
+    return this.matches;
+  }
+
+  /**
+   * Fly to the nth match, counting from the best one and wrapping around.
+   *
+   * Wrapping rather than stopping at the end, because with a query like a file
+   * extension there are dozens of matches and stepping through them in a loop
+   * is how you look at them.
+   */
+  focusMatch(index: number): string | null {
+    if (this.matches.length === 0) return null;
+    const n = this.matches.length;
+    const at = ((index % n) + n) % n;
+    const { path } = this.matches[at];
+    this.focusFile(path);
+    return path;
+  }
+
+  /** Matches of the current query, best first. */
+  private matches: Ranked[] = [];
+
   focusFile(path: string, seconds = 0.5): void {
     const node = this.layout?.files.find((f) => f.path === path);
     if (!node) return;
@@ -411,12 +459,25 @@ export class CanvasApp {
         if (this.scene) this.scene.hoveredPath = hit?.path ?? null;
         c.style.cursor = hit ? 'pointer' : '';
       }
+      // The panel body, not just its header: the breadcrumb answers "what am
+      // I looking at", and at the outer zoom levels the header is a hairline
+      // while the panel is the size of a stamp. Directory labels vanish out
+      // there too, so this is the only thing that still says where you are.
+      const over = this.fileAt(...local(e));
+      if (over?.path !== this.hoverPath) {
+        this.hoverPath = over?.path ?? null;
+        this.onHover?.(this.hoverPath);
+      }
     });
     c.addEventListener('pointerleave', () => {
       this.invalidate();
       this.hovered = null;
       if (this.scene) this.scene.hoveredPath = null;
       c.style.cursor = '';
+      if (this.hoverPath !== null) {
+        this.hoverPath = null;
+        this.onHover?.(null);
+      }
     });
 
     // Double click fits: on a panel, that panel; on the background, the whole

@@ -56,6 +56,10 @@
 		if (fixtureLoaded()) openFixture(app, keepView);
 		else if (loadedRoot()) openLoaded(app, keepView);
 		else openSynthetic(app, false, keepView);
+		// A rebuild replaces the scene, and with it what it knows about the
+		// query. Without this, a save while searching left the field filled and
+		// the canvas unfiltered.
+		if (query) onSearch(query);
 	}
 
 	// Only when the picker's own key actually changed. The groups array is
@@ -148,28 +152,70 @@
 		});
 	});
 
+	// Search state lives here because the toolbar has the field and the canvas
+	// has the panels: one of them has to own it, and this is where both are.
+	let hover = $state<string | null>(null);
+	let query = $state('');
+	let matches = $state(0);
+	let at = $state(0);
+	let toolbar: ReturnType<typeof Toolbar> | null = $state(null);
+
+	function onSearch(q: string) {
+		query = q;
+		matches = app?.search(q).length ?? 0;
+		// Back to the first match on every keystroke: the ranking changed, so a
+		// position in the old list means nothing in the new one.
+		at = 0;
+	}
+
+	/** Step through the matches, flying to each. */
+	function step(by: number) {
+		if (!app || matches === 0) return;
+		const next = at === 0 && by > 0 ? 1 : at + by;
+		const wrapped = ((next - 1 + matches) % matches) + 1;
+		at = wrapped;
+		app.focusMatch(wrapped - 1);
+	}
+
 	function onKeyDown(e: KeyboardEvent) {
 		if (e.target instanceof HTMLInputElement) return;
+		// Slash and the platform's find key both land in the query field, which
+		// is where every other tool on this machine puts them.
+		if (e.key === '/' || ((e.metaKey || e.ctrlKey) && e.key === 'f')) {
+			e.preventDefault();
+			toolbar?.focusSearch();
+			return;
+		}
 		if (e.key === 'f') app?.fit();
-		if (e.key === 'Escape') ui.openMenu = null;
+		if (e.key === 'Escape') {
+			ui.openMenu = null;
+			if (query) onSearch('');
+		}
 	}
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
 
 <Toolbar
-	onfit={() => app?.fit()}
+	bind:this={toolbar}
 	onopen={() => openFolder()}
 	onreload={(path) => openFolder(path)}
+	onsearch={onSearch}
+	onnext={() => step(1)}
+	onprev={() => step(-1)}
+	{query}
+	{matches}
+	{at}
 	{busy}
 />
 <Canvas
 	bind:app
 	onstats={(s) => (stats = s)}
+	onhover={(path) => (hover = path)}
 	onopenfile={openFile}
 	oncontextmenu={(at) => (ctx = at)}
 />
-<StatusBar {stats} {error} />
+<StatusBar {stats} {hover} {error} />
 
 <ContextMenu x={ctx?.x ?? 0} y={ctx?.y ?? 0} open={ctx !== null} onclose={() => (ctx = null)}>
 	{#if ctx?.path}

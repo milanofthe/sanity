@@ -32,6 +32,12 @@ agents work in the repository.
   63 to 88 percent of its characters, prose markup on less because prose is
   supposed to stay plain; `--example coverage` reports it per language and
   fails if one falls below what is expected of it.
+- **Search from the toolbar.** Typing filters live: matches keep their
+  brightness and take an accent border, everything else drops to a fifth, and
+  the directories on the way to a match stay lit so the path is visible. Enter
+  flies the camera to the best match and steps through the rest, Escape clears.
+  A name beats a path, a run of characters beats a scattered one, and a query
+  that matches nothing says so.
 - **Four themes**: Mariana, Monokai, Breakers, and sanity's own. A file type
   picker draws each extension in full, as a placeholder, or not at all.
 - Read-only. A panel's header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
@@ -73,6 +79,10 @@ the Project menu.
 sanity /path/to/repo
 ```
 
+`f` fits the whole project, `/` or the platform's find key jumps to the search
+field, and a double click fits a panel or the project depending on what is
+under the pointer.
+
 `SANITY_LOD=a,b,c,d` moves the level-of-detail hand-over points.
 `SANITY_WATCH_LOG=1` puts the watcher's batches on stderr, which is the only
 way to see them: a Tauri window has no console a terminal can read.
@@ -83,15 +93,16 @@ way to see them: a Tauri window has no console a terminal can read.
 npm run check-all
 ```
 
-Type checks, clippy with warnings denied, 72 TypeScript tests and 58 Rust
-tests, then ten checks that drive a real browser and assert on pixels: the
+Type checks, clippy with warnings denied, 88 TypeScript tests and 58 Rust
+tests, then eleven checks that drive a real browser and assert on pixels: the
 layout invariants, the dropdown geometry, that borders do not shimmer under a
 subpixel pan, that the glow reacts to a change and fades, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
 animate and come to rest, that an idle canvas draws nothing, that the overview
-texture is not smeared vertically, and that a change plays as remove then add.
-Last, a pass over this repository asserting that every language gets a colour
-on at least as much of its text as it should.
+texture is not smeared vertically, that a change plays as remove then add, and
+that a search dims the project, lights its matches and flies to one. Last, a
+pass over this repository asserting that every language gets a colour on at
+least as much of its text as it should.
 
 `npm run icons` regenerates the mark: one description produces the app icon,
 the favicon and the toolbar component.

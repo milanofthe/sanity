@@ -5,7 +5,20 @@
 	import type { CanvasStats } from '$lib/canvas/app';
 	import { project } from '$lib/state/project.svelte';
 
-	let { stats, error = null }: { stats: CanvasStats | null; error?: string | null } = $props();
+	let {
+		stats,
+		hover = null,
+		error = null
+	}: {
+		stats: CanvasStats | null;
+		/** Path under the pointer, or null. */
+		hover?: string | null;
+		error?: string | null;
+	} = $props();
+
+	const cut = $derived(hover ? hover.lastIndexOf('/') + 1 : 0);
+	const hoverDir = $derived(hover ? hover.slice(0, cut) : '');
+	const hoverName = $derived(hover ? hover.slice(cut) : '');
 
 	const n = (v: number) => v.toLocaleString('en-US');
 
@@ -61,6 +74,16 @@
 			</span>
 		{/if}
 		<span class="spacer"></span>
+		{#if hover}
+			<!-- Where the pointer is. Out at the structural zoom levels the
+			     directory labels are gone and a panel header is a hairline, so
+			     this is the only thing that still names what is under the
+			     cursor. The directories are dimmed and the file is not: the
+			     name is the answer, the path is the context. -->
+			<span class="group crumb" title={hover}>
+				<span class="dim">{hoverDir}</span>{hoverName}
+			</span>
+		{/if}
 		{#if stats.indexing > 0}
 			<span class="group accent">indexing {Math.round(stats.indexing * 100)}%</span>
 		{/if}
@@ -107,6 +130,18 @@
 	b {
 		color: var(--text);
 		font-weight: 600;
+	}
+	.crumb {
+		font-family: var(--font-mono);
+		max-width: 44ch;
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+		direction: rtl;
+		text-align: right;
+	}
+	.crumb > * {
+		direction: ltr;
 	}
 	.dot {
 		color: var(--text-faint);

@@ -9,7 +9,7 @@
 	import MenuSection from '$lib/ui/MenuSection.svelte';
 	import SanityMark from '$lib/ui/SanityMark.svelte';
 	import Swatches from '$lib/ui/Swatches.svelte';
-	import Button from '$lib/ui/Button.svelte';
+	import Search from '$lib/ui/Search.svelte';
 	import FileTypePicker from './FileTypePicker.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { project } from '$lib/state/project.svelte';
@@ -17,15 +17,32 @@
 
 	let {
 		onopen,
-		onfit,
 		onreload,
+		onsearch,
+		onnext,
+		onprev,
+		query = '',
+		matches = 0,
+		at = 0,
 		busy = false
 	}: {
 		onopen?: () => void;
-		onfit?: () => void;
 		onreload?: (path: string) => void;
+		onsearch?: (q: string) => void;
+		onnext?: () => void;
+		onprev?: () => void;
+		query?: string;
+		matches?: number;
+		at?: number;
 		busy?: boolean;
 	} = $props();
+
+	let search: ReturnType<typeof Search> | null = $state(null);
+
+	/** Put the caret in the query field, for the keyboard shortcut. */
+	export function focusSearch() {
+		search?.focus();
+	}
 
 	const short = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
 	const toggle = (id: 'project' | 'view' | 'theme') => () =>
@@ -99,12 +116,22 @@
 
 	<span class="spacer"></span>
 
+	<Search
+		bind:this={search}
+		value={query}
+		count={matches}
+		{at}
+		oninput={(q) => onsearch?.(q)}
+		onnext={() => onnext?.()}
+		onprev={() => onprev?.()}
+		onclear={() => onsearch?.('')}
+	/>
+
 	{#if busy}
 		<span class="badge busy" title="Scanning">scanning</span>
 	{:else if project.synthetic}
 		<span class="badge" title="Showing generated data, not a real repository">synthetic</span>
 	{/if}
-	<Button title="Fit the whole project in view (f)" onclick={() => onfit?.()}>Fit</Button>
 </header>
 
 <style>
@@ -154,5 +181,8 @@
 	}
 	header :global(button) {
 		align-self: center;
+	}
+	header :global(.field) {
+		margin-right: var(--sp-3);
 	}
 </style>

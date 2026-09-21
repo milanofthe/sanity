@@ -16,6 +16,7 @@
 		| 'external'
 		| 'copy'
 		| 'folder'
+		| 'search'
 		| 'check';
 
 	const paths: Record<IconName, string> = {
@@ -26,6 +27,8 @@
 		external: 'M9 2.5h4.5V7M13 3 7.5 8.5M11.5 10v3.5H2.5V4.5H6',
 		copy: 'M5.5 5.5V2.5h8v8h-3M2.5 5.5h8v8h-8z',
 		folder: 'M1.5 3.5h4l1.5 2h7.5v8h-13z',
+		// A circle and a handle, on the same 16 unit grid as the rest.
+		search: 'M10.5 6.5a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM9.5 9.5 14 14',
 		check: 'M3 8.5 6.5 12 13 4.5'
 	};
 
