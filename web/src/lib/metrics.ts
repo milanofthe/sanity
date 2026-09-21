@@ -42,7 +42,47 @@ export const metrics = {
  * the layout lands on this lattice. One line tall and two characters wide, so
  * it is the coarsest cell that the content's own lattice divides evenly.
  */
+/**
+ * Resolution of a file's overview texture layer.
+ *
+ * `texCols` has to be at least `MAX_PANEL_COLS`, or the texture is sampling a
+ * panel at less than one texel per character and the result is visibly soft.
+ * At 64 it was: panels narrower than 64 characters came out sharp and wider
+ * ones blurred, in the same view, which read as a rendering fault rather than
+ * as a level of detail.
+ *
+ * Source lines are squeezed into `texRows` when the file is longer, which is
+ * intended: at these zoom levels individual lines are not resolvable anyway.
+ */
+export const overview = {
+  texCols: 128,
+  texRows: 256,
+} as const;
+
 export const CELL = metrics.lineHeight;
+
+/**
+ * Column width bounds for a panel, in characters.
+ *
+ * `PREFERRED_MIN` is what the layout aims for and what the fitting passes grow
+ * a file's area to reach. `HARD_MIN` is where a panel stops being worth
+ * drawing, and it is far lower on purpose: treating the preference as a floor
+ * made the fitting loop chase a handful of tiny files forever, when a 12
+ * character column is cramped rather than broken.
+ *
+ * `MAX` is bounded by the overview texture's width, because a panel wider than
+ * `texCols` is sampled at less than one texel per character and looks soft
+ * next to its neighbours.
+ */
+export const columns = {
+  preferredMin: 24,
+  hardMin: 12,
+  max: Math.min(120, overview.texCols),
+  /** How many code columns a panel may wrap its lines into. */
+  maxPerPanel: 12,
+  /** Fewest lines a code column is quantized to. */
+  minLines: 4,
+} as const;
 
 /** Pixels per line at which each level of detail takes over. Below the first
  *  entry a file is a flat block; above the last it is real text. */
@@ -53,13 +93,6 @@ export const lodThresholds = {
   glyphs: 10.0,
 } as const;
 
-/** Resolution of a file's overview texture layer. Source lines are squeezed
- *  into `texRows` when the file is longer, which is exactly what we want:
- *  at these zoom levels individual lines are not resolvable anyway. */
-export const overview = {
-  texCols: 64,
-  texRows: 256,
-} as const;
 
 export const timing = {
   /** Seconds over which a changed line cools back down to neutral. */

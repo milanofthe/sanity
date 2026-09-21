@@ -27,6 +27,16 @@ const PANEL_INSET = 0;
 const DIR_PAD_CELLS = 1;
 const DIR_LABEL_CELLS = 1;
 
+/**
+ * Cells a directory gives up at its right and bottom edge.
+ *
+ * The treemap tiles exactly, so without this two sibling directories share an
+ * edge and each draws its own border along it: a doubled line, and where three
+ * boxes meet a doubled corner. Leaving a cell means every border stands alone,
+ * which is also what lets the borders be thick enough to read.
+ */
+const DIR_GAP_CELLS = 1;
+
 export interface FileEntry {
   path: string;
   lineCount: number;
@@ -212,7 +222,16 @@ function placeFile(f: FileNode, slot: IntRect): void {
 }
 
 function placeDir(dir: DirNode, slot: IntRect): void {
-  const r = toWorld(slot);
+  // Shrink away from the right and bottom edge so a sibling's border does not
+  // land on top of this one. The root has no sibling, so it keeps its cells.
+  const gap = dir.depth === 0 ? 0 : DIR_GAP_CELLS;
+  const own: IntRect = {
+    x: slot.x,
+    y: slot.y,
+    w: Math.max(1, slot.w - gap),
+    h: Math.max(1, slot.h - gap),
+  };
+  const r = toWorld(own);
   dir.x = r.x;
   dir.y = r.y;
   dir.w = r.w;
@@ -221,14 +240,14 @@ function placeDir(dir: DirNode, slot: IntRect): void {
   // Degrade gracefully: a directory whose slot is barely larger than its own
   // frame drops the frame rather than handing its children a negative region.
   const roomy =
-    slot.w > 2 * DIR_PAD_CELLS + 2 && slot.h > 2 * DIR_PAD_CELLS + DIR_LABEL_CELLS + 2;
+    own.w > 2 * DIR_PAD_CELLS + 2 && own.h > 2 * DIR_PAD_CELLS + DIR_LABEL_CELLS + 2;
   const pad = roomy ? DIR_PAD_CELLS : 0;
   const label = roomy ? DIR_LABEL_CELLS : 0;
   const inner: IntRect = {
-    x: slot.x + pad,
-    y: slot.y + pad + label,
-    w: Math.max(1, slot.w - 2 * pad),
-    h: Math.max(1, slot.h - 2 * pad - label),
+    x: own.x + pad,
+    y: own.y + pad + label,
+    w: Math.max(1, own.w - 2 * pad),
+    h: Math.max(1, own.h - 2 * pad - label),
   };
 
   layoutTreemap(dir.children, inner, (child, childSlot) => {

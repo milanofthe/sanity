@@ -10,7 +10,11 @@ import { chromium } from 'playwright';
 import { existsSync, readdirSync } from 'node:fs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
-const MIN_FILL = Number(process.env.SANITY_MIN_FILL ?? 0.9);
+// 0.88 rather than 0.9: directories give up a grid cell at their right and
+// bottom edge so sibling borders do not land on top of each other, and on a
+// repo of many tiny files in many directories that costs a point or two of
+// fill. Separated borders are worth more than the area.
+const MIN_FILL = Number(process.env.SANITY_MIN_FILL ?? 0.88);
 
 const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
 const executablePath = (() => {

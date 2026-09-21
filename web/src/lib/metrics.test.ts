@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CELL, metrics } from './metrics.ts';
+import { CELL, columns, metrics, overview } from './metrics.ts';
 
 const { charWidth, lineHeight } = metrics;
 
@@ -43,4 +43,18 @@ test('a panel of whole cells holds whole lines and characters', () => {
       assert.equal(innerH % lineHeight, 0, `${cellsW}x${cellsH} height off lattice`);
     }
   }
+});
+
+test('the overview texture is at least one texel per character', () => {
+  // The blur this guards against only shows on panels wider than texCols, so
+  // it is invisible in a view that happens to contain only narrow ones.
+  assert.ok(
+    overview.texCols >= columns.max,
+    `texCols ${overview.texCols} < max panel columns ${columns.max}`,
+  );
+});
+
+test('the column bounds are ordered', () => {
+  assert.ok(columns.hardMin < columns.preferredMin);
+  assert.ok(columns.preferredMin < columns.max);
 });

@@ -59,6 +59,10 @@ const GLYPH_STRIDE = 6;
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
 
+/** Border width of a top-level directory, in device pixels; each level in
+ *  loses one, to a floor of one. */
+const DIR_BORDER_PX = 4;
+
 /**
  * A stable hue per directory path, in turns.
  *
@@ -358,7 +362,12 @@ export class Scene {
     const tint = tintFor(this.pal.surface.dirBg, hue, 0.1 + 0.04 * (d.depth % 3));
     const edge = tintFor(this.pal.surface.borderStrong, hue, 0.55);
 
-    this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, tint, 1, edge, 1);
+    // Thicker the further out, so the nesting is readable at a glance. A
+    // uniform hairline made a four-level tree look flat, and a border in world
+    // units would vanish when zoomed out, so this is in device pixels and
+    // clamped to at least one.
+    const weight = Math.max(1, DIR_BORDER_PX - d.depth);
+    this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, tint, 1, edge, weight);
 
     // The label sits in the frame's own strip, so it never overlaps a panel.
     const px = metrics.dirLabelHeight * zoom;

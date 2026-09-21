@@ -12,31 +12,22 @@
 // layout: it takes the rectangle the treemap assigned and derives the text
 // layout from it, so the panel ends up exactly the size of its slot.
 
-import { metrics } from '$lib/metrics';
+import { columns as colBounds, metrics } from '$lib/metrics';
 
 /** Width divided by height a panel aims for when nothing constrains it.
  *  Treemap slots come out close to square, so that is what to aim at. */
 export const TARGET_ASPECT = 1.0;
-export const MAX_COLUMNS = 12;
+export const MAX_COLUMNS = colBounds.maxPerPanel;
 /** Fewest lines a code column is quantized to. Setting this low matters more
  *  than it looks: it is the floor on a panel's height, and a slot flatter
  *  than that floor is one no column count can fit. */
-export const MIN_COLUMN_LINES = 4;
-/**
- * Column widths, in characters.
- *
- * `PREFERRED` is what the layout tries for and what the fitting passes grow a
- * file's area to reach. `HARD_MIN` is the point below which a panel is not
- * worth drawing, and it is much lower on purpose: treating the preference as a
- * hard floor made the fitting loop chase a handful of tiny files forever,
- * when a 16 character column is cramped rather than broken.
- */
-export const PREFERRED_MIN_COLS = 24;
-export const HARD_MIN_COLS = 12;
-/** Kept as the old name for the stub geometry, which wants the preference. */
-export const MIN_PANEL_COLS = PREFERRED_MIN_COLS;
-/** Nor wider, so one runaway line does not blow up the panel. */
-export const MAX_PANEL_COLS = 120;
+export const MIN_COLUMN_LINES = colBounds.minLines;
+/** Re-exported from metrics, where the bounds live so they can be checked
+ *  without the module graph. */
+export const PREFERRED_MIN_COLS = colBounds.preferredMin;
+export const HARD_MIN_COLS = colBounds.hardMin;
+export const MIN_PANEL_COLS = colBounds.preferredMin;
+export const MAX_PANEL_COLS = colBounds.max;
 /** Gutter between two text columns. Lives in metrics.ts so it stays on the
  *  character lattice with everything else. */
 export const COLUMN_GUTTER = metrics.columnGutter;

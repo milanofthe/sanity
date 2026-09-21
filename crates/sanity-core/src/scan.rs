@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::filter::Filter;
-use crate::wire::{pack_span, FileData, Kind, LineState, FLAG_BINARY, FLAG_TRUNCATED, MAX_COLS,
-                  MAX_SPAN_LEN};
+use crate::lang::{extension_of, grammar_for_extension};
+use crate::tokenize::tokenize;
+use crate::wire::{pack_span, FileData, Kind, LineState, FLAG_BINARY, FLAG_NO_GRAMMAR,
+                  FLAG_TRUNCATED, MAX_COLS, MAX_SPAN_LEN};
 
 /// How many columns a tab advances to. Only affects the visual indent, since
 /// nothing here reflows text.
@@ -188,7 +190,17 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
     }
 
     let text = String::from_utf8_lossy(&bytes);
-    let data = plain_file_data(&text);
+    // A grammar if one claims the extension, otherwise line metrics alone.
+    // Plain output still renders correctly: what the zoomed-out levels show is
+    // indentation and line length, and only the colour is missing.
+    let data = match extension_of(rel).and_then(grammar_for_extension) {
+        Some(grammar) => tokenize(&text, grammar),
+        None => {
+            let mut d = plain_file_data(&text);
+            d.flags |= FLAG_NO_GRAMMAR;
+            d
+        }
+    };
     let scanned = ScannedFile {
         path: rel.to_string(),
         line_count: data.line_count() as u32,

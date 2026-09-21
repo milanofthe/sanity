@@ -77,14 +77,13 @@ fn width_percentile(line_cols: &[u16], p: f64) -> u32 {
     v[idx].max(1) as u32
 }
 
+/// Group key for the view picker: the lowercased extension, or `(none)`.
+/// Delegates to the core so the grammar lookup and the picker cannot disagree
+/// about what a file's extension is.
 fn extension_of(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    match name.rsplit_once('.') {
-        // A leading dot is part of the name, not an extension: `.gitignore`
-        // is not an extensionless file called `gitignore`.
-        Some((stem, ext)) if !stem.is_empty() => ext.to_ascii_lowercase(),
-        _ => "(none)".to_string(),
-    }
+    sanity_core::lang::extension_of(path)
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_else(|| "(none)".to_string())
 }
 
 fn reason_text(r: Reason) -> String {

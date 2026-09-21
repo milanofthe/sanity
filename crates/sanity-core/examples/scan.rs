@@ -19,8 +19,8 @@ fn main() {
     }
 
     println!(
-        "{:<16} {:>6} {:>10} {:>6} {:>10} {:>7} {:>8}",
-        "REPO", "FILES", "LINES", "DROP", "DROPLINES", "SPANS", "MS"
+        "{:<16} {:>6} {:>10} {:>6} {:>10} {:>8} {:>7} {:>6}",
+        "REPO", "FILES", "LINES", "DROP", "DROPLINES", "SPANS", "HILIT", "MS"
     );
 
     for arg in &args {
@@ -47,6 +47,11 @@ fn main() {
         let mut dropped = 0u32;
         let mut dropped_lines = 0u64;
         let mut spans = 0u64;
+        let mut highlighted = 0u64;
+        let mut no_grammar = 0u32;
+        // Which extensions are going unhighlighted, by line count: the list
+        // that decides which grammar to add next.
+        let mut missing: Vec<(String, u64)> = Vec::new();
         let mut reasons: Vec<(String, u64)> = Vec::new();
         // Kept lines per extension: this is the diagnostic that matters,
         // because an artefact the filter misses shows up here as an extension
@@ -63,6 +68,21 @@ fn main() {
                     kept += 1;
                     kept_lines += info.line_count as u64;
                     spans += data.spans.len() as u64;
+                    // Spans that got a kind other than Plain: the share is
+                    // what says whether the grammars are doing their job.
+                    highlighted += data
+                        .spans
+                        .iter()
+                        .filter(|&&s| sanity_core::wire::span_kind(s) != 0)
+                        .count() as u64;
+                    if data.flags & sanity_core::wire::FLAG_NO_GRAMMAR != 0 {
+                        no_grammar += 1;
+                        let ext = sanity_core::lang::extension_of(rel).unwrap_or("(none)");
+                        match missing.iter_mut().find(|(e, _)| e == ext) {
+                            Some((_, n)) => *n += info.line_count as u64,
+                            None => missing.push((ext.to_string(), info.line_count as u64)),
+                        }
+                    }
                     let ext = rel.rsplit_once('.').map(|(_, e)| e).unwrap_or("(none)").to_string();
                     match by_ext.iter_mut().find(|(n, _)| *n == ext) {
                         Some((_, c)) => *c += info.line_count as u64,
@@ -80,10 +100,22 @@ fn main() {
             }
         }
 
+        let share = if spans > 0 { (highlighted * 100 / spans) as u32 } else { 0 };
         println!(
-            "{name:<16} {kept:>6} {kept_lines:>10} {dropped:>6} {dropped_lines:>10} {spans:>7} {:>8}",
+            "{name:<16} {kept:>6} {kept_lines:>10} {dropped:>6} {dropped_lines:>10} \
+             {spans:>8} {:>6} {:>6}",
+            format!("{share}%"),
             t0.elapsed().as_millis()
         );
+        if no_grammar > 0 {
+            missing.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+            let top: Vec<String> =
+                missing.iter().take(6).map(|(e, n)| format!("{e} {n}")).collect();
+            println!(
+                "{:<16} {:>6} {:>10}  no grammar: {no_grammar} files, {}",
+                "", "", "", top.join(", ")
+            );
+        }
         reasons.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
         for (reason, lines) in reasons.iter().take(3) {
             println!("{:<16} {:>6} {lines:>10}  dropped: {reason}", "", "");
