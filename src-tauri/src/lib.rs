@@ -9,8 +9,6 @@ use std::sync::Mutex;
 
 mod watch;
 
-use sanity_core::filter::{self as core_filter, Filter, Reason, Verdict};
-use sanity_core::git::{self, Baseline};
 use sanity_core::scan::{self, ScannedFile};
 use sanity_core::wire::{encode, FileData, FLAG_BINARY};
 use serde::Serialize;
@@ -34,9 +32,6 @@ pub struct FileInfo {
     /// panel had room for it.
     #[serde(rename = "clipCols")]
     pub clip_cols: u32,
-    /// Reason the filter classified this file as generated, if it did.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub artefact: Option<String>,
 }
 
 /// Rows for the view picker: one per extension.
@@ -45,8 +40,6 @@ pub struct GroupInfo {
     pub id: String,
     pub files: u32,
     pub lines: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub artefact: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,11 +49,6 @@ pub struct ScanResult {
     pub groups: Vec<GroupInfo>,
     /// Files skipped as binary, reported so the count adds up in the UI.
     pub binary: u32,
-    /// Files with at least one changed line against the baseline.
-    pub changed: u32,
-    /// Which baseline the change state was computed against, echoed back so
-    /// the UI states what it is showing rather than guessing.
-    pub baseline: String,
     #[serde(rename = "elapsedMs")]
     pub elapsed_ms: u32,
 }
@@ -75,18 +63,21 @@ pub struct Repo {
     /// without reading and tokenizing the tree again. Roughly the same size
     /// as `payloads`, which is a few megabytes for a large project.
     data: Vec<(String, FileData)>,
-    /// Line count per path, which `git::line_changes` needs to size its
-    /// per-line arrays.
+    /// Line count per path, kept so a watcher refresh can report the index
+    /// without re-reading the tree.
     line_counts: HashMap<String, u32>,
-    /// The filter the scan used, kept so the watcher classifies new files the
-    /// same way rather than by a second set of rules.
-    filter: Filter,
     /// Every path the scan produced. A watch event for one of these needs no
     /// further question; anything else has to be asked about.
     known: HashSet<String>,
-    /// The baseline in force, so a watch-driven refresh uses the same one the
-    /// scan did without the frontend having to repeat it.
-    baseline: Baseline,
+    /// Modification time and size per path, as of the version held.
+    ///
+    /// A watcher reports a path when the filesystem touched it, which is not
+    /// the same as the content having moved: an editor writing through a
+    /// temporary file, a tool rewriting a file with what was already in it, a
+    /// build stamping directories. Asking the filesystem first costs one stat
+    /// and saves a read plus a tokenise, which is two orders of magnitude
+    /// more.
+    stamps: HashMap<String, (u128, u64)>,
     /// The file rows as the layout needs them. Held so a watcher event can
     /// update one row and hand the whole index back without re-reading the
     /// tree, which takes four seconds on a large project.
@@ -102,9 +93,8 @@ impl Default for Repo {
             payloads: Vec::new(),
             data: Vec::new(),
             line_counts: HashMap::new(),
-            filter: Filter::new(),
             known: HashSet::new(),
-            baseline: Baseline::Head,
+            stamps: HashMap::new(),
             files: Vec::new(),
             binary: 0,
         }
@@ -139,15 +129,10 @@ fn extension_of(path: &str) -> String {
         .unwrap_or_else(|| "(none)".to_string())
 }
 
-fn reason_text(r: Reason) -> String {
-    r.as_str().to_string()
-}
-
 /// Scan a folder: enumerate, read, classify, and encode every payload.
 #[tauri::command]
 async fn scan_repo(
     path: String,
-    baseline: Option<String>,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ScanResult, String> {
@@ -157,15 +142,7 @@ async fn scan_repo(
         return Err(format!("not a directory: {path}"));
     }
 
-    // List everything first, including artefacts: the picker needs to know
-    // they exist in order to offer them, and hiding them here would make that
-    // impossible.
-    let mut all = Filter::new();
-    all.show_artefacts = true;
-    let listed = scan::list_files(&root, &all).map_err(|e| e.to_string())?;
-
-    let mut filter = Filter::new();
-    filter.load_gitattributes(&root, &listed);
+    let listed = scan::list_files(&root).map_err(|e| e.to_string())?;
 
     let mut files = Vec::with_capacity(listed.len());
     let mut payloads = Vec::with_capacity(listed.len());
@@ -173,27 +150,23 @@ async fn scan_repo(
 
     let mut data: Vec<(String, FileData)> = Vec::with_capacity(listed.len());
     let mut line_counts: HashMap<String, u32> = HashMap::with_capacity(listed.len());
+    let mut stamps: HashMap<String, (u128, u64)> = HashMap::with_capacity(listed.len());
 
-    for rel in &listed {
-        let Some((data_one, info)) = scan::read_file(&root, rel) else { continue };
+    // Reading and tokenising is the largest cost in opening a project and the
+    // files are independent, so it happens across the cores. Measured on 218
+    // thousand lines: 1.07 seconds on one thread, 349 milliseconds on eight.
+    for (rel, read) in listed.iter().zip(scan::read_all(&root, &listed)) {
+        let Some((data_one, info)) = read else { continue };
         if data_one.flags & FLAG_BINARY != 0 {
             binary += 1;
             continue;
         }
-        let artefact = match filter.classify_sized(rel, info.line_count) {
-            Verdict::Keep => None,
-            Verdict::Artefact(r) => Some(reason_text(r)),
-        };
-        files.push(file_info(rel, &data_one, &info, artefact));
+        files.push(file_info(rel, &data_one, &info));
         line_counts.insert(rel.clone(), info.line_count);
+        stamps.insert(rel.clone(), (info.mtime, info.byte_len));
         data.push((rel.clone(), data_one));
     }
 
-    // Change state is stamped in after reading, not during: it takes two git
-    // invocations for the whole repository rather than one per file, and it
-    // needs the line counts the read produced.
-    let baseline = baseline.as_deref().map(parse_baseline).unwrap_or(Baseline::Head);
-    let changed = apply_changes(&root, baseline, &line_counts, &mut data);
     for (rel, data_one) in &data {
         payloads.push((rel.clone(), encode(data_one)));
     }
@@ -205,8 +178,6 @@ async fn scan_repo(
         files: files.clone(),
         groups,
         binary,
-        changed,
-        baseline: baseline_name(baseline).to_string(),
         elapsed_ms: started.elapsed().as_millis() as u32,
     };
 
@@ -218,15 +189,14 @@ async fn scan_repo(
         repo.known = line_counts.keys().cloned().collect();
         repo.files = files;
         repo.line_counts = line_counts;
-        repo.filter = filter.clone();
-        repo.baseline = baseline;
+        repo.stamps = stamps;
         repo.binary = binary;
     }
 
     // Watching is what turns a snapshot into a monitor, so it starts with the
     // scan rather than on a separate call. A folder that cannot be watched is
     // still perfectly viewable, so a failure here is reported and not fatal.
-    match start_watch(&app, &root, filter) {
+    match start_watch(&app, &root) {
         Ok(w) => {
             // Replacing the previous watch drops it, which releases the OS
             // watch on the folder that is no longer open.
@@ -253,18 +223,8 @@ fn groups_from(files: &[FileInfo]) -> Vec<GroupInfo> {
             Some(g) => {
                 g.files += 1;
                 g.lines += f.line_count;
-                // A group is generated if any of its files is: the reason of
-                // the first one that says so is representative for a row.
-                if g.artefact.is_none() {
-                    g.artefact = f.artefact.clone();
-                }
             }
-            None => groups.push(GroupInfo {
-                id: ext,
-                files: 1,
-                lines: f.line_count,
-                artefact: f.artefact.clone(),
-            }),
+            None => groups.push(GroupInfo { id: ext, files: 1, lines: f.line_count }),
         }
     }
     groups.sort_by(|a, b| b.lines.cmp(&a.lines));
@@ -273,13 +233,12 @@ fn groups_from(files: &[FileInfo]) -> Vec<GroupInfo> {
 
 /// One file row from a fresh read. The same computation for a scan and for a
 /// watcher refresh, so the two cannot disagree about a panel's size.
-fn file_info(rel: &str, data: &FileData, info: &ScannedFile, artefact: Option<String>) -> FileInfo {
+fn file_info(rel: &str, data: &FileData, info: &ScannedFile) -> FileInfo {
     FileInfo {
         path: rel.to_string(),
         line_count: info.line_count,
         max_cols: width_percentile(&data.line_cols, 0.9),
         clip_cols: info.max_cols,
-        artefact,
     }
 }
 
@@ -332,65 +291,6 @@ fn watch_log() -> bool {
     std::env::var("SANITY_WATCH_LOG").is_ok()
 }
 
-/// Which baseline the frontend asked for. Unknown or absent means HEAD, the
-/// answer to "what am I doing right now", which is what a monitor wants by
-/// default.
-fn parse_baseline(name: &str) -> Baseline {
-    match name {
-        "branch" | "mergeBase" | "merge-base" => Baseline::MergeBase,
-        _ => Baseline::Head,
-    }
-}
-
-fn baseline_name(b: Baseline) -> &'static str {
-    match b {
-        Baseline::Head => "head",
-        Baseline::MergeBase => "branch",
-    }
-}
-
-/// Stamp git's per-line change state into already-read payloads.
-///
-/// Returns the number of files that carry at least one changed line. A folder
-/// that is not a repository leaves every state at `Unchanged`, which is the
-/// correct answer rather than an error: sanity opens folders, and only some of
-/// them have history.
-fn apply_changes(
-    root: &Path,
-    baseline: Baseline,
-    line_counts: &HashMap<String, u32>,
-    data: &mut [(String, FileData)],
-) -> u32 {
-    if !git::is_repo(root) {
-        return 0;
-    }
-    let changes = git::line_changes(root, baseline, line_counts);
-    let mut changed = 0u32;
-    for (rel, file) in data.iter_mut() {
-        let n = file.line_count();
-        match changes.get(rel) {
-            Some(c) if c.lines.iter().any(|&s| s != 0) => {
-                // The diff was computed from the same read, but a file can be
-                // written between the two git calls, so the length is fitted
-                // rather than trusted.
-                file.line_state.clear();
-                file.line_state.extend_from_slice(&c.lines[..c.lines.len().min(n)]);
-                file.line_state.resize(n, 0);
-                changed += 1;
-            }
-            _ => {
-                // Reset rather than leave: on a re-query a file that was
-                // changed and is now committed has to go cold.
-                if file.line_state.iter().any(|&s| s != 0) {
-                    file.line_state.clear();
-                    file.line_state.resize(n, 0);
-                }
-            }
-        }
-    }
-    changed
-}
-
 /// Re-read the given files and hand back their payloads.
 ///
 /// This is the path the watcher uses. It re-reads only what changed, but it
@@ -400,22 +300,20 @@ fn apply_changes(
 #[tauri::command]
 async fn refresh_files(
     paths: Vec<String>,
-    baseline: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    let (root, mut line_counts, held, filter) = {
+    let (root, mut line_counts, held) = {
         let repo = state.repo.lock().map_err(|e| e.to_string())?;
-        (repo.root.clone(), repo.line_counts.clone(), repo.baseline, repo.filter.clone())
+        (repo.root.clone(), repo.line_counts.clone(), repo.stamps.clone())
     };
-    // The baseline is remembered from the scan, so the watcher does not have
-    // to carry it through every event.
-    let baseline = baseline.as_deref().map(parse_baseline).unwrap_or(held);
     if root.as_os_str().is_empty() {
         return Err("no folder open".into());
     }
 
     let mut fresh: Vec<(String, FileData)> = Vec::with_capacity(paths.len());
     let mut rows: Vec<FileInfo> = Vec::with_capacity(paths.len());
+    let mut stamps: Vec<(String, (u128, u64))> = Vec::with_capacity(paths.len());
+    let mut unchanged = 0usize;
     for rel in &paths {
         // Containment, as everywhere a path arrives from outside.
         let full = root.join(rel);
@@ -424,25 +322,35 @@ async fn refresh_files(
         if !canonical.starts_with(&root_canonical) {
             continue;
         }
+        // The cheap question first: has this file actually moved? A watcher
+        // reports a path when the filesystem touched it, and most of those
+        // have the same content as the version already held.
+        let now = scan::stamp_of(&root, rel);
+        if let (Some(now), Some(was)) = (now, held.get(rel)) {
+            if now == *was {
+                unchanged += 1;
+                continue;
+            }
+        }
+
         let Some((data_one, info)) = scan::read_file(&root, rel) else { continue };
         if data_one.flags & FLAG_BINARY != 0 {
             continue;
         }
-        let artefact = match filter.classify_sized(rel, info.line_count) {
-            Verdict::Keep => None,
-            Verdict::Artefact(r) => Some(reason_text(r)),
-        };
+        stamps.push((rel.clone(), (info.mtime, info.byte_len)));
         line_counts.insert(rel.clone(), info.line_count);
-        rows.push(file_info(rel, &data_one, &info, artefact));
+        rows.push(file_info(rel, &data_one, &info));
         fresh.push((rel.clone(), data_one));
     }
-
-    apply_changes(&root, baseline, &line_counts, &mut fresh);
 
     let out: Vec<(String, Vec<u8>)> =
         fresh.iter().map(|(rel, d)| (rel.clone(), encode(d))).collect();
     if watch_log() {
-        eprintln!("refresh_files: {} of {} paths re-read", out.len(), paths.len());
+        eprintln!(
+            "refresh_files: {} of {} paths re-read, {unchanged} unchanged by timestamp",
+            out.len(),
+            paths.len(),
+        );
     }
 
     // Keep the held copy in step, so a later full payload request does not
@@ -450,6 +358,9 @@ async fn refresh_files(
     {
         let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
         repo.line_counts = line_counts;
+        for (rel, stamp) in stamps {
+            repo.stamps.insert(rel, stamp);
+        }
         for row in rows {
             repo.known.insert(row.path.clone());
             match repo.files.iter_mut().find(|f| f.path == row.path) {
@@ -475,51 +386,6 @@ async fn refresh_files(
     Ok(Response::new(pack_payloads(&out)?))
 }
 
-/// Re-query git for every held file and return the payloads whose change state
-/// moved. Used when HEAD moves: a commit or a checkout changes the baseline for
-/// files that were never written.
-#[tauri::command]
-async fn refresh_changes(
-    baseline: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<Response, String> {
-    let (root, line_counts, mut data, held) = {
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
-        (repo.root.clone(), repo.line_counts.clone(), repo.data.clone(), repo.baseline)
-    };
-    let baseline = baseline.as_deref().map(parse_baseline).unwrap_or(held);
-    if root.as_os_str().is_empty() {
-        return Err("no folder open".into());
-    }
-
-    let before: Vec<Vec<u8>> = data.iter().map(|(_, d)| d.line_state.clone()).collect();
-    apply_changes(&root, baseline, &line_counts, &mut data);
-
-    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
-    for (i, (rel, d)) in data.iter().enumerate() {
-        if before[i] != d.line_state {
-            out.push((rel.clone(), encode(d)));
-        }
-    }
-
-    if watch_log() {
-        eprintln!("refresh_changes: {} files changed state", out.len());
-    }
-
-    {
-        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
-        for (rel, bytes) in &out {
-            if let Some(slot) = repo.payloads.iter_mut().find(|(p, _)| p == rel) {
-                slot.1 = bytes.clone();
-            }
-        }
-        repo.data = data;
-        repo.baseline = baseline;
-    }
-
-    Ok(Response::new(pack_payloads(&out)?))
-}
-
 /// The file rows and picker groups as they now stand.
 ///
 /// Answered from held state, so the frontend can pick up a file the watcher
@@ -535,37 +401,29 @@ async fn repo_index(state: State<'_, AppState>) -> Result<ScanResult, String> {
         files: repo.files.clone(),
         groups: groups_from(&repo.files),
         binary: repo.binary,
-        changed: repo.data.iter().filter(|(_, d)| d.line_state.iter().any(|&s| s != 0)).count()
-            as u32,
-        baseline: baseline_name(repo.baseline).to_string(),
         elapsed_ms: 0,
     })
 }
 
 /// Start watching the open folder and forward each batch to the webview.
-fn start_watch(app: &tauri::AppHandle, root: &Path, filter: Filter) -> Result<watch::Watch, String> {
+fn start_watch(app: &tauri::AppHandle, root: &Path) -> Result<watch::Watch, String> {
     let handle = app.clone();
-    // The watch thread only gets the cheap, pure part of the decision. Whether
-    // an unseen path is gitignored needs git, and asking per event would mean a
-    // process per keystroke; it is asked once per batch instead, below.
-    let keep = move |rel: &str| filter.keep(Path::new(""), rel);
 
     // The webview console is not visible from a terminal, so there has to be
     // some way to see that a batch went out. Off unless asked for: this fires
     // on every save.
     let log = watch_log();
 
-    watch::start(root.to_path_buf(), keep, move |batch| {
+    watch::start(root.to_path_buf(), move |batch| {
         let batch = settle_batch(&handle, batch);
         if batch.is_empty() {
             return;
         }
         if log {
             eprintln!(
-                "watch: {} changed, {} removed{} {:?}",
+                "watch: {} changed, {} removed {:?}",
                 batch.changed.len(),
                 batch.removed.len(),
-                if batch.head_moved { ", head moved" } else { "" },
                 &batch.changed[..batch.changed.len().min(4)],
             );
         }
@@ -595,7 +453,7 @@ fn settle_batch(app: &tauri::AppHandle, mut batch: watch::Batch) -> watch::Batch
         .filter(|p| !known.contains(*p))
         .cloned()
         .collect();
-    let ignored = core_filter::ignored_paths(&root, &unknown);
+    let ignored = scan::ignored_paths(&root, &unknown);
 
     batch.changed.retain(|p| !ignored.contains(p));
     // A removed path that was never known is nothing to report either way.
@@ -636,6 +494,7 @@ async fn drop_files(paths: Vec<String>, state: State<'_, AppState>) -> Result<()
         repo.data.retain(|(p, _)| p != path);
         repo.line_counts.remove(path);
         repo.known.remove(path);
+        repo.stamps.remove(path);
         repo.files.retain(|f| f.path != *path);
     }
     Ok(())
@@ -791,7 +650,6 @@ pub fn run() {
             startup,
             open_in_editor,
             refresh_files,
-            refresh_changes,
             stop_watch,
             drop_files,
             repo_index,

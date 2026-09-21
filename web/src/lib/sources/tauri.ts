@@ -23,7 +23,6 @@ interface ScanFile {
   lineCount: number;
   maxCols: number;
   clipCols?: number;
-  artefact?: string;
 }
 
 interface ScanResult {
@@ -31,10 +30,6 @@ interface ScanResult {
   files: ScanFile[];
   groups: Omit<FileGroup, 'mode'>[];
   binary: number;
-  /** Files with at least one line changed against the baseline. */
-  changed: number;
-  /** Which baseline the change state was computed against. */
-  baseline: string;
   elapsedMs: number;
 }
 
@@ -42,7 +37,6 @@ interface ScanResult {
 interface ChangeBatch {
   changed: string[];
   removed: string[];
-  headMoved: boolean;
 }
 
 let scan: ScanResult | null = null;
@@ -153,8 +147,6 @@ export async function loadRepo(path: string): Promise<void> {
   payloads = unpack(blob);
   decoded = new Map();
   project.load(scan.root, scan.groups, false);
-  project.baseline = scan.baseline === 'branch' ? 'branch' : 'head';
-  project.changed = scan.changed;
 }
 
 /** Build the scene from the loaded scan and the current view modes. */
@@ -237,7 +229,6 @@ async function applyRemoved(paths: string[]): Promise<boolean> {
 async function restructure(app: CanvasApp): Promise<void> {
   scan = await invoke<ScanResult>('repo_index');
   project.refreshGroups(scan.groups);
-  project.changed = scan.changed;
   openLoaded(app, true);
 }
 
@@ -260,21 +251,6 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
         let structural = await applyRemoved(batch.removed);
         structural = (await applyChanged(app, batch.changed, true)) || structural;
 
-        if (batch.headMoved) {
-          // A commit or a checkout moves the baseline for files nobody wrote,
-          // so every held file has to be asked again. These arrive cold: the
-          // glow means "someone just changed this", and a commit is the
-          // opposite of that.
-          const blob = await invoke<ArrayBuffer>('refresh_changes');
-          for (const [path, buf] of unpack(blob)) {
-            payloads.set(path, buf);
-            const data = decodeFile(buf);
-            decoded.set(path, data);
-            if (app.fitsInPlace(path, data)) app.touch(path, data, false);
-            else structural = true;
-          }
-        }
-
         if (structural) await restructure(app);
         // From the scene rather than from a local tally: the scene has every
         // drawn file's state, and counting only the files this session has
@@ -283,8 +259,7 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
         project.sawChanges(project.changed);
         uiLog(
           `batch: ${batch.changed.length} changed, ${batch.removed.length} removed` +
-            `${batch.headMoved ? ', head moved' : ''}` +
-            `${structural ? ' (relayout)' : ' (in place)'} · ${project.changed} files differ`,
+            `${structural ? ' (relayout)' : ' (in place)'} · ${project.changed} showing a change`,
         );
       })
       // A failed batch must not stop the ones after it, and the next save
@@ -293,25 +268,6 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
   });
 
   return unlisten;
-}
-
-/**
- * Switch what the change state is measured against, and repaint.
- *
- * A baseline change touches every file's state at once, so it goes through the
- * same cold path a commit does: the highlighting moves, the recency glow does
- * not, because nothing was written.
- */
-export async function setBaseline(app: CanvasApp, baseline: 'head' | 'branch'): Promise<void> {
-  const blob = await invoke<ArrayBuffer>('refresh_changes', { baseline });
-  for (const [path, buf] of unpack(blob)) {
-    payloads.set(path, buf);
-    const data = decodeFile(buf);
-    decoded.set(path, data);
-    app.touch(path, data, false);
-  }
-  project.baseline = baseline;
-  project.changed = app.changedCount();
 }
 
 /** Stop watching. */

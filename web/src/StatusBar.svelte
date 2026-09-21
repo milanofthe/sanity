@@ -51,18 +51,13 @@
 			{n(stats.visibleFiles)} visible
 		</span>
 		{#if project.watching}
-			<span
-				class="group"
-				title={project.baseline === 'branch'
-					? 'Changes since this branch left main'
-					: 'Uncommitted changes against HEAD'}
-			>
+			<span class="group" title="Watching the folder for saves">
 				<span class="pip" class:hot={justChanged}></span>
 				live
-				<span class="dot">·</span>
-				<span class="dim">{project.baseline}</span>
-				<span class="dot">·</span>
-				<b>{n(project.changed)}</b> changed
+				{#if project.changed > 0}
+					<span class="dot">·</span>
+					<b>{n(project.changed)}</b> changed
+				{/if}
 			</span>
 		{/if}
 		<span class="spacer"></span>

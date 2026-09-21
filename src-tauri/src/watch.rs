@@ -7,10 +7,10 @@
 //! 1. A single save produces several events on macOS, and a `git checkout`
 //!    produces thousands. Both have to arrive as one batch, or the frontend
 //!    re-decodes the same file five times and a branch switch stutters.
-//! 2. Most of what happens under `.git` is object churn that changes nothing on
-//!    screen. Only a move of `HEAD`, the index or a ref changes what the diff
-//!    says, and that one has to be noticed, because a commit turns every warm
-//!    panel cold without any file being written.
+//! 2. Everything under `.git` is noise here. Changes are shown per save, from a
+//!    diff of the two versions of the file, so a commit or a checkout matters
+//!    only through the files it rewrites, and those arrive as ordinary write
+//!    events like any other.
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -39,15 +39,11 @@ pub struct Batch {
     pub changed: Vec<String>,
     /// Files that are gone, repository-relative.
     pub removed: Vec<String>,
-    /// HEAD, the index or a ref moved, so every file's diff may have changed
-    /// even if no file was written.
-    #[serde(rename = "headMoved")]
-    pub head_moved: bool,
 }
 
 impl Batch {
     pub fn is_empty(&self) -> bool {
-        self.changed.is_empty() && self.removed.is_empty() && !self.head_moved
+        self.changed.is_empty() && self.removed.is_empty()
     }
 }
 
@@ -56,7 +52,6 @@ impl Batch {
 #[derive(Debug, Default)]
 pub struct Debounce {
     paths: HashSet<PathBuf>,
-    head_moved: bool,
     first: Option<Instant>,
     last: Option<Instant>,
 }
@@ -64,11 +59,6 @@ pub struct Debounce {
 impl Debounce {
     pub fn push_path(&mut self, path: PathBuf, now: Instant) {
         self.paths.insert(path);
-        self.mark(now);
-    }
-
-    pub fn push_head(&mut self, now: Instant) {
-        self.head_moved = true;
         self.mark(now);
     }
 
@@ -104,13 +94,10 @@ impl Debounce {
     /// through a temporary file arrives as a create plus a rename, and in both
     /// cases the event kind describes an intermediate state that is already
     /// over by the time the batch flushes.
-    pub fn take(&mut self, root: &Path, keep: &dyn Fn(&str) -> bool) -> Batch {
-        let mut batch = Batch { head_moved: self.head_moved, ..Default::default() };
+    pub fn take(&mut self, root: &Path) -> Batch {
+        let mut batch = Batch::default();
         for path in self.paths.drain() {
             let Some(rel) = relative(root, &path) else { continue };
-            if !keep(&rel) {
-                continue;
-            }
             if path.is_file() {
                 batch.changed.push(rel);
             } else if !path.is_dir() {
@@ -121,7 +108,6 @@ impl Debounce {
         }
         batch.changed.sort();
         batch.removed.sort();
-        self.head_moved = false;
         self.first = None;
         self.last = None;
         batch
@@ -148,25 +134,6 @@ pub fn relative(root: &Path, path: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// Whether a path under `.git` means the diff baseline moved.
-///
-/// Everything else in there is object and log churn that changes nothing on
-/// screen, and there is a great deal of it: a single commit writes dozens of
-/// files under `objects/`.
-pub fn git_move(rel: &str) -> bool {
-    let Some(inner) = rel.strip_prefix(".git/") else {
-        return rel == ".git";
-    };
-    // A lock file is the write in progress, not the result; acting on it reads
-    // the old state back.
-    if inner.ends_with(".lock") {
-        return false;
-    }
-    matches!(inner, "HEAD" | "ORIG_HEAD" | "MERGE_HEAD" | "index")
-        || inner.starts_with("refs/")
-        || inner == "packed-refs"
-}
-
 /// A running watch. Dropping it stops the thread and releases the OS watch.
 pub struct Watch {
     // Held only to keep the watch alive; notify stops watching on drop.
@@ -182,11 +149,11 @@ impl Drop for Watch {
 
 /// Start watching `root` recursively, calling `emit` once per batch.
 ///
-/// `keep` decides which paths matter; it is the same filter the scan used, so a
-/// gitignored build directory does not wake the canvas.
-pub fn start<K, E>(root: PathBuf, keep: K, emit: E) -> Result<Watch, String>
+/// Whether a path the scan never saw is gitignored needs git, and asking per
+/// event would mean a process per keystroke, so it is asked once per batch by
+/// the caller. Everything under `.git` is dropped here, where it is free.
+pub fn start<E>(root: PathBuf, emit: E) -> Result<Watch, String>
 where
-    K: Fn(&str) -> bool + Send + 'static,
     E: Fn(Batch) + Send + 'static,
 {
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
@@ -211,16 +178,22 @@ where
                 if thread_stop.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
-                let timeout = pending.wait(Instant::now()).unwrap_or(Duration::from_millis(250));
-                match rx.recv_timeout(timeout) {
+                // Blocking when nothing is pending, rather than waking on a
+                // timer to find nothing. This process is meant to sit in the
+                // background while something else works, and four wakeups a
+                // second for the length of a working day is a cost with
+                // nothing on the other side of it. The channel disconnects
+                // when the watch is dropped, so the thread still exits.
+                let received = match pending.wait(Instant::now()) {
+                    Some(timeout) => rx.recv_timeout(timeout),
+                    None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                };
+                match received {
                     Ok(Ok(event)) => {
                         let now = Instant::now();
                         for path in event.paths {
                             let Some(rel) = relative(&thread_root, &path) else { continue };
                             if rel == ".git" || rel.starts_with(".git/") {
-                                if git_move(&rel) {
-                                    pending.push_head(now);
-                                }
                                 continue;
                             }
                             pending.push_path(path, now);
@@ -234,7 +207,7 @@ where
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
                 if pending.pending() && pending.ready(Instant::now()) {
-                    let batch = pending.take(&thread_root, &keep);
+                    let batch = pending.take(&thread_root);
                     if !batch.is_empty() {
                         emit(batch);
                     }
@@ -263,22 +236,6 @@ mod tests {
         assert_eq!(relative(root, Path::new("/tmp/repo")), None);
         // Outside the root.
         assert_eq!(relative(root, Path::new("/tmp/other/a.rs")), None);
-    }
-
-    #[test]
-    fn only_refs_and_head_count_as_a_git_move() {
-        assert!(git_move(".git/HEAD"));
-        assert!(git_move(".git/index"));
-        assert!(git_move(".git/ORIG_HEAD"));
-        assert!(git_move(".git/refs/heads/backend"));
-        assert!(git_move(".git/packed-refs"));
-        // Object churn is not a baseline move.
-        assert!(!git_move(".git/objects/ab/cdef"));
-        assert!(!git_move(".git/logs/HEAD"));
-        assert!(!git_move(".git/COMMIT_EDITMSG"));
-        // A lock is the write in progress; the result arrives separately.
-        assert!(!git_move(".git/index.lock"));
-        assert!(!git_move(".git/refs/heads/main.lock"));
     }
 
     #[test]
@@ -335,17 +292,14 @@ mod tests {
         let now = Instant::now();
         d.push_path(dir.join("src/there.rs"), now);
         d.push_path(dir.join("src/gone.rs"), now);
-        d.push_path(dir.join("src/ignored.rs"), now);
-        d.push_head(now);
 
-        let batch = d.take(&dir, &|rel: &str| rel != "src/ignored.rs");
+        let batch = d.take(&dir);
         assert_eq!(batch.changed, vec!["src/there.rs"]);
         assert_eq!(batch.removed, vec!["src/gone.rs"]);
-        assert!(batch.head_moved);
 
         // A taken batch leaves nothing behind, or the next one would repeat it.
         assert!(!d.pending());
-        assert!(d.take(&dir, &|_| true).is_empty());
+        assert!(d.take(&dir).is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -365,7 +319,7 @@ mod tests {
         let dir = dir.canonicalize().unwrap();
 
         let (tx, rx) = mpsc::channel::<Batch>();
-        let watch = start(dir.clone(), |_| true, move |b| {
+        let watch = start(dir.clone(), move |b| {
             let _ = tx.send(b);
         })
         .expect("the watch has to start");
@@ -396,7 +350,7 @@ mod tests {
         let dir = dir.canonicalize().unwrap();
 
         let (tx, rx) = mpsc::channel::<Batch>();
-        let watch = start(dir.clone(), |_| true, move |b| {
+        let watch = start(dir.clone(), move |b| {
             let _ = tx.send(b);
         })
         .expect("the watch has to start");

@@ -19,14 +19,11 @@
 		onopen,
 		onfit,
 		onreload,
-		onbaseline,
 		busy = false
 	}: {
 		onopen?: () => void;
 		onfit?: () => void;
 		onreload?: (path: string) => void;
-		/** Switch what the change highlighting is measured against. */
-		onbaseline?: (baseline: 'head' | 'branch') => void;
 		busy?: boolean;
 	} = $props();
 
@@ -83,28 +80,6 @@
 		onclose={close}
 	>
 		<FileTypePicker />
-		{#if project.watching}
-			<MenuSection title="Changes against">
-				<MenuItem
-					label="Uncommitted work"
-					hint="HEAD"
-					checked={project.baseline === 'head'}
-					onclick={() => {
-						ui.openMenu = null;
-						onbaseline?.('head');
-					}}
-				/>
-				<MenuItem
-					label="Everything on this branch"
-					hint="merge base"
-					checked={project.baseline === 'branch'}
-					onclick={() => {
-						ui.openMenu = null;
-						onbaseline?.('branch');
-					}}
-				/>
-			</MenuSection>
-		{/if}
 	</Menu>
 
 	<Menu

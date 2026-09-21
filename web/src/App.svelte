@@ -15,7 +15,7 @@
 		fixtureLoaded, fixtureName, loadFixture, openFixture,
 	} from '$lib/sources/fixture';
 	import {
-		inTauri, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder, setBaseline,
+		inTauri, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
 		startup, stopWatching, watchRepo,
 	} from '$lib/sources/tauri';
 	import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -161,9 +161,6 @@
 	onfit={() => app?.fit()}
 	onopen={() => openFolder()}
 	onreload={(path) => openFolder(path)}
-	onbaseline={(b) => {
-		if (app) setBaseline(app, b).catch((e) => (error = e instanceof Error ? e.message : String(e)));
-	}}
 	{busy}
 />
 <Canvas

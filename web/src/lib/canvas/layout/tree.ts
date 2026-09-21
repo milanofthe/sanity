@@ -413,6 +413,10 @@ export function computeLayout(
   const files: FileNode[] = [];
   const dirs: DirNode[] = [];
   collect(root, files, dirs);
+  // Outermost first, so nesting reads correctly when they are drawn. Sorted
+  // here rather than in the renderer, which was copying and sorting the whole
+  // list on every frame to get the same order.
+  dirs.sort((a, b) => a.depth - b.depth);
 
   let totalLines = 0;
   for (const f of files) if (!f.stub) totalLines += f.lineCount;

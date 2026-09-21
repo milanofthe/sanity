@@ -143,9 +143,14 @@ export async function zoomForPanels(page, min = 20, stops = [6, 4.5, 3, 2, 1.4, 
  * bug, and it cost an afternoon to establish that once.
  */
 export async function frameOnScreen(page) {
-  await page.evaluate(
-    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
-  );
+  await page.evaluate(() => {
+    // The renderer draws on demand and parks itself when there is nothing to
+    // draw, so asking for a frame has to ask for one. Without this a check
+    // that pokes the scene and screenshots gets the frame from before it:
+    // sharp-check measured the sharpening as having no effect at all.
+    window.__sanity?.app?.invalidate?.();
+    return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  });
   await page.waitForTimeout(40);
 }
 

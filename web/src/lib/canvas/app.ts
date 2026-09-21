@@ -13,7 +13,9 @@ import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
 import { Scene, type TextSource } from '$lib/canvas/renderer/scene';
 import { metrics } from '$lib/metrics';
-import { bandsFromQuery, lodBands, lodName, setBands, type LodName } from '$lib/canvas/lod';
+import {
+  bandsFromQuery, lodBands, lodName, lodWeights, setBands, type LodName,
+} from '$lib/canvas/lod';
 import { readPalette, type Palette } from '$lib/theme';
 
 export type { LodName };
@@ -64,6 +66,47 @@ export class CanvasApp {
   private uploaded = 0;
 
   private raf = 0;
+  /**
+   * Set when the picture would come out different from the one on screen.
+   *
+   * The renderer draws on demand rather than every frame. A canvas nobody is
+   * touching has nothing to redraw, and redrawing it anyway costs a
+   * millisecond of CPU and a few thousand quads of GPU work sixty times a
+   * second for the length of time the window is open, which is the whole day.
+   *
+   * Set explicitly by everything that changes the picture rather than inferred
+   * from input: heat decaying, a texture arriving, a watcher batch and a theme
+   * switch all change it without anyone touching the mouse, and a missed one
+   * shows up as a frozen canvas.
+   */
+  private dirty = true;
+  /**
+   * Whether a frame is scheduled.
+   *
+   * The loop stops when there is nothing left to draw rather than running at
+   * sixty frames a second deciding not to draw. That matters because this is
+   * meant to sit in the background while something else works: a callback per
+   * frame plus a composite of a canvas that has not changed measured 4.7
+   * percent of a core with the window doing nothing at all.
+   *
+   * Everything that changes the picture calls `invalidate`, which starts it
+   * again. A missed call shows up as a frozen canvas, which is why the input
+   * paths and the idle behaviour are both checked in
+   * scripts/idle-check.mjs.
+   */
+  private running = false;
+  /** Frames drawn and frames skipped, so the saving can be measured. */
+  drawn = 0;
+  skipped = 0;
+  /**
+   * Camera as of the frame on screen.
+   *
+   * Compared against this rather than against the camera at the top of the
+   * current frame: a drag moves the camera between frames, so by the time the
+   * frame runs the change has already happened and comparing with the start of
+   * it finds nothing. Panning drew no frames at all.
+   */
+  private shownAt = { x: 0, y: 0, zoom: 0 };
   private lastFrame = performance.now();
   private observer: ResizeObserver;
   private dragging = false;
@@ -97,6 +140,7 @@ export class CanvasApp {
     this.observer.observe(canvas);
     this.resize();
     this.attachInput();
+    this.running = true;
     this.raf = requestAnimationFrame(this.frame);
 
     // Handle for scripts/shot.mjs, which captures one screenshot per level of
@@ -110,6 +154,7 @@ export class CanvasApp {
           this.cam.x = this.layout.root.w * 0.5;
           this.cam.y = this.layout.root.h * 0.35;
         }
+        this.invalidate();
       },
       bench: (seconds = 12) => this.bench(seconds),
       relayout: () => {
@@ -122,10 +167,18 @@ export class CanvasApp {
       // Decoded payloads, which is where the per-line widths live. The layout
       // needs them and the entries do not carry them.
       decoded: () => this.decoded,
+      // The level-of-detail weights and their hand-over points. Exposed so a
+      // measurement can hold the zoom still and switch representation, which
+      // is the only way to compare two of them: changing the zoom changes how
+      // much of a panel fills the screen and moves the numbers on its own.
+      lodWeights,
+      setBands,
+      lodBands,
     };
   }
 
   private resize(): void {
+    this.invalidate();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
@@ -144,6 +197,7 @@ export class CanvasApp {
     // costing what a first load costs; see Scene.relayout. Only possible when
     // the view is being kept, which is also the only time it matters.
     const reuse = keepView && this.scene !== null;
+    this.invalidate();
     this.lastSource = source;
     if (!reuse) this.scene = null;
     this.hovered = null;
@@ -244,6 +298,7 @@ export class CanvasApp {
 
   fit(seconds = 0.45): void {
     if (!this.layout) return;
+    this.invalidate();
     if (seconds <= 0) this.cam.fit(...this.layout.bounds);
     else this.cam.flyToRect(...this.layout.bounds, seconds);
   }
@@ -252,6 +307,7 @@ export class CanvasApp {
   focusFile(path: string, seconds = 0.5): void {
     const node = this.layout?.files.find((f) => f.path === path);
     if (!node) return;
+    this.invalidate();
     // A little margin so the panel does not touch the window edge.
     const pad = metrics.lineHeight * 2;
     this.cam.flyToRect(
@@ -269,8 +325,18 @@ export class CanvasApp {
     return null;
   }
 
+  /** Redraw, starting the loop again if it had stopped. */
+  invalidate(): void {
+    this.dirty = true;
+    if (!this.running) {
+      this.running = true;
+      this.raf = requestAnimationFrame(this.frame);
+    }
+  }
+
   /** Re-read the palette from CSS and push it into the scene. */
   refreshTheme(): void {
+    this.invalidate();
     this.pal = readPalette();
     this.scene?.setPalette(this.pal);
   }
@@ -282,6 +348,7 @@ export class CanvasApp {
    * Scene.touch.
    */
   touch(path: string, data?: FileData, warm = true): void {
+    this.invalidate();
     this.scene?.touch(path, data, warm);
   }
 
@@ -332,16 +399,19 @@ export class CanvasApp {
         // A pointer that barely twitches is still a click, not a drag.
         if (Math.abs(e.movementX) + Math.abs(e.movementY) > 2) this.moved = true;
         this.cam.panBy(e.movementX, e.movementY);
+        this.invalidate();
         return;
       }
       const hit = this.headerAt(...local(e));
       if (hit !== this.hovered) {
+        this.invalidate();
         this.hovered = hit;
         if (this.scene) this.scene.hoveredPath = hit?.path ?? null;
         c.style.cursor = hit ? 'pointer' : '';
       }
     });
     c.addEventListener('pointerleave', () => {
+      this.invalidate();
       this.hovered = null;
       if (this.scene) this.scene.hoveredPath = null;
       c.style.cursor = '';
@@ -378,6 +448,7 @@ export class CanvasApp {
         e.preventDefault();
         const r = c.getBoundingClientRect();
         this.cam.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022));
+        this.invalidate();
       },
       { passive: false },
     );
@@ -405,7 +476,33 @@ export class CanvasApp {
     this.frameMs = (now - this.lastFrame) * 0.15 + this.frameMs * 0.85;
     this.lastFrame = now;
 
+    const uploaded = this.pending.length;
     this.uploadBudget();
+
+    // Everything that can change the picture without anyone asking.
+    if (
+      this.dirty
+      || uploaded !== this.pending.length
+      || this.cam.x !== this.shownAt.x
+      || this.cam.y !== this.shownAt.y
+      || this.cam.zoom !== this.shownAt.zoom
+      || (this.scene?.moving() ?? false)
+    ) {
+      this.invalidate();
+    }
+
+    if (!this.dirty) {
+      this.skipped++;
+      // Nothing to draw and nothing that will change on its own, so the loop
+      // stops here. `invalidate` starts it again.
+      this.running = false;
+      return;
+    }
+    this.dirty = false;
+    this.drawn++;
+    this.shownAt.x = this.cam.x;
+    this.shownAt.y = this.cam.y;
+    this.shownAt.zoom = this.cam.zoom;
 
     const t0 = performance.now();
     if (this.scene && this.layout) {

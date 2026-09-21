@@ -14,7 +14,7 @@ import {
   applyTo, finished, IDENTITY, same, settleIn, slideFrom, transformFor,
   type PanelAnim, type Rect as PanelRect, type Transform,
 } from '$lib/canvas/anim';
-import { diffLines, signatures, type Signature } from '$lib/canvas/linediff';
+import { diffLines, seams, signatures, type Signature } from '$lib/canvas/linediff';
 import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
 import { bandColour, mixToward } from '$lib/canvas/colour';
 import { rgb, UiInk, type Palette } from '$lib/theme';
@@ -90,6 +90,9 @@ interface LineChangeAnim {
   removedRows: number[];
   /** Line indices in the version replacing it. */
   addedRows: number[];
+  /** Line indices in the new version where a removal left a gap, so a
+   *  deletion leaves a trace instead of simply vanishing. */
+  seamRows: number[];
   /** The new payload, held until the removal has played. */
   pending: FileData | null;
   /** Set when the next version should also warm the panel: a write, not a
@@ -125,10 +128,6 @@ const GLYPH_STRIDE = 6;
  * kind of statement and should look it.
  */
 const HAIRLINE_PX = 1;
-/** How far a border moves towards the heat colour when the file differs from
- *  the baseline. Enough to pick out of a screen of panels, far enough from the
- *  full heat colour that a just-written file still stands out among them. */
-const DIRTY_TINT = 0.45;
 /**
  * How far a changed line's band steps away from the panel's own brightness,
  * towards the change colour's.
@@ -245,8 +244,38 @@ export class Scene {
 
   private view = new Float32Array(9);
   private kindFlat: Float32Array;
+  /**
+   * Token colours for the span bars, between the overview's damped palette and
+   * the full one.
+   *
+   * A bar stands for a run of characters and the background between them, so
+   * its colour is the average of the two rather than the ink's own colour.
+   * Without that the first hand-over is a step: the texture paints a line in
+   * the damped `--ov-*` colours and the bars painted the same line in full
+   * token colours, which measured 0.33 mean luminance against the texture's
+   * 0.14 and the real glyphs' 0.18, on the same panel at the same zoom. The
+   * canvas brightened when the bars arrived, or darkened on a light theme.
+   *
+   * Rebuilt per frame from the glyph weight, so a bar starts out matching the
+   * texture it replaces and ends up matching the text that replaces it. Twelve
+   * kinds of three floats: the cost is not worth caching.
+   */
+  private spanFlat: Float32Array;
+  private ovFlat: Float32Array;
 
   files = new Map<string, SceneFile>();
+  /**
+   * The same files as an array, for iterating.
+   *
+   * The map is for looking one up by path, which the watcher and the hover do.
+   * Every frame walks the whole set several times, and iterating a Map costs
+   * noticeably more than an array: measured at 0.40 milliseconds a frame for a
+   * view with 34 panels in it out of 989, almost all of it the walking rather
+   * than the drawing.
+   */
+  private fileList: SceneFile[] = [];
+  /** Whether anything was moving on the last frame drawn; see `moving`. */
+  private wasMoving = false;
   /** Path whose header the pointer is over, for the hover highlight. */
   hoveredPath: string | null = null;
 
@@ -282,6 +311,8 @@ export class Scene {
     this.textures = new OverviewTextures(gl, pal.overview);
     this.atlas = new GlyphAtlas(gl);
     this.kindFlat = new Float32Array(pal.token.length * 3);
+    this.spanFlat = new Float32Array(pal.token.length * 3);
+    this.ovFlat = new Float32Array(pal.token.length * 3);
 
     this.progRect = createProgram(gl, rectVS, rectFS, 'rect');
     this.progOverview = createProgram(gl, overviewVS, overviewFS, 'overview');
@@ -346,11 +377,16 @@ export class Scene {
 
     // Files that are gone give their texture layer back, or a watched project
     // would leak one per save.
+    let gone = false;
     for (const [path, f] of [...this.files]) {
       if (byPath.has(path)) continue;
       if (!f.node.stub) this.textures.release(f.slot);
       this.files.delete(path);
+      gone = true;
     }
+    // Rebuilt once rather than filtered per removal, which would be quadratic
+    // on a relayout that drops a third of the files.
+    if (gone) this.fileList = [...this.files.values()];
 
     const rewrite: string[] = [];
     for (const node of layout.files) {
@@ -393,6 +429,19 @@ export class Scene {
     return rewrite;
   }
 
+  /** Put a file in both the map and the iteration array. */
+  private add(path: string, file: SceneFile): void {
+    const existing = this.files.get(path);
+    this.files.set(path, file);
+    if (existing) {
+      const i = this.fileList.indexOf(existing);
+      if (i >= 0) this.fileList[i] = file;
+      else this.fileList.push(file);
+    } else {
+      this.fileList.push(file);
+    }
+  }
+
   /** Half the layout's diagonal, which the appearance stagger is spread over. */
   private measureSpread(): void {
     const [x0, y0, x1, y1] = this.layout.bounds;
@@ -422,6 +471,23 @@ export class Scene {
       this.kindFlat[i * 3 + 1] = g;
       this.kindFlat[i * 3 + 2] = b;
     });
+    // The damped palette the overview textures are rasterised with. Held
+    // separately so the bars can start from it.
+    this.pal.overview.forEach((hex, i) => {
+      const [r, g, b] = rgb(hex);
+      this.ovFlat[i * 3] = r;
+      this.ovFlat[i * 3 + 1] = g;
+      this.ovFlat[i * 3 + 2] = b;
+    });
+  }
+
+  /** Bar colours for this frame: the texture's palette, moving to the full one
+   *  as the glyphs come up. */
+  private writeSpanFlat(toGlyphs: number): void {
+    const k = Math.min(1, Math.max(0, toGlyphs));
+    for (let i = 0; i < this.spanFlat.length; i++) {
+      this.spanFlat[i] = this.ovFlat[i] + (this.kindFlat[i] - this.ovFlat[i]) * k;
+    }
   }
 
   /**
@@ -434,6 +500,8 @@ export class Scene {
   setPalette(pal: Palette): void {
     this.pal = pal;
     this.kindFlat = new Float32Array(pal.token.length * 3);
+    this.spanFlat = new Float32Array(pal.token.length * 3);
+    this.ovFlat = new Float32Array(pal.token.length * 3);
     this.writeKindFlat();
     this.textures.setColors(pal.overview);
     for (const f of this.files.values()) {
@@ -447,7 +515,7 @@ export class Scene {
     // Stubs draw from geometry alone, so they get no texture layer. On a repo
     // whose artefacts outweigh its source this is most of the memory saved.
     if (node.stub) {
-      this.files.set(node.path, {
+      this.add(node.path, {
         node, data,
         slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0 },
         rows: new Uint32Array(1),
@@ -464,7 +532,7 @@ export class Scene {
     const slot = this.textures.allocate(rows[data.lineCount]);
     node.layer = slot.layer;
     this.textures.write(slot, data, node.geom.cols, rows);
-    this.files.set(node.path, {
+    this.add(node.path, {
       node, data, slot, rows, heat: 0, state: aggregateState(data),
       anim: this.animFor(node),
       wroteRows: rows[data.lineCount], wroteCols: node.geom.cols,
@@ -548,6 +616,7 @@ export class Scene {
       t: 0,
       removedRows: diff.removed,
       addedRows: diff.added,
+      seamRows: seams(diff, f.data.lineCount, data.lineCount),
       pending: data,
       warm,
     };
@@ -588,6 +657,19 @@ export class Scene {
       return true;
     }
     if (ch.t >= timing.changeIn) {
+      // The marks stay after the animation, so a save is still visible a
+      // moment later. They fade with the panel's heat, which is what keeps the
+      // canvas from filling up with everything ever touched.
+      const state = f.data.lineState;
+      for (const line of ch.addedRows) {
+        if (line < state.length) state[line] = LineState.Added;
+      }
+      for (const line of ch.seamRows) {
+        if (line < state.length && state[line] === LineState.Unchanged) {
+          state[line] = LineState.DeletedBelow;
+        }
+      }
+      f.state = aggregateState(f.data);
       f.change = null;
       return false;
     }
@@ -609,6 +691,21 @@ export class Scene {
     const geom = f.node.geom;
     const rows = visualRowsCached(data.lineCols, geom.cols);
     return rows <= geom.columns * geom.linesPerColumn && rows <= f.slot.texRows;
+  }
+
+  /**
+   * Whether anything in the scene changes the picture on its own next frame.
+   *
+   * Panel animations, a change playing, and heat decaying, which moves a
+   * border colour a little every frame for ninety seconds. The renderer skips
+   * a frame when nothing here is true and nothing outside has changed.
+   *
+   * Answered from the last frame drawn rather than recomputed, which would be
+   * another walk over every file before every frame. One frame of over-drawing
+   * when something stops is the price, and it is not visible.
+   */
+  moving(): boolean {
+    return this.wasMoving;
   }
 
   /** Files that differ from the baseline, by their own drawn state. */
@@ -633,13 +730,19 @@ export class Scene {
     d[o + 1] = y * tf.scale + tf.by;
     d[o + 2] = w * tf.scale;
     d[o + 3] = h * tf.scale;
-    const [fr, fg, fb] = rgb(fill);
-    d[o + 4] = fr; d[o + 5] = fg; d[o + 6] = fb; d[o + 7] = fillA * tf.alpha;
-    const [br, bg, bb] = rgb(border);
+    // Unpacked in place. `rgb` returns a tuple, and two of those per
+    // rectangle is several thousand arrays a frame for the collector.
+    d[o + 4] = ((fill >> 16) & 0xff) / 255;
+    d[o + 5] = ((fill >> 8) & 0xff) / 255;
+    d[o + 6] = (fill & 0xff) / 255;
+    d[o + 7] = fillA * tf.alpha;
     // The border width is in device pixels, so it is the one thing that must
     // not scale: a hairline is a hairline at every zoom, and that is what
     // keeps it from shimmering.
-    d[o + 8] = br; d[o + 9] = bg; d[o + 10] = bb; d[o + 11] = borderPx;
+    d[o + 8] = ((border >> 16) & 0xff) / 255;
+    d[o + 9] = ((border >> 8) & 0xff) / 255;
+    d[o + 10] = (border & 0xff) / 255;
+    d[o + 11] = borderPx;
   }
 
   private drawRects(b: InstanceBuffer): void {
@@ -680,9 +783,9 @@ export class Scene {
 
     let stillAnimating = false;
 
-    // Directory boxes, outermost first so nesting reads correctly.
-    const dirs = [...this.layout.dirs].sort((a, b) => a.depth - b.depth);
-    for (const d of dirs) {
+    // Directory boxes. Already outermost first from the layout, so there is
+    // nothing to copy or sort here.
+    for (const d of this.layout.dirs) {
       this.tf = IDENTITY;
       const anim = this.dirAnims.get(d.path);
       if (anim) {
@@ -709,13 +812,27 @@ export class Scene {
     // it was off screen kept its glow until you panned to it, and worse, the
     // new content of a change never landed because the phase that swaps it in
     // never ran.
-    for (const f of this.files.values()) {
+    //
+    // This pass also answers `moving` for the next frame, so there is one walk
+    // over the files here rather than two.
+    let anyWarm = false;
+    for (const f of this.fileList) {
       if (f.heat > 0) f.heat = Math.max(0, f.heat - dt / timing.heatDecay);
+      // Cold, so the marks go. Checked apart from the decay rather than as
+      // part of it: a panel that is already at zero still has to be cleared,
+      // and folding the two together left the marks on it forever. Without
+      // this a file touched an hour ago lights up its old lines the moment it
+      // is touched again, as if they had just changed.
+      if (f.heat <= 0 && f.state !== LineState.Unchanged && !f.change) {
+        f.data.lineState.fill(LineState.Unchanged);
+        f.state = LineState.Unchanged;
+      }
+      if (f.heat > 0) anyWarm = true;
       if (f.change && this.advanceChange(f, dt)) stillAnimating = true;
     }
 
     let visibleFiles = 0;
-    for (const f of this.files.values()) {
+    for (const f of this.fileList) {
       const n = f.node;
 
       // Advance the settle animation and work out the transform before
@@ -768,6 +885,7 @@ export class Scene {
     }
     this.tf = IDENTITY;
     this.animating = stillAnimating;
+    this.wasMoving = stillAnimating || anyWarm;
 
     // Draw.
     const [br, bg, bb] = rgb(this.pal.surface.bg);
@@ -777,6 +895,7 @@ export class Scene {
 
     this.drawRects(this.bgRects);
     this.drawOverview();
+    this.writeSpanFlat(glyphFade);
     this.drawSpans();
     this.drawGlyphs(pxPerLine, cam.dpr);
     this.drawRects(this.fgRects);
@@ -957,7 +1076,6 @@ export class Scene {
     const w = Math.max(n.w, floor * 4);
     const h = Math.max(n.h, floor);
     const hot = f.heat > 0.02;
-    const dirty = f.state !== LineState.Unchanged;
     // Below a couple of pixels a border would be the whole panel.
     const borderPx = h * zoom > 4 ? 1 : 0;
     this.pushRect(this.bgRects, n.x, n.y, w, h, this.pal.surface.reducedBg, 1, 0, 0);
@@ -965,11 +1083,7 @@ export class Scene {
       this.pushRect(
         this.fgRects, n.x, n.y, w, h,
         this.pal.surface.reducedBg, 0,
-        hot
-          ? this.pal.surface.heat
-          : dirty
-            ? mixToward(this.pal.surface.border, this.pal.surface.heat, DIRTY_TINT)
-            : this.pal.surface.border,
+        hot ? this.pal.surface.heat : this.pal.surface.border,
         borderPx,
       );
     }
@@ -1042,13 +1156,11 @@ export class Scene {
     // 1063 file project one commit touches 0.4% of files, five touch 1.5% and
     // twenty touch 8.5%. Uncommitted work is a handful of files, which is
     // exactly the thing worth seeing from the outermost zoom.
+    // One signal now, not two: a panel is warm for a while after it was
+    // written and cools off. The standing "differs from a baseline" tint went
+    // with the baseline itself, since changes are shown per save.
     const hot = f.heat > 0.02;
-    const dirty = f.state !== LineState.Unchanged;
-    const border = hot
-      ? this.pal.surface.heat
-      : dirty
-        ? mixToward(this.pal.surface.border, this.pal.surface.heat, DIRTY_TINT)
-        : this.pal.surface.border;
+    const border = hot ? this.pal.surface.heat : this.pal.surface.border;
     const borderPx = hot ? HAIRLINE_PX + 2 * f.heat : HAIRLINE_PX;
     // Transparent fill, so this draws only the outline over what is there.
     this.pushRect(this.fgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 0, border, borderPx);
@@ -1142,6 +1254,10 @@ export class Scene {
    * rows and the passes lay out by row. `colX` is where the column's text
    * begins, past the line-number margin, so no pass can forget the margin.
    */
+  /** Reused by `visibleRuns`, which yields it rather than a fresh tuple: the
+   *  consumers destructure it immediately and none of them keeps it. */
+  private runTuple: [number, number, number, number] = [0, 0, 0, 0];
+
   private *visibleRuns(
     f: SceneFile, vx0: number, vy0: number, vx1: number, vy1: number,
   ): Generator<[column: number, colX: number, firstRow: number, lastRow: number]> {
@@ -1164,7 +1280,12 @@ export class Scene {
       const first = c * g.linesPerColumn + rowFrom;
       const last = Math.min(totalRows - 1, c * g.linesPerColumn + rowTo);
       if (last < first) continue;
-      yield [c, colX, first, last];
+      const t = this.runTuple;
+      t[0] = c;
+      t[1] = colX;
+      t[2] = first;
+      t[3] = last;
+      yield t;
     }
   }
 
@@ -1172,17 +1293,24 @@ export class Scene {
    * The source line and wrap index at a screen row, and the row's y offset
    * within its column.
    */
-  private rowInfo(f: SceneFile, row: number, column: number) {
+  /**
+   * Source line, wrapped row within it, and world y for a screen row.
+   *
+   * Written into fields rather than returned as an object. This is called once
+   * per visible row per drawing pass, so at the readable zoom it runs
+   * thousands of times a frame, and an object per call is an object per row
+   * per pass for the garbage collector to take back.
+   */
+  private riLine = 0;
+  private riWrap = 0;
+  private riY = 0;
+
+  private rowInfo(f: SceneFile, row: number, column: number): void {
     const line = lineAtRow(f.rows, row);
-    return {
-      line,
-      /** Which wrapped row of that line this is, 0 for the first. */
-      wrap: row - f.rows[line],
-      y:
-        f.node.y +
-        textOriginY +
-        (row - column * f.node.geom.linesPerColumn) * metrics.lineHeight,
-    };
+    this.riLine = line;
+    this.riWrap = row - f.rows[line];
+    this.riY =
+      f.node.y + textOriginY + (row - column * f.node.geom.linesPerColumn) * metrics.lineHeight;
   }
 
   private pushSpans(
@@ -1192,15 +1320,44 @@ export class Scene {
     const b = this.spans;
     const d0 = f.data;
     const g = f.node.geom;
+    const cols = g.cols;
     const h = metrics.lineHeight * spanBarHeight(pxPerLine);
     const yOff = (metrics.lineHeight - h) * 0.5;
+    // Hoisted out of the inner loop, which runs once per token on screen and
+    // reached thirty thousand a frame: a property load on `this`, on the
+    // transform and on the metrics module is not free at that rate, and
+    // neither is reading `b.data` after every allocation. Measured: 1.40 ms a
+    // frame down to 1.23 at the zoom where the bars are the picture.
+    //
+    // The span accessors stay as calls. Inlining their bit arithmetic here
+    // measured another ten percent and puts the wire format's field layout in
+    // two places, where a change to one is silent in the other. Ten percent of
+    // one zoom level, on a renderer that only draws when something changed, is
+    // not worth that.
+    const cw = metrics.charWidth;
+    const scale = this.tf.scale;
+    const bx = this.tf.bx;
+    const by = this.tf.by;
+    const alpha = fade * this.tf.alpha;
 
     for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      // Upper bound on the quads this run can produce: every span of every
+      // line it touches, plus one per row for a span split across a wrap.
+      // Spans do not overlap, so at most one can cross any one boundary.
+      const firstLine = lineAtRow(f.rows, firstRow);
+      const lastLine = lineAtRow(f.rows, lastRow);
+      const rows = lastRow - firstRow + 1;
+      b.reserve(d0.spanStart[lastLine + 1] - d0.spanStart[firstLine] + rows);
+      const dd = b.data;
+      let o = b.count * SPAN_STRIDE;
+
       for (let row = firstRow; row <= lastRow; row++) {
-        const { line, wrap, y } = this.rowInfo(f, row, c);
+        this.rowInfo(f, row, c);
+        const line = this.riLine;
+        const y = this.riY + yOff;
         // The character range of the source line that lands on this row.
-        const from = wrap * g.cols;
-        const to = from + g.cols;
+        const from = this.riWrap * cols;
+        const to = from + cols;
         const s0 = d0.spanStart[line];
         const s1 = d0.spanStart[line + 1];
         for (let s = s0; s < s1; s++) {
@@ -1210,28 +1367,28 @@ export class Scene {
           // Clip the span to this row's slice rather than to the column: a
           // span that starts before the slice continues into it.
           if (end <= from || col >= to) continue;
-          const lo = Math.max(col, from);
-          const hi = Math.min(end, to);
-          const o = b.alloc();
-          const dd = b.data;
-          const tf = this.tf;
-          dd[o] = (colX + (lo - from) * metrics.charWidth) * tf.scale + tf.bx;
-          dd[o + 1] = (y + yOff) * tf.scale + tf.by;
-          dd[o + 2] = (hi - lo) * metrics.charWidth * tf.scale;
-          dd[o + 3] = h * tf.scale;
+          const lo = col > from ? col : from;
+          const hi = end < to ? end : to;
+          dd[o] = (colX + (lo - from) * cw) * scale + bx;
+          dd[o + 1] = y * scale + by;
+          dd[o + 2] = (hi - lo) * cw * scale;
+          dd[o + 3] = h * scale;
           dd[o + 4] = spanKind(p);
-          dd[o + 5] = fade;
+          dd[o + 5] = alpha;
+          o += SPAN_STRIDE;
         }
       }
+      b.count = o / SPAN_STRIDE;
     }
   }
+
 
   private drawSpans(): void {
     if (this.spans.count === 0) return;
     const { gl } = this;
     gl.useProgram(this.progSpan);
     gl.uniformMatrix3fv(this.uSpan.uView, false, this.view);
-    gl.uniform3fv(this.uSpan['uKind[0]'], this.kindFlat);
+    gl.uniform3fv(this.uSpan['uKind[0]'], this.spanFlat);
     this.spans.upload();
     quadAttrib(gl, this.progSpan, this.quad);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.spans.buf);
@@ -1261,7 +1418,10 @@ export class Scene {
 
     for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
       for (let row = firstRow; row <= lastRow; row++) {
-        const { line, wrap, y } = this.rowInfo(f, row, c);
+        this.rowInfo(f, row, c);
+        const line = this.riLine;
+        const wrap = this.riWrap;
+        const y = this.riY;
         // Continuation rows carry no number: the number belongs to the source
         // line, and repeating it would claim there are more lines than there
         // are.
@@ -1279,16 +1439,32 @@ export class Scene {
   ): void {
     const b = this.glyphs;
     const g = f.node.geom;
-    const em = metrics.charWidth / this.atlas.advanceRatio;
+    const cols = g.cols;
     const d0 = f.data;
+    // Hoisted for the same reason as in `pushSpans`: this runs once per
+    // character on screen, which is tens of thousands a frame at the readable
+    // zoom, and everything constant across it is read once.
+    const cw = metrics.charWidth;
+    const scale = this.tf.scale;
+    const bx = this.tf.bx;
+    const by = this.tf.by;
+    const em = (metrics.charWidth / this.atlas.advanceRatio) * scale;
+    const alpha = fade * this.tf.alpha;
 
     for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      // One quad per character at most, over the rows this run covers.
+      b.reserve((lastRow - firstRow + 1) * cols);
+      const dd = b.data;
+      let o = b.count * GLYPH_STRIDE;
+
       for (let row = firstRow; row <= lastRow; row++) {
-        const { line, wrap, y } = this.rowInfo(f, row, c);
+        this.rowInfo(f, row, c);
+        const line = this.riLine;
+        const y = this.riY * scale + by;
         const text = this.text.lineText(f.node.path, line);
         if (!text) continue;
-        const from = wrap * g.cols;
-        const to = from + g.cols;
+        const from = this.riWrap * cols;
+        const to = from + cols;
         const s0 = d0.spanStart[line];
         const s1 = d0.spanStart[line + 1];
         for (let s = s0; s < s1; s++) {
@@ -1297,25 +1473,25 @@ export class Scene {
           const end = col + spanLen(p);
           if (end <= from || col >= to) continue;
           const kind = spanKind(p);
-          const lo = Math.max(col, from);
-          const hi = Math.min(end, to);
+          const lo = col > from ? col : from;
+          const hi = end < to ? end : to;
           for (let k = lo; k < hi; k++) {
             const idx = GlyphAtlas.index(text.charCodeAt(k));
             if (idx < 0) continue;
-            const o = b.alloc();
-            const dd = b.data;
-            const tf = this.tf;
-            dd[o] = (colX + (k - from) * metrics.charWidth) * tf.scale + tf.bx;
-            dd[o + 1] = y * tf.scale + tf.by;
+            dd[o] = (colX + (k - from) * cw) * scale + bx;
+            dd[o + 1] = y;
             dd[o + 2] = idx;
             dd[o + 3] = kind;
-            dd[o + 4] = em * tf.scale;
-            dd[o + 5] = fade * tf.alpha;
+            dd[o + 4] = em;
+            dd[o + 5] = alpha;
+            o += GLYPH_STRIDE;
           }
         }
       }
+      b.count = o / GLYPH_STRIDE;
     }
   }
+
 
   private drawGlyphs(pxPerLine: number, dpr: number): void {
     if (this.glyphs.count === 0) return;
@@ -1363,13 +1539,21 @@ export class Scene {
    * rows come from the diff rather than from git: see `pushChangeBands`.
    */
   private pushGutter(f: SceneFile, vy0: number, vy1: number): void {
+    if (f.state === LineState.Unchanged) return;
     const w = Math.max(2, metrics.charWidth * 0.4);
     const [vx0, vx1] = [-Infinity, Infinity];
     const colW = columnWidth(f.node.geom);
+    // The marks fade out with the panel's glow rather than standing forever:
+    // a change is worth seeing for a while after the save and not beyond it.
+    const fade = Math.min(1, f.heat * 1.5);
+    if (fade <= 0.02) return;
 
     for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
       for (let row = firstRow; row <= lastRow; row++) {
-        const { line, wrap, y } = this.rowInfo(f, row, c);
+        this.rowInfo(f, row, c);
+        const line = this.riLine;
+        const wrap = this.riWrap;
+        const y = this.riY;
         const st = f.data.lineState[line];
         if (st === LineState.Unchanged) continue;
         const color = this.changeColour(st);
@@ -1378,14 +1562,14 @@ export class Scene {
         // whole line, however many rows it takes to show it.
         this.pushRect(
           this.bgRects, colX, y, colW, metrics.lineHeight,
-          bandColour(this.pal.surface.panelBg, color, BAND_MIX), 1, 0, 0,
+          bandColour(this.pal.surface.panelBg, color, BAND_MIX * fade), 1, 0, 0,
         );
 
         // One marker per source line, on its first row: a wrapped line is one
         // change, not three.
         if (wrap !== 0) continue;
         this.pushRect(
-          this.fgRects, colX - w - 1, y, w, metrics.lineHeight, color, 0.85, 0, 0,
+          this.fgRects, colX - w - 1, y, w, metrics.lineHeight, color, 0.85 * fade, 0, 0,
         );
       }
     }

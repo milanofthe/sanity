@@ -181,3 +181,42 @@ function walkBack(
   added.reverse();
   return { removed, added, wholesale: false };
 }
+
+/**
+ * Where each removal leaves a seam in the new version.
+ *
+ * A removed line is not in the file any more, so after the change there is
+ * nothing of it left to mark. What can be marked is the line that now sits
+ * where it was, which is what makes a deletion leave a trace instead of simply
+ * vanishing. Lines that are themselves additions are left out: a replacement
+ * is already marked as an arrival and saying both would say less.
+ */
+export function seams(diff: LineDiff, oldLen: number, newLen: number): number[] {
+  if (diff.removed.length === 0) return [];
+  const removed = new Set(diff.removed);
+  const added = new Set(diff.added);
+  const out: number[] = [];
+
+  let oi = 0;
+  let ni = 0;
+  while (oi < oldLen || ni < newLen) {
+    // Removals before additions, so a replacement is seen at the point where
+    // both happen. The other order walks past the arrival first and then
+    // blames the line after it, which reported a seam for every replaced line.
+    if (oi < oldLen && removed.has(oi)) {
+      // The line now standing at this point, clamped for a removal at the end
+      // of the file, which has nothing below it.
+      const at = Math.min(ni, newLen - 1);
+      if (at >= 0 && !added.has(at) && out[out.length - 1] !== at) out.push(at);
+      oi++;
+      continue;
+    }
+    if (ni < newLen && added.has(ni)) {
+      ni++;
+      continue;
+    }
+    oi++;
+    ni++;
+  }
+  return out;
+}

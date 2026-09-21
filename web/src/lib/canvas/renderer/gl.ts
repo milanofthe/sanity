@@ -11,6 +11,12 @@ export function createContext(canvas: HTMLCanvasElement): GL {
     stencil: false,
     desynchronized: true,
     powerPreference: 'high-performance',
+    // So a frame can be skipped when nothing changed. WebGL clears the drawing
+    // buffer after every composite unless this is set, which would turn a
+    // skipped frame into a blank canvas. The cost is a blit per composite
+    // instead of re-rendering thousands of quads sixty times a second at a
+    // canvas nobody is touching.
+    preserveDrawingBuffer: true,
   });
   if (!gl) throw new Error('WebGL2 is not available');
   return gl;
@@ -84,6 +90,22 @@ export class InstanceBuffer {
     this.count = 0;
   }
 
+  /**
+   * Make room for `extra` more instances, so a hot loop can hold `data` and a
+   * cursor instead of calling `alloc` per instance.
+   *
+   * `alloc` may replace `data` when it grows, which is why the loops that
+   * write thousands of instances cannot hoist it without reserving first.
+   */
+  reserve(extra: number): void {
+    const need = this.count + extra;
+    if (need <= this.capacity) return;
+    while (this.capacity < need) this.capacity *= 2;
+    const next = new Float32Array(this.capacity * this.stride);
+    next.set(this.data);
+    this.data = next;
+  }
+
   /** Returns the float offset at which to write one instance, growing first. */
   alloc(): number {
     if (this.count >= this.capacity) {
@@ -96,11 +118,17 @@ export class InstanceBuffer {
   }
 
   upload(): void {
+    if (this.count === 0) return;
     const { gl } = this;
+    const floats = this.count * this.stride;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
-    // Orphan the buffer so the driver does not stall on the previous frame.
-    gl.bufferData(gl.ARRAY_BUFFER, this.capacity * this.stride * 4, gl.DYNAMIC_DRAW);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data, 0, this.count * this.stride);
+    // Orphan the buffer so the driver does not stall on the previous frame,
+    // but only for what is actually in it. Orphaning the whole capacity threw
+    // away and reallocated three megabytes a frame at a view with four hundred
+    // quads in it, because the span and glyph buffers are sized for sixty-five
+    // thousand and keep that size once they have grown.
+    gl.bufferData(gl.ARRAY_BUFFER, floats * 4, gl.DYNAMIC_DRAW);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data, 0, floats);
   }
 }
 

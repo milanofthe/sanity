@@ -1,9 +1,9 @@
 //! Deciding which files exist, and turning each one into line metrics.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::filter::Filter;
 use crate::lang::{extension_of, grammar_for_extension};
 use crate::tokenize::tokenize;
 use crate::wire::{pack_span, FileData, Kind, LineState, FLAG_BINARY, FLAG_NO_GRAMMAR,
@@ -23,6 +23,14 @@ pub struct ScannedFile {
     pub line_count: u32,
     pub max_cols: u32,
     pub byte_len: u64,
+    /// Modification time in nanoseconds since the epoch, as it was *before*
+    /// the read, and 0 when the system does not report one.
+    ///
+    /// Taken before rather than after on purpose. A file written while it is
+    /// being read would otherwise be recorded with the newer time against the
+    /// older content, and the next event for it would be dismissed as
+    /// something already seen.
+    pub mtime: u128,
 }
 
 #[derive(Debug)]
@@ -179,13 +187,14 @@ fn binary_file_data() -> FileData {
 /// be read at all, which happens for broken symlinks and races with a build.
 pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
     let full = root.join(rel);
+    let mtime = mtime_of(&full);
     let bytes = std::fs::read(&full).ok()?;
     let byte_len = bytes.len() as u64;
 
     if looks_binary(&bytes) {
         return Some((
             binary_file_data(),
-            ScannedFile { path: rel.to_string(), line_count: 0, max_cols: 0, byte_len },
+            ScannedFile { path: rel.to_string(), line_count: 0, max_cols: 0, byte_len, mtime },
         ));
     }
 
@@ -209,29 +218,185 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
         line_count: data.line_count() as u32,
         max_cols: data.line_cols.iter().copied().max().unwrap_or(0) as u32,
         byte_len,
+        mtime,
     };
     Some((data, scanned))
 }
 
+/// Modification time in nanoseconds, or 0 when there is none to be had.
+///
+/// One `stat`, which is what makes it worth asking before deciding to read: a
+/// stat is a few microseconds and reading plus tokenising a file is a few
+/// hundred. A watcher on a repository somebody else is working in reports a
+/// great many paths whose content has not moved.
+pub fn mtime_of(path: &Path) -> u128 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Modification time and size together, for deciding whether to read at all.
+pub fn stamp_of(root: &Path, rel: &str) -> Option<(u128, u64)> {
+    let m = std::fs::metadata(root.join(rel)).ok()?;
+    let t = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Some((t, m.len()))
+}
+
+/// Read and tokenise many files at once, across the cores available.
+///
+/// Files are independent, so this is the easy kind of parallel: no shared
+/// mutable state, no ordering, and the grammars are already immutable statics.
+/// Measured on 218 thousand lines, single threaded, in a release build: 1.08
+/// seconds, of which 132 milliseconds is reading the bytes and the rest is
+/// parsing. That was the largest single cost in opening a project.
+///
+/// Results come back in the order asked for, so the payload index and the
+/// layout stay deterministic; a repository that laid out differently run to
+/// run would be unusable.
+pub fn read_all(root: &Path, paths: &[String]) -> Vec<Option<(FileData, ScannedFile)>> {
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(16);
+    if threads <= 1 || paths.len() < 8 {
+        return paths.iter().map(|rel| read_file(root, rel)).collect();
+    }
+
+    // One contiguous slice per thread, written in place, so nothing has to be
+    // merged or sorted afterwards.
+    let mut out: Vec<Option<(FileData, ScannedFile)>> = (0..paths.len()).map(|_| None).collect();
+    let chunk = paths.len().div_ceil(threads);
+
+    std::thread::scope(|scope| {
+        for (slot, work) in out.chunks_mut(chunk).zip(paths.chunks(chunk)) {
+            scope.spawn(move || {
+                for (dst, rel) in slot.iter_mut().zip(work) {
+                    *dst = read_file(root, rel);
+                }
+            });
+        }
+    });
+    out
+}
+
 /// List the files in `root` that should be laid out, in git's order.
 ///
-/// Uses git when it can and a plain walk otherwise, then applies `filter`,
-/// which is where generated artefacts are dropped. See the note in
-/// `filter.rs` for why gitignore alone is not enough.
-pub fn list_files(root: &Path, filter: &Filter) -> Result<Vec<String>, ScanError> {
+/// Everything git does not ignore, and a plain walk when the folder is not a
+/// repository. There is deliberately no second filter on top.
+///
+/// There used to be one, which classified generated files as artefacts and
+/// drew them as placeholders: `linguist-generated` from `.gitattributes`, then
+/// a heuristic over lock files, minified output, notebooks and large data
+/// files. The measurement that motivated it still stands, a docs repository
+/// measured 98 percent artefact by line count, but a heuristic that decides
+/// for you is the wrong shape for that. The file type picker does the same job
+/// per extension, visibly, and can be wrong without being a surprise.
+pub fn list_files(root: &Path) -> Result<Vec<String>, ScanError> {
     if !root.is_dir() {
         return Err(ScanError::NotADirectory(root.to_path_buf()));
     }
-    let listed = match git_listed_files(root) {
-        Some(v) => v,
-        None => walk(root)?,
-    };
-    Ok(listed.into_iter().filter(|p| filter.keep(root, p)).collect())
+    match git_listed_files(root) {
+        Some(v) => Ok(v),
+        None => walk(root),
+    }
 }
+
+/// Feed a NUL separated path list to a git subcommand on stdin and return its
+/// stdout.
+///
+/// The write has to happen on its own thread. git answers as it reads, so on a
+/// repository of any size its stdout pipe fills up long before the last path
+/// has been written, and writing and reading from the same thread deadlocks
+/// both processes. That is exactly what it did on a 1508 file repo.
+///
+/// The exit status is deliberately not checked: `check-ignore` exits 1 when
+/// nothing matched, which is a perfectly good answer.
+fn git_over_stdin(root: &Path, args: &[&str], paths: &[String]) -> Option<Vec<u8>> {
+    if paths.is_empty() {
+        return None;
+    }
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let stdin = child.stdin.take();
+    let mut buf = Vec::with_capacity(paths.iter().map(|p| p.len() + 1).sum());
+    for p in paths {
+        buf.extend_from_slice(p.as_bytes());
+        buf.push(0);
+    }
+    let writer = std::thread::spawn(move || {
+        if let Some(mut s) = stdin {
+            use std::io::Write;
+            // A broken pipe here just means git stopped early; the paths that
+            // did get through are still answered.
+            let _ = s.write_all(&buf);
+            let _ = s.flush();
+        }
+        // Dropping the handle closes the pipe, which is what tells git to stop
+        // waiting for more input.
+    });
+
+    let out = child.wait_with_output().ok();
+    let _ = writer.join();
+    out.map(|o| o.stdout)
+}
+
+/// Which of `paths` git considers ignored.
+///
+/// Used by the watcher for paths the scan never saw: a build writing into
+/// `target/` produces thousands of events, and the only correct answer to
+/// whether they matter is git's own. Tracked files are never reported as
+/// ignored, which is what `check-ignore` does by default and what we want.
+pub fn ignored_paths(root: &Path, paths: &[String]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(stdout) = git_over_stdin(root, &["check-ignore", "--stdin", "-z"], paths) else {
+        return out;
+    };
+    for field in stdout.split(|&b| b == 0) {
+        if field.is_empty() {
+            continue;
+        }
+        out.insert(String::from_utf8_lossy(field).into_owned());
+    }
+    out
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_reports_ignored_paths_and_leaves_tracked_ones() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+        if !root.join(".git").exists() {
+            return; // A source tarball rather than a checkout.
+        }
+        let probe = vec![
+            "target/debug/whatever".to_string(),
+            "crates/sanity-core/src/scan.rs".to_string(),
+        ];
+        let ignored = ignored_paths(root, &probe);
+        assert!(ignored.contains("target/debug/whatever"), "target should be ignored");
+        assert!(!ignored.contains("crates/sanity-core/src/scan.rs"), "source is not ignored");
+    }
+
+    #[test]
+    fn an_empty_list_asks_git_nothing() {
+        assert!(ignored_paths(Path::new(env!("CARGO_MANIFEST_DIR")), &[]).is_empty());
+    }
     use crate::wire::{span_col, span_kind, span_len};
 
     #[test]

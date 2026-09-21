@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diffLines, signatures } from './linediff.ts';
+import { diffLines, seams, signatures } from './linediff.ts';
 
 const sig = (...lines: number[]) => new Uint32Array(lines);
 
@@ -109,4 +109,50 @@ test('signatures tell different lines apart and equal ones together', () => {
   // And a line whose width changed is a different line.
   const c = signatures(3, [10, 11, 10], spanStart, [0x111, 0x222, 0x333]);
   assert.notEqual(a[1], c[1]);
+});
+
+test('a removal leaves a seam at the line that took its place', () => {
+  const before = sig(1, 2, 3, 4, 5);
+  const after = sig(1, 2, 5);
+  const d = diffLines(before, after);
+  assert.deepEqual(d.removed, [2, 3]);
+  // Old lines 3 and 4 are gone; new line 2, the old line 5, now sits there.
+  assert.deepEqual(seams(d, before.length, after.length), [2]);
+});
+
+test('a replacement has no seam of its own', () => {
+  // The arrival is already marked, and marking both would say less.
+  const before = sig(1, 2, 3);
+  const after = sig(1, 9, 3);
+  const d = diffLines(before, after);
+  assert.deepEqual(seams(d, before.length, after.length), []);
+});
+
+test('a removal at the end of the file marks the last line', () => {
+  const before = sig(1, 2, 3, 4);
+  const after = sig(1, 2);
+  const d = diffLines(before, after);
+  const s = seams(d, before.length, after.length);
+  assert.deepEqual(s, [1], 'nothing sits below it, so the line above carries it');
+});
+
+test('a pure addition has no seams', () => {
+  const before = sig(1, 2);
+  const after = sig(1, 2, 3);
+  assert.deepEqual(seams(diffLines(before, after), before.length, after.length), []);
+});
+
+test('seams are inside the new file', () => {
+  const cases: [number[], number[]][] = [
+    [[1, 2, 3, 4, 5], [3]],
+    [[1, 2, 3], []],
+    [[1, 2, 3, 4, 5, 6], [1, 6]],
+    [[5, 4, 3, 2, 1], [5, 1]],
+  ];
+  for (const [a, b] of cases) {
+    const d = diffLines(sig(...a), sig(...b));
+    for (const i of seams(d, a.length, b.length)) {
+      assert.ok(i >= 0 && i < Math.max(1, b.length), `seam ${i} of ${b.length}`);
+    }
+  }
 });

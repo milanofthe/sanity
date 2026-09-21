@@ -23,7 +23,6 @@ export interface FileGroup {
 	lines: number;
 	/** Set by the scan when this group was classified as generated; the string
 	 *  is the reason, so the UI can say why rather than just hiding things. */
-	artefact?: string;
 	mode: ViewMode;
 }
 
@@ -44,10 +43,7 @@ class ProjectState {
 	 *  status bar, because the difference between a live view and a snapshot is
 	 *  not something you can see by looking at the canvas. */
 	watching = $state(false);
-	/** What the change state is measured against: `head` for uncommitted work,
-	 *  `branch` for everything since the merge base. */
-	baseline = $state<'head' | 'branch'>('head');
-	/** Files that differ from the baseline. */
+	/** Files with a change on screen right now. */
 	changed = $state(0);
 	/** When the last batch of changes arrived, as a performance timestamp, or
 	 *  0 if none has. */
@@ -57,18 +53,10 @@ class ProjectState {
 	shownLines = $derived(
 		this.groups.filter((g) => g.mode === 'full').reduce((s, g) => s + g.lines, 0)
 	);
-	/** Lines actually drawn as stubs, which is not the same as lines the filter
-	 *  classified as generated: the mode can be overridden either way. */
+	/** Lines drawn as stubs rather than in full. */
 	stubbedLines = $derived(
 		this.groups.filter((g) => g.mode === 'reduced').reduce((s, g) => s + g.lines, 0)
 	);
-	artefactLines = $derived(
-		this.groups.filter((g) => g.artefact).reduce((s, g) => s + g.lines, 0)
-	);
-
-	code = $derived(this.groups.filter((g) => !g.artefact));
-	artefacts = $derived(this.groups.filter((g) => g.artefact));
-
 	/** Build the picker rows from a scan, defaulting artefacts to placeholders
 	 *  rather than to hidden: the point of the mode is that you can see they
 	 *  are there. */
@@ -80,14 +68,13 @@ class ProjectState {
 		let minor: FileGroup | null = null;
 
 		for (const r of [...rows].sort((a, b) => b.lines - a.lines)) {
-			const mode: ViewMode = r.artefact ? 'reduced' : 'full';
-			if (!r.artefact && r.lines / total < MINOR_LINE_SHARE) {
+			if (r.lines / total < MINOR_LINE_SHARE) {
 				minor ??= { id: 'other', files: 0, lines: 0, mode: 'full' };
 				minor.files += r.files;
 				minor.lines += r.lines;
 				continue;
 			}
-			groups.push({ ...r, mode });
+			groups.push({ ...r, mode: 'full' });
 		}
 		if (minor && minor.files > 0) groups.push(minor);
 		this.groups = groups;
@@ -128,13 +115,8 @@ class ProjectState {
 		this.groups = this.groups.map((g) => (g.id === id ? { ...g, mode } : g));
 	}
 
-	setAll(mode: ViewMode, which: 'code' | 'artefacts' | 'all' = 'all') {
-		this.groups = this.groups.map((g) => {
-			const isArtefact = Boolean(g.artefact);
-			if (which === 'code' && isArtefact) return g;
-			if (which === 'artefacts' && !isArtefact) return g;
-			return { ...g, mode };
-		});
+	setAll(mode: ViewMode) {
+		this.groups = this.groups.map((g) => ({ ...g, mode }));
 	}
 
 	/** Mode for a path, by extension. The layout asks this per file. */

@@ -1,5 +1,13 @@
-// Asserts that a change plays as one gesture: the lines that go away go away
-// first, and only then do the new ones arrive.
+// Asserts that a change plays as one gesture and leaves a mark.
+//
+// The lines that go away go away first, and only then do the new ones arrive.
+// Afterwards the lines that arrived keep a band, which fades out with the
+// panel's glow: a save is worth seeing for a while and not beyond it.
+//
+// There used to be a second check for the same thing driven by git's per-line
+// state against a baseline. That went with the baseline: changes are shown per
+// save now, from a diff of the two versions, so this is the only path there
+// is.
 //
 // That order is the whole point. Swapping the content and highlighting the
 // result reads as a flicker; taking the old lines out, then putting the new
@@ -164,8 +172,66 @@ if (pixelDiff(decodePng, removing, after) < 200) {
   console.log('ok    the end state differs from the removal');
 }
 
+// The lines that arrived keep a mark once the animation is over.
+const marked = await page.evaluate((path) => {
+  const f = window.__sanity.app.scene.files.get(path);
+  let n = 0;
+  for (let i = 0; i < f.data.lineState.length; i++) if (f.data.lineState[i] !== 0) n++;
+  return { lines: n, state: f.state, heat: f.heat };
+}, target);
+console.log(`${marked.lines} lines marked, panel state ${marked.state}, heat ${marked.heat.toFixed(2)}`);
+if (marked.lines === 0) {
+  fail('the change left no mark, so a save is invisible a second later');
+} else {
+  console.log('ok    the changed lines keep a band after the animation');
+}
+
+// And it has to be on screen, not only in the data.
+await frameOnScreen(page);
+const withMarks = await page.screenshot({ type: 'png' });
+const withoutMarks = await page.evaluate((path) => {
+  const f = window.__sanity.app.scene.files.get(path);
+  const kept = Array.from(f.data.lineState);
+  f.data.lineState.fill(0);
+  const wasState = f.state;
+  f.state = 0;
+  return { kept, wasState };
+}, target);
+await frameOnScreen(page);
+const bare = await page.screenshot({ type: 'png' });
+await page.evaluate(([path, saved]) => {
+  const f = window.__sanity.app.scene.files.get(path);
+  f.data.lineState.set(saved.kept);
+  f.state = saved.wasState;
+}, [target, withoutMarks]);
+const markPixels = pixelDiff(decodePng, withMarks, bare);
+if (markPixels < 200) fail(`the marks moved only ${markPixels} pixels`);
+else console.log(`ok    the marks are on screen (${markPixels} pixels)`);
+
+// They fade with the heat, and go when it runs out.
+const faded = await page.evaluate(async (path) => {
+  const f = window.__sanity.app.scene.files.get(path);
+  f.heat = 0.0001;
+  // A few frames, because the decay is per frame and the clearing happens on
+  // the frame that finds the panel cold.
+  for (let i = 0; i < 6 && f.heat > 0; i++) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  await new Promise((r) => requestAnimationFrame(r));
+  let left = 0;
+  for (let i = 0; i < f.data.lineState.length; i++) if (f.data.lineState[i] !== 0) left++;
+  return { left, state: f.state, heat: f.heat };
+}, target);
+if (faded.left !== 0 || faded.state !== 0) {
+  fail(`a cold panel still carries ${faded.left} marks: an old change would light up again`);
+} else {
+  console.log('ok    the marks clear when the panel goes cold');
+}
+
 await browser.close();
 console.log(
-  failures === 0 ? '\na change plays as remove then add' : `\n${failures} check(s) failed`,
+  failures === 0
+    ? '\na change plays as remove then add, and leaves a mark that fades'
+    : `\n${failures} check(s) failed`,
 );
 process.exit(failures === 0 ? 0 : 1);

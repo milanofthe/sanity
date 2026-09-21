@@ -4,9 +4,13 @@
 	// The three states exist because a repository is not evenly interesting.
 	// Measured on this collection, one docs project carries 2.38 million lines
 	// of generated JSON, SVG and notebook output around 61 thousand lines of
-	// source. Hiding the artefacts loses the fact that they exist; drawing them
-	// in full buries everything else. So a type can be drawn, stubbed, or
-	// dropped, and artefacts default to stubbed.
+	// source. Hiding a type loses the fact that it exists; drawing it in full
+	// buries everything else. So a type can be drawn, stubbed, or dropped.
+	//
+	// Every type starts drawn. There used to be a second section here for
+	// types a heuristic had decided were generated output, defaulted to
+	// stubbed. The rows are the same control either way, and one list the user
+	// sets is better than two where half of them were set for him.
 	import Segmented from '$lib/ui/Segmented.svelte';
 	import { project, VIEW_MODES, type ViewMode } from '$lib/state/project.svelte';
 
@@ -34,7 +38,7 @@
 			<span class="col-mode"></span>
 		</div>
 
-		{#each project.code as g (g.id)}
+		{#each project.groups as g (g.id)}
 			<div class="row" style:--share={`${(share(g.lines) * 100).toFixed(1)}%`}>
 				<span class="col-name">
 					<span class="name">{g.id}</span>
@@ -53,43 +57,6 @@
 				</span>
 			</div>
 		{/each}
-
-		{#if project.artefacts.length > 0}
-			<!-- Same grid as the rows, with a control in the mode column that sets
-			     every row below it. Two loose buttons in a section heading read
-			     as labels for the column rather than as something you click,
-			     and sat in a different type size from the heading beside
-			     them. -->
-			<div class="group-head">
-				<span class="col-name">Generated</span>
-				<span class="col-num">{n(project.artefacts.reduce((s, g) => s + g.files, 0))}</span>
-				<span class="col-num">{n(project.artefactLines)}</span>
-				<span class="col-mode">
-					<Segmented
-						options={VIEW_MODES}
-						value={groupMode(project.artefacts)}
-						onchange={(m: ViewMode) => project.setAll(m, 'artefacts')}
-					/>
-				</span>
-			</div>
-			{#each project.artefacts as g (g.id)}
-				<div class="row artefact" style:--share={`${(share(g.lines) * 100).toFixed(1)}%`}>
-					<span class="col-name">
-						<span class="name">{g.id}</span>
-						<span class="why">{g.artefact}</span>
-					</span>
-					<span class="col-num">{n(g.files)}</span>
-					<span class="col-num">{n(g.lines)}</span>
-					<span class="col-mode">
-						<Segmented
-							options={VIEW_MODES}
-							value={g.mode}
-							onchange={(m: ViewMode) => project.setMode(g.id, m)}
-						/>
-					</span>
-				</div>
-			{/each}
-		{/if}
 
 		<div class="foot">
 			<!-- A sentence, not a label, so it spans the three columns the rows
@@ -129,8 +96,7 @@
 	   empty: the column headings sat well left of the numbers they labelled. */
 	.head,
 	.row,
-	.foot,
-	.group-head {
+	.foot {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) 52px 74px var(--mode-w);
 		align-items: center;
@@ -151,7 +117,6 @@
 	   data rows also matched them, which put the numbers in monospace at a
 	   larger size than the label beside them. */
 	.head > span,
-	.group-head > span,
 	.foot > .summary {
 		font-family: inherit;
 		font-size: inherit;
@@ -202,9 +167,6 @@
 	.row:hover {
 		background: var(--bg-hover);
 	}
-	.artefact .name {
-		color: var(--text-dim);
-	}
 	.why {
 		font-family: var(--font-ui);
 		font-size: var(--fs-xxs);
@@ -219,17 +181,6 @@
 		font-size: var(--fs-xs);
 		color: var(--text-dim);
 		font-variant-numeric: tabular-nums;
-	}
-	.group-head {
-		border-top: var(--sep-w) solid var(--border);
-		margin-top: var(--sp-2);
-		padding-top: var(--sp-2);
-		font-family: var(--font-ui);
-		font-size: var(--fs-xxs);
-		font-weight: 600;
-		letter-spacing: 0.09em;
-		text-transform: uppercase;
-		color: var(--text-faint);
 	}
 	.foot {
 		border-top: var(--sep-w) solid var(--border);

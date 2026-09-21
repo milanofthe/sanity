@@ -52,6 +52,18 @@ const CHUNK_BUDGET_BYTES = 8 << 20;
  */
 const SAT_FLOOR = 0.25;
 
+/** Colours as a flat triple array, for the rasteriser's inner loop. */
+function flatColours(colours: number[]): Float32Array {
+  const out = new Float32Array(Math.max(1, colours.length) * 3);
+  colours.forEach((hex, i) => {
+    const [r, g, b] = rgb(hex);
+    out[i * 3] = r;
+    out[i * 3 + 1] = g;
+    out[i * 3 + 2] = b;
+  });
+  return out;
+}
+
 interface Chunk {
   tex: WebGLTexture;
   layers: number;
@@ -69,32 +81,76 @@ interface TexClass {
   chunks: Chunk[];
 }
 
+/** From EXT_texture_filter_anisotropic, which WebGL2 exposes as an extension
+ *  rather than in core. */
+const TEXTURE_MAX_ANISOTROPY = 0x84fe;
+const MAX_TEXTURE_MAX_ANISOTROPY = 0x84ff;
+
 export class OverviewTextures {
   private classes: TexClass[];
+  /** Samples the driver will take along the compressed axis, or 1 when the
+   *  extension is absent. */
+  private maxAnisotropy = 1;
   private maxLayers: number;
   /** Scratch accumulators, sized for the largest class. */
   private acc: Float32Array;
   private cov: Float32Array;
-  private out: Uint8Array;
+  /**
+   * Scratch for the upload and the mip chain.
+   *
+   * These used to be allocated per file: one layer-sized array for the base,
+   * which is two megabytes for the largest height class, plus one per mip
+   * level. Over a thousand files that is gigabytes of allocation for buffers
+   * that live a fraction of a millisecond each, and it measured 453
+   * milliseconds of the time to open a project. Reused instead, with two mip
+   * buffers so a reduction never reads and writes the same one.
+   */
+  private full: Uint8Array;
+  private mipA: Uint8Array;
+  private mipB: Uint8Array;
 
   /** Damped token colours as floats, indexed by `Kind`. Held here rather
    *  than imported so that a theme switch can replace them and re-rasterise. */
-  private kindRgb: [number, number, number][];
+  /** Overview colours as a flat Float32Array of triples, indexed by kind * 3.
+   *  Flat rather than an array of arrays because this is read once per span
+   *  per texel, and a nested dereference there costs more than the lookup. */
+  private kindRgb: Float32Array;
 
   constructor(private gl: GL, overviewColors: number[]) {
-    this.kindRgb = overviewColors.map(rgb);
+    this.kindRgb = flatColours(overviewColors);
     this.maxLayers = Math.min(512, gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS) as number);
     this.classes = HEIGHT_CLASSES.map((texRows) => ({ texRows, chunks: [] }));
     const maxTexels = overview.texCols * HEIGHT_CLASSES[HEIGHT_CLASSES.length - 1];
     this.acc = new Float32Array(maxTexels * 3);
     this.cov = new Float32Array(maxTexels);
-    this.out = new Uint8Array(maxTexels * 4);
+    this.full = new Uint8Array(maxTexels * 4);
+    // A reduction halves both dimensions, so the largest output is a quarter
+    // of the base. One buffer of that size each is enough to ping-pong.
+    this.mipA = new Uint8Array(maxTexels);
+    this.mipB = new Uint8Array(maxTexels);
+
+    // Off by default in WebGL2 and not in core, so it has to be asked for.
+    // Absent on some drivers, in which case the texture stays isotropic and
+    // simply looks the way it did before.
+    const ext = gl.getExtension('EXT_texture_filter_anisotropic');
+    if (ext) {
+      this.maxAnisotropy = Math.min(
+        16,
+        (gl.getParameter(MAX_TEXTURE_MAX_ANISOTROPY) as number) || 1,
+      );
+    }
+  }
+
+  /** How many samples the driver will take along the compressed axis. Reported
+   *  so a measurement can say whether it is on. */
+  get anisotropy(): number {
+    return this.maxAnisotropy;
   }
 
   /** Swap the palette. The caller has to rewrite every layer afterwards;
    *  the colours are baked into the texels, so there is no shortcut. */
   setColors(overviewColors: number[]): void {
-    this.kindRgb = overviewColors.map(rgb);
+    this.kindRgb = flatColours(overviewColors);
   }
 
   private classFor(lineCount: number): number {
@@ -127,6 +183,21 @@ export class OverviewTextures {
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // This texture is strongly anisotropic in use: 128 texels cover at most
+    // 120 characters horizontally while one texel covers a whole line
+    // vertically, so at the zoom where it is the picture it is minified across
+    // and magnified down. Measured: 0.43 pixels per texel horizontally
+    // against 1.82 vertically at the same zoom.
+    //
+    // Isotropic mip selection takes the worse axis, so the horizontal
+    // minification picked a coarser level and threw away the vertical
+    // resolution with it, then averaged the gaps between tokens into the ink.
+    // That is both the softness and the reason the picture brightened when the
+    // token bars took over: the texture was showing diluted ink and the bars
+    // are not diluted at all.
+    if (this.maxAnisotropy > 1) {
+      gl.texParameterf(gl.TEXTURE_2D_ARRAY, TEXTURE_MAX_ANISOTROPY, this.maxAnisotropy);
+    }
     return { tex, layers, used: 0, dirty: false, free: [] };
   }
 
@@ -190,6 +261,7 @@ export class OverviewTextures {
 
     const acc = this.acc;
     const cov = this.cov;
+    const kindRgb = this.kindRgb;
     acc.fill(0, 0, texels * 3);
     cov.fill(0, 0, texels);
 
@@ -210,13 +282,17 @@ export class OverviewTextures {
       for (let s = s0; s < s1; s++) {
         const packed = f.spans[s];
         const kind = spanKind(packed);
-        const c = this.kindRgb[kind] ?? this.kindRgb[0];
+        const ci = kind * 3;
+        const cr = kindRgb[ci];
+        const cg = kindRgb[ci + 1];
+        const cb = kindRgb[ci + 2];
         const col = spanCol(packed);
-        // Which wrapped row this span sits on, and where within it.
-        const wrapRow = panelCols > 0 ? Math.floor(col / panelCols) : 0;
+        // Which wrapped row this span sits on, and where within it. One
+        // division rather than a divide and a modulo.
+        const wrapRow = panelCols > 0 ? (col / panelCols) | 0 : 0;
         const ty = Math.min(texelRows - 1, ((lineRow + wrapRow) * texelsPerRow) | 0);
         const rowBase = ty * tw;
-        const x0 = (panelCols > 0 ? col % panelCols : col) * scaleX;
+        const x0 = (panelCols > 0 ? col - wrapRow * panelCols : col) * scaleX;
         const x1 = Math.min(tw, x0 + spanLen(packed) * scaleX);
         if (x1 <= x0) continue;
         const tx0 = x0 | 0;
@@ -227,38 +303,49 @@ export class OverviewTextures {
           const t = rowBase + tx;
           cov[t] += k;
           const a = t * 3;
-          acc[a] += c[0] * k;
-          acc[a + 1] += c[1] * k;
-          acc[a + 2] += c[2] * k;
+          acc[a] += cr * k;
+          acc[a + 1] += cg * k;
+          acc[a + 2] += cb * k;
         }
       }
     }
 
-    const out = this.out;
+    // Straight into the buffer that gets uploaded. There used to be a second
+    // array here and a copy of it afterwards, which is a hundred kilobytes per
+    // file for no benefit.
+    const full = this.full;
+    const invPerTexel = 255 / perTexel;
     for (let t = 0; t < texels; t++) {
       const k = cov[t];
       const o = t * 4;
       if (k <= 0) {
-        out[o] = 0;
-        out[o + 1] = 0;
-        out[o + 2] = 0;
-        out[o + 3] = 0;
+        full[o] = 0;
+        full[o + 1] = 0;
+        full[o + 2] = 0;
+        full[o + 3] = 0;
         continue;
       }
       const a = t * 3;
-      out[o] = Math.min(255, (acc[a] / k) * 255) | 0;
-      out[o + 1] = Math.min(255, (acc[a + 1] / k) * 255) | 0;
-      out[o + 2] = Math.min(255, (acc[a + 2] / k) * 255) | 0;
-      out[o + 3] = Math.min(255, (k / perTexel) * 255) | 0;
+      const inv = 255 / k;
+      const r = acc[a] * inv;
+      const g = acc[a + 1] * inv;
+      const b = acc[a + 2] * inv;
+      const al = k * invPerTexel;
+      full[o] = r > 255 ? 255 : r;
+      full[o + 1] = g > 255 ? 255 : g;
+      full[o + 2] = b > 255 ? 255 : b;
+      full[o + 3] = al > 255 ? 255 : al;
     }
 
     const chunk = cls.chunks[slot.chunkIdx];
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, chunk.tex);
     // The mip chain is built from the whole layer, transparent rows past the
     // end of a short file included, so reducing cannot pull in whatever a
-    // previous occupant of the layer left behind.
-    const full = new Uint8Array(tw * th * 4);
-    full.set(out.subarray(0, tw * texelRows * 4));
+    // previous occupant of the layer left behind. The scratch buffer is
+    // reused, so the rows past the file have to be cleared rather than assumed
+    // zero: only those, not the whole layer, which would cost more than the
+    // allocation did.
+    full.fill(0, tw * texelRows * 4, tw * th * 4);
 
     gl.texSubImage3D(
       gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot.layer,
@@ -266,7 +353,7 @@ export class OverviewTextures {
       gl.RGBA, gl.UNSIGNED_BYTE,
       full, 0,
     );
-    this.uploadMips(slot.layer, full, tw, th);
+    this.uploadMips(slot.layer, full, tw, th, texelRows);
     chunk.dirty = true;
   }
 
@@ -284,69 +371,102 @@ export class OverviewTextures {
    * plain average, because it is ink coverage and has to remain linear or the
    * indentation structure would bloom.
    */
-  private reduce(src: Uint8Array, sw: number, sh: number): { data: Uint8Array; w: number; h: number } {
+  private reduce(
+    src: Uint8Array, sw: number, sh: number, dst: Uint8Array, usedRows: number,
+  ): { data: Uint8Array; w: number; h: number; used: number } {
     const dw = Math.max(1, sw >> 1);
     const dh = Math.max(1, sh >> 1);
-    const dst = new Uint8Array(dw * dh * 4);
+    // Only the part being written is cleared: the loop below sets alpha for
+    // every destination texel it visits, and the colour channels only where
+    // there is weight, so everything else has to start at zero. That includes
+    // the rows past the file, which are not visited at all.
+    dst.fill(0, 0, dw * dh * 4);
 
-    for (let y = 0; y < dh; y++) {
-      const rows = [Math.min(sh - 1, y * 2), Math.min(sh - 1, y * 2 + 1)];
+    // Rows the file actually occupies at this level. The rest of the layer is
+    // transparent and reducing it would produce transparent texels at the cost
+    // of reading them, which on a file using half its height class is half the
+    // work for nothing.
+    const dUsed = Math.max(1, Math.min(dh, (usedRows + 1) >> 1));
+
+    for (let y = 0; y < dUsed; y++) {
+      const y0 = Math.min(sh - 1, y * 2);
+      const y1 = Math.min(sh - 1, y * 2 + 1);
+      const row0 = y0 * sw;
+      const row1 = y1 * sw;
+      const dRow = y * dw;
       for (let x = 0; x < dw; x++) {
-        const colsIdx = [Math.min(sw - 1, x * 2), Math.min(sw - 1, x * 2 + 1)];
+        const x0 = Math.min(sw - 1, x * 2);
+        const x1 = Math.min(sw - 1, x * 2 + 1);
         let wr = 0;
         let wg = 0;
         let wb = 0;
         let weight = 0;
         let alpha = 0;
 
-        for (const sy of rows) {
-          for (const sx of colsIdx) {
-            const o = (sy * sw + sx) * 4;
-            const r = src[o];
-            const g = src[o + 1];
-            const b = src[o + 2];
-            const a = src[o + 3];
-            alpha += a;
-            if (a === 0) continue;
-            const max = Math.max(r, g, b);
-            const min = Math.min(r, g, b);
-            const sat = max === 0 ? 0 : (max - min) / max;
-            // Coverage times a saturation boost: a coloured texel counts for
-            // roughly four times a grey one of the same coverage.
-            const w = (a / 255) * (SAT_FLOOR + (1 - SAT_FLOOR) * sat);
-            wr += r * w;
-            wg += g * w;
-            wb += b * w;
-            weight += w;
-          }
+        // The four source texels, unrolled. This used to build two arrays per
+        // destination texel and iterate them, which is twenty million array
+        // allocations over a thousand files and was the single largest cost in
+        // opening a project.
+        for (let i = 0; i < 4; i++) {
+          const o = ((i < 2 ? row0 : row1) + (i & 1 ? x1 : x0)) * 4;
+          const a = src[o + 3];
+          alpha += a;
+          if (a === 0) continue;
+          const r = src[o];
+          const g = src[o + 1];
+          const b = src[o + 2];
+          const max = r > g ? (r > b ? r : b) : g > b ? g : b;
+          const min = r < g ? (r < b ? r : b) : g < b ? g : b;
+          const sat = max === 0 ? 0 : (max - min) / max;
+          // Coverage times a saturation boost: a coloured texel counts for
+          // roughly four times a grey one of the same coverage.
+          const w = (a / 255) * (SAT_FLOOR + (1 - SAT_FLOOR) * sat);
+          wr += r * w;
+          wg += g * w;
+          wb += b * w;
+          weight += w;
         }
 
-        const o = (y * dw + x) * 4;
+        const o = (dRow + x) * 4;
         if (weight > 0) {
-          dst[o] = Math.min(255, Math.round(wr / weight));
-          dst[o + 1] = Math.min(255, Math.round(wg / weight));
-          dst[o + 2] = Math.min(255, Math.round(wb / weight));
+          const inv = 1 / weight;
+          const cr = wr * inv;
+          const cg = wg * inv;
+          const cb = wb * inv;
+          dst[o] = cr > 255 ? 255 : cr + 0.5;
+          dst[o + 1] = cg > 255 ? 255 : cg + 0.5;
+          dst[o + 2] = cb > 255 ? 255 : cb + 0.5;
         }
-        dst[o + 3] = Math.round(alpha / 4);
+        dst[o + 3] = alpha * 0.25 + 0.5;
       }
     }
-    return { data: dst, w: dw, h: dh };
+    return { data: dst, w: dw, h: dh, used: dUsed };
   }
 
+
   /** Build and upload the whole mip chain for one layer. */
-  private uploadMips(layer: number, base: Uint8Array, w: number, h: number): void {
+  private uploadMips(
+    layer: number, base: Uint8Array, w: number, h: number, usedRows: number,
+  ): void {
     const { gl } = this;
     let src = base;
     let sw = w;
     let sh = h;
+    let used = usedRows;
     let level = 1;
+    let toB = true;
     while (sw > 1 || sh > 1) {
-      const next = this.reduce(src, sw, sh);
+      // Alternating destinations: a reduction reads every source texel it
+      // averages, so it cannot write into the buffer it is reading.
+      const next = this.reduce(src, sw, sh, toB ? this.mipB : this.mipA, used);
+      toB = !toB;
+      used = next.used;
       gl.texSubImage3D(
         gl.TEXTURE_2D_ARRAY, level, 0, 0, layer,
         next.w, next.h, 1,
         gl.RGBA, gl.UNSIGNED_BYTE,
-        next.data, 0,
+        // A view of the scratch buffer, since only its head is this level.
+        next.data.subarray(0, next.w * next.h * 4), 0,
       );
       src = next.data;
       sw = next.w;

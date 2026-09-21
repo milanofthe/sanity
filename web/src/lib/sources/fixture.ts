@@ -20,7 +20,6 @@ interface FixtureScan {
     lineCount: number;
     maxCols: number;
     clipCols?: number;
-    artefact?: string;
   }[];
   groups: Omit<FileGroup, 'mode'>[];
 }

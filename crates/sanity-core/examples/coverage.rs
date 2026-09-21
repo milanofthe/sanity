@@ -12,7 +12,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use sanity_core::filter::Filter;
 use sanity_core::lang;
 use sanity_core::scan;
 use sanity_core::wire::{span_col, span_len, Kind, KIND_COUNT};
@@ -65,9 +64,7 @@ fn main() {
     for arg in &args {
         let root = Path::new(arg);
         let files: Vec<(std::path::PathBuf, String)> = if root.is_dir() {
-            let mut filter = Filter::new();
-            filter.show_artefacts = false;
-            match scan::list_files(root, &filter) {
+            match scan::list_files(root) {
                 Ok(rels) => rels.into_iter().map(|r| (root.to_path_buf(), r)).collect(),
                 Err(e) => {
                     eprintln!("{arg}: {e}");
