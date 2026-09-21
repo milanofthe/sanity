@@ -36,11 +36,24 @@ export interface Slot {
   texRows: number;
 }
 
-/** Storage budget for one array texture. Layer counts are derived from it, so
- *  a class of tall files gets few layers per chunk and a class of short ones
- *  gets many. A fixed layer count would reserve hundreds of megabytes for the
- *  tallest class no matter how few files actually land in it. */
-const CHUNK_BUDGET_BYTES = 8 << 20;
+/**
+ * Storage budget for one array texture. Layer counts are derived from it, so
+ * a class of tall files gets few layers per chunk and a class of short ones
+ * gets many. A fixed layer count would reserve hundreds of megabytes for the
+ * tallest class no matter how few files actually land in it.
+ *
+ * Four megabytes rather than eight. The last chunk of every class is only
+ * partly filled, and the bigger the chunk the more of it is reserved for files
+ * that are not there: measured on a 989 file project, 232 of 1221 layers were
+ * empty, 19 percent of 273 megabytes. At four it is 119 of 1108 and the total
+ * is 260.
+ *
+ * Smaller is not better past that point, because a chunk is a draw call at any
+ * zoom where something in it is visible. One megabyte brought the total to 244
+ * but raised the frame cost at the zoom that shows the whole project, which is
+ * the one this is meant to be watched from, from 0.95 to 1.50 milliseconds.
+ */
+const CHUNK_BUDGET_BYTES = 4 << 20;
 
 /**
  * Weight a fully desaturated texel keeps when a mip level is reduced.
