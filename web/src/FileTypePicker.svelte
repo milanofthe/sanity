@@ -91,8 +91,11 @@
 </div>
 
 <style>
+	/* No horizontal padding on the container: the rules between sections have
+	   to reach the sheet's edges, and a padded container cannot let them. The
+	   padding lives on the rows instead, at the same --sp-3 the menu items
+	   use, so a dropdown's contents line up whichever kind it is. */
 	.picker {
-		padding: 0 var(--sp-2);
 		font-family: var(--font-ui);
 		font-size: var(--fs-s);
 		font-weight: 500;
@@ -102,16 +105,25 @@
 		padding: var(--sp-2) var(--sp-2);
 		margin: 0;
 	}
+	/* One template for the header and the rows, with the mode column at a
+	   fixed width. It used to be `auto`, which resolved to the width of the
+	   segmented control in a row and to zero in the header, where that cell is
+	   empty: the column headings sat well left of the numbers they labelled. */
 	.head,
 	.row,
 	.foot,
 	.group-head {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) 52px 74px auto;
+		grid-template-columns: minmax(0, 1fr) 52px 74px var(--mode-w);
 		align-items: center;
 		gap: var(--sp-2);
 		min-height: var(--row-h);
-		padding: 0 var(--sp-2);
+		padding: 0 var(--sp-3);
+	}
+	.picker {
+		/* Width of the Full / Stub / Off control, so the header can reserve
+		   the same column. */
+		--mode-w: 116px;
 	}
 	.head {
 		font-family: var(--font-ui);
@@ -175,7 +187,7 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.group-head {
-		grid-template-columns: 1fr auto;
+		grid-template-columns: minmax(0, 1fr) var(--mode-w);
 		border-top: var(--sep-w) solid var(--border);
 		margin-top: var(--sp-2);
 		padding-top: var(--sp-2);
@@ -187,7 +199,7 @@
 		color: var(--text-faint);
 	}
 	.foot {
-		grid-template-columns: 1fr auto;
+		grid-template-columns: minmax(0, 1fr) auto;
 		border-top: var(--sep-w) solid var(--border);
 		margin-top: var(--sp-2);
 		padding-top: var(--sp-2);
@@ -196,6 +208,10 @@
 	}
 	.foot b {
 		color: var(--text);
+	}
+	.col-mode {
+		display: flex;
+		justify-content: flex-end;
 	}
 	.actions {
 		display: inline-flex;

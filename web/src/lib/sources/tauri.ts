@@ -21,6 +21,7 @@ interface ScanFile {
   path: string;
   lineCount: number;
   maxCols: number;
+  clipCols?: number;
   artefact?: string;
 }
 
@@ -112,6 +113,7 @@ export function openLoaded(app: CanvasApp): void {
       path: f.path,
       lineCount: f.lineCount,
       maxCols: f.maxCols,
+      clipCols: f.clipCols,
       stub: project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');

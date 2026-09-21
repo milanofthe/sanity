@@ -15,7 +15,13 @@ import { unpack } from './payload.ts';
 
 interface FixtureScan {
   root: string;
-  files: { path: string; lineCount: number; maxCols: number; artefact?: string }[];
+  files: {
+    path: string;
+    lineCount: number;
+    maxCols: number;
+    clipCols?: number;
+    artefact?: string;
+  }[];
   groups: Omit<FileGroup, 'mode'>[];
 }
 
@@ -60,6 +66,7 @@ export function openFixture(app: CanvasApp): void {
       path: f.path,
       lineCount: f.lineCount,
       maxCols: f.maxCols,
+      clipCols: f.clipCols,
       stub: project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');

@@ -46,8 +46,20 @@ export function quantize(n: number, min = 8): number {
 }
 
 export interface PanelGeometry {
-  /** Characters of text drawn per code column. */
+  /** Characters of text drawn per code column, line-number margin excluded. */
   cols: number;
+  /**
+   * Characters reserved at the left of each code column for line numbers,
+   * including the space between number and code. Zero when the column is too
+   * narrow to spare them.
+   *
+   * Part of the layout rather than something the text pass adds, because every
+   * pass has to agree on where a line starts: putting the numbers in the
+   * gutter between columns instead made a three digit number of one column
+   * overlap the last word of the previous one, and reserving the space only
+   * while text is drawn would shift the code sideways mid-crossfade.
+   */
+  numberCols: number;
   /** Number of code columns the lines are wrapped into. */
   columns: number;
   /** Lines per code column. */
@@ -71,6 +83,7 @@ export interface PanelGeometry {
 export function stubGeometry(): PanelGeometry {
   return {
     cols: MIN_PANEL_COLS,
+    numberCols: 0,
     columns: 1,
     linesPerColumn: 0,
     pitch: MIN_PANEL_COLS * metrics.charWidth + COLUMN_GUTTER,
@@ -131,11 +144,19 @@ export interface SlotFit extends PanelGeometry {
   usable: boolean;
 }
 
-/** Characters of slack allowed beyond a file's own width before the surplus
- *  is turned into gutter instead of column. */
-const WIDTH_SLACK = 6;
+/** Characters of code a column keeps before a line-number margin is worth
+ *  its share of the width. */
+const LINE_NUMBER_MIN_COLS = 28;
 
-export function fillSlot(lineCount: number, fileCols: number, slotW: number, slotH: number): SlotFit {
+/** Width of the line-number margin for a file, in characters. */
+export function numberColsFor(lineCount: number, availableCols: number): number {
+  const digits = String(Math.max(1, lineCount)).length;
+  return availableCols >= digits + 1 + LINE_NUMBER_MIN_COLS ? digits + 1 : 0;
+}
+
+export function fillSlot(
+  lineCount: number, clipCols: number, slotW: number, slotH: number,
+): SlotFit {
   const innerW = slotW - 2 * metrics.panelPadX;
   const innerH = slotH - metrics.titleHeight - 2 * metrics.panelPadY;
   const lines = Math.max(1, lineCount);
@@ -143,6 +164,7 @@ export function fillSlot(lineCount: number, fileCols: number, slotW: number, slo
   if (innerW < metrics.charWidth * HARD_MIN_COLS || innerH < metrics.lineHeight) {
     return {
       cols: HARD_MIN_COLS,
+      numberCols: 0,
       columns: 1,
       linesPerColumn: Math.max(1, Math.floor(innerH / metrics.lineHeight)),
       pitch: HARD_MIN_COLS * metrics.charWidth + COLUMN_GUTTER,
@@ -160,6 +182,7 @@ export function fillSlot(lineCount: number, fileCols: number, slotW: number, slo
   if (columns > MAX_COLUMNS) {
     return {
       cols: PREFERRED_MIN_COLS,
+      numberCols: 0,
       columns: MAX_COLUMNS,
       linesPerColumn,
       pitch: PREFERRED_MIN_COLS * metrics.charWidth + COLUMN_GUTTER,
@@ -177,16 +200,23 @@ export function fillSlot(lineCount: number, fileCols: number, slotW: number, slo
     * metrics.charWidth;
   const available = Math.floor((pitch - COLUMN_GUTTER) / metrics.charWidth);
 
-  // Cap the text width at what the file actually uses. Without this a flat,
-  // wide slot produces columns with room for two hundred characters holding
-  // lines of sixty, and the panel reads as mostly empty: the visible symptom
-  // was large blank regions inside otherwise dense panels. The surplus becomes
-  // gutter, so the panel still fills its slot and the columns spread out.
-  const wanted = Math.max(PREFERRED_MIN_COLS, Math.min(MAX_PANEL_COLS, fileCols + WIDTH_SLACK));
-  const cols = Math.min(available, wanted);
+  // Cap the text width at the file's longest line, so surplus slot width
+  // becomes gutter rather than columns with room for two hundred characters
+  // holding lines of sixty, which made panels read as mostly empty.
+  //
+  // The cap is the true maximum, not the percentile the panel is sized by:
+  // capping at the percentile clipped the longest tenth of every file's lines
+  // even where the panel had room for them, which is the wrong trade to make
+  // silently. Where the slot genuinely is too narrow, clipping still happens,
+  // because the alternative is a column too narrow to read.
+  const numberCols = numberColsFor(lineCount, available);
+  const forText = available - numberCols;
+  const wanted = Math.max(PREFERRED_MIN_COLS, Math.min(MAX_PANEL_COLS, clipCols));
+  const cols = Math.min(forText, wanted);
 
   return {
     cols,
+    numberCols,
     columns,
     linesPerColumn,
     pitch,
@@ -218,6 +248,7 @@ export function panelGeometry(lineCount: number, maxCols: number): PanelGeometry
 
   return {
     cols,
+    numberCols: 0,
     columns,
     linesPerColumn,
     pitch: cols * metrics.charWidth + COLUMN_GUTTER,
@@ -242,9 +273,14 @@ export function columnPitch(g: PanelGeometry): number {
   return g.pitch;
 }
 
-/** Usable text width of one code column, in world units. */
+/** Usable text width of one code column, in world units, margin excluded. */
 export function columnWidth(g: PanelGeometry): number {
   return g.cols * metrics.charWidth;
+}
+
+/** Offset from a code column's left edge to where its text starts. */
+export function textIndent(g: PanelGeometry): number {
+  return g.numberCols * metrics.charWidth;
 }
 
 /** Where line `i` sits inside the panel's text area, in world units. */

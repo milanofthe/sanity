@@ -60,10 +60,11 @@ fn main() {
 
         let cols = percentile(&data.line_cols, 0.9);
         files.push(format!(
-            r#"{{"path":{},"lineCount":{},"maxCols":{}{}}}"#,
+            r#"{{"path":{},"lineCount":{},"maxCols":{},"clipCols":{}{}}}"#,
             json_string(rel),
             info.line_count,
             cols,
+            info.max_cols,
             artefact
                 .as_ref()
                 .map(|a| format!(r#","artefact":{}"#, json_string(a)))

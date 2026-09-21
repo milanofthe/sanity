@@ -14,7 +14,7 @@ import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
 import { rgb, UiInk, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
 import {
-  columnPitch, columnWidth, COLUMN_GUTTER, textOriginX, textOriginY,
+  columnPitch, columnWidth, COLUMN_GUTTER, textIndent, textOriginX, textOriginY,
 } from '$lib/canvas/layout/panel';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { GlyphAtlas } from './glyphatlas';
@@ -103,23 +103,49 @@ function dirHue(path: string): number {
  * The base colour comes from the theme, so a tint stays inside the theme's
  * range instead of introducing saturation the palette never asked for: at
  * `amount` 0 it is the theme colour exactly.
+ *
+ * Matching the luminance by scaling the hue's channels, which is what this did
+ * first, works only when the target is darker than the hue. On a light theme
+ * the border colour is far brighter than a saturated blue, so the scale factor
+ * ran past one, the channels clipped, and the result came out as a band of
+ * fluorescent magenta. Lightening towards white instead of scaling keeps the
+ * luminance and cannot clip.
  */
 function tintFor(base: number, hue: number, amount: number): number {
   const [br, bg, bb] = rgb(base);
   const lum = 0.2126 * br + 0.7152 * bg + 0.0722 * bb;
-  // Hue to RGB at full saturation, then pulled to the base's luminance.
+
+  // Hue to RGB at full saturation.
   const k = (n: number) => (n + hue * 6) % 6;
   const f = (n: number) => {
     const t = k(n);
     return Math.max(0, Math.min(1, Math.min(t, 4 - t, 1)));
   };
-  const hr = f(5);
-  const hg = f(3);
-  const hb = f(1);
-  const hlum = 0.2126 * hr + 0.7152 * hg + 0.0722 * hb || 1;
-  const scale = lum / hlum;
+  let hr = f(5);
+  let hg = f(3);
+  let hb = f(1);
+
+  const hlum = 0.2126 * hr + 0.7152 * hg + 0.0722 * hb;
+  if (hlum <= 0) {
+    return base;
+  }
+  if (hlum < lum) {
+    // Too dark for the target: lift towards white, which raises luminance
+    // without any channel leaving the unit range.
+    const t = Math.min(1, (lum - hlum) / (1 - hlum));
+    hr += (1 - hr) * t;
+    hg += (1 - hg) * t;
+    hb += (1 - hb) * t;
+  } else {
+    // Too bright: scaling down is safe, nothing can exceed one.
+    const scale = lum / hlum;
+    hr *= scale;
+    hg *= scale;
+    hb *= scale;
+  }
+
   const mix = (b: number, h: number) =>
-    Math.max(0, Math.min(255, Math.round(255 * (b * (1 - amount) + h * scale * amount))));
+    Math.max(0, Math.min(255, Math.round(255 * (b * (1 - amount) + h * amount))));
   return (mix(br, hr) << 16) | (mix(bg, hg) << 8) | mix(bb, hb);
 }
 
@@ -327,9 +353,13 @@ export class Scene {
       this.pushPanel(f);
       this.pushColumnRules(f, cam.zoom);
       this.pushHeader(f, cam.zoom, f.node.path === this.hoveredPath);
+      this.pushPanelBorder(f);
       if (overviewFade > 0.004) this.pushOverview(f, overviewFade);
       if (spanFade > 0.004) this.pushSpans(f, spanFade, pxPerLine, vx0, vy0, vx1, vy1);
-      if (glyphFade > 0.004) this.pushGlyphs(f, glyphFade, vx0, vy0, vx1, vy1);
+      if (glyphFade > 0.004) {
+        this.pushGlyphs(f, glyphFade, vx0, vy0, vx1, vy1);
+        this.pushLineNumbers(f, glyphFade, vx0, vy0, vx1, vy1);
+      }
       if (spanFade > 0.004 || glyphFade > 0.004) this.pushGutter(f, vy0, vy1);
     }
 
@@ -379,7 +409,10 @@ export class Scene {
     // units would vanish when zoomed out, so this is in device pixels and
     // clamped to at least one.
     const weight = Math.max(1, DIR_BORDER_PX - d.depth);
-    this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, tint, 1, edge, weight);
+    // Fill behind everything, frame in front, for the same reason panels split
+    // theirs: the children are drawn in between.
+    this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, tint, 1, 0, 0);
+    this.pushRect(this.fgRects, d.x, d.y, d.w, d.h, tint, 0, edge, weight);
 
     // The label sits in the frame's own strip, so it never overlaps a panel.
     const px = metrics.dirLabelHeight * zoom;
@@ -507,11 +540,14 @@ export class Scene {
     const hot = f.heat > 0.02;
     // Below a couple of pixels a border would be the whole panel.
     const borderPx = h * zoom > 4 ? 1 : 0;
-    this.pushRect(
-      this.bgRects, n.x, n.y, w, h,
-      this.pal.surface.reducedBg, 1,
-      hot ? this.pal.surface.heat : this.pal.surface.border, borderPx,
-    );
+    this.pushRect(this.bgRects, n.x, n.y, w, h, this.pal.surface.reducedBg, 1, 0, 0);
+    if (borderPx > 0) {
+      this.pushRect(
+        this.fgRects, n.x, n.y, w, h,
+        this.pal.surface.reducedBg, 0,
+        hot ? this.pal.surface.heat : this.pal.surface.border, borderPx,
+      );
+    }
     if (h * zoom < 5) return;
     const inset = metrics.panelPadX;
     this.pushRect(
@@ -537,9 +573,13 @@ export class Scene {
 
     const n = f.node;
     const top = n.y + textOriginY;
-    const height = n.h - textOriginY - metrics.panelPadY;
+    // A world unit short of the bottom, so the rule reads as a separator
+    // between columns rather than as part of the frame.
+    const height = n.h - textOriginY - metrics.panelPadY - 1;
     if (height <= 0) return;
-    const w = Math.max(1 / zoom, 1);
+    // One device pixel whatever the zoom: a rule in world units would vanish
+    // zoomed out and turn heavy zoomed in.
+    const w = 1 / zoom;
 
     for (let c = 1; c < g.columns; c++) {
       // Centre of the gutter between column c-1 and column c.
@@ -551,7 +591,22 @@ export class Scene {
     }
   }
 
+  /** Panel background. The border is a separate pass; see `pushPanelBorder`. */
   private pushPanel(f: SceneFile): void {
+    const n = f.node;
+    this.pushRect(this.bgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 1, 0, 0);
+  }
+
+  /**
+   * The panel's border, drawn after its contents.
+   *
+   * Separate from the background because everything inside a panel is drawn
+   * over that background: the header bar spans the full panel width and the
+   * column rules run its full height, so both painted over the border and left
+   * panels looking broken along their edges. A border that encloses its
+   * contents has to be painted after them.
+   */
+  private pushPanelBorder(f: SceneFile): void {
     const n = f.node;
     // Recency, not aggregate git state: at any realistic change rate nearly
     // every file has one changed line somewhere, so colouring borders by state
@@ -560,8 +615,8 @@ export class Scene {
     const hot = f.heat > 0.02;
     const border = hot ? this.pal.surface.heat : this.pal.surface.border;
     const borderPx = hot ? 1 + 2 * f.heat : 1;
-    this.pushRect(this.bgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 1, border, borderPx);
-
+    // Transparent fill, so this draws only the outline over what is there.
+    this.pushRect(this.fgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 0, border, borderPx);
   }
 
   private overviewBuffer(classIdx: number, chunkIdx: number): InstanceBuffer {
@@ -595,7 +650,7 @@ export class Scene {
 
       const o = b.alloc();
       const d = b.data;
-      d[o] = n.x + textOriginX + c * pitch;
+      d[o] = n.x + textOriginX + c * pitch + textIndent(g);
       d[o + 1] = n.y + textOriginY;
       d[o + 2] = colW;
       d[o + 3] = h;
@@ -631,6 +686,14 @@ export class Scene {
   }
 
   /** Which lines of which code columns of this file are on screen. */
+  /**
+   * Which lines of which code columns of this file are on screen.
+   *
+   * `colX` is where the column's text begins, past the line-number margin.
+   * The margin is part of the layout, so every pass that draws into a column
+   * has to skip it, and having `visibleRuns` return the text origin rather
+   * than the column origin means none of them can forget.
+   */
   private *visibleRuns(
     f: SceneFile, vx0: number, vy0: number, vx1: number, vy1: number,
   ): Generator<[column: number, colX: number, first: number, last: number]> {
@@ -638,8 +701,9 @@ export class Scene {
     const pitch = columnPitch(g);
     const colW = columnWidth(g);
     const yBase = f.node.y + textOriginY;
+    const indent = textIndent(g);
     for (let c = 0; c < g.columns; c++) {
-      const colX = f.node.x + textOriginX + c * pitch;
+      const colX = f.node.x + textOriginX + c * pitch + indent;
       if (colX > vx1 || colX + colW < vx0) continue;
       const rowFrom = Math.max(0, Math.floor((vy0 - yBase) / metrics.lineHeight));
       const rowTo = Math.min(
@@ -702,6 +766,38 @@ export class Scene {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.spans.buf);
     instanceAttribs(gl, this.progSpan, SPAN_STRIDE, [['aRect', 4, 0], ['aKindFade', 2, 4]]);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.spans.count);
+  }
+
+  /**
+   * Line numbers down the left of each code column.
+   *
+   * Only once text is readable, and only where the column is wide enough that
+   * the gutter is not eating the code: a number costs four to six characters
+   * of a column that may only have thirty, so below a threshold the code is
+   * worth more than knowing which line it is.
+   *
+   * Right-aligned in the gutter, in the faint ink, so they read as a margin
+   * rather than as content. They sit in the column's own gutter space, which
+   * is why they do not shift the text: the gutter exists between columns
+   * anyway and the first column's is the panel padding.
+   */
+  private pushLineNumbers(
+    f: SceneFile, fade: number, vx0: number, vy0: number, vx1: number, vy1: number,
+  ): void {
+    const g = f.node.geom;
+    // The layout decides whether there is a margin at all; see numberColsFor.
+    if (g.numberCols === 0) return;
+
+    const yBase = f.node.y + textOriginY;
+    for (const [c, colX, first, last] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      for (let i = first; i <= last; i++) {
+        const y = yBase + (i - c * g.linesPerColumn) * metrics.lineHeight;
+        const label = String(i + 1);
+        // Right-aligned against the text, inside the reserved margin.
+        const x = colX - (label.length + 1) * metrics.charWidth;
+        this.pushText(label, x, y, UiInk.Path, fade * 0.7, label.length);
+      }
+    }
   }
 
   private pushGlyphs(
@@ -784,10 +880,11 @@ export class Scene {
     const g = f.node.geom;
     const yBase = f.node.y + textOriginY;
     const pitch = columnPitch(g);
+    const indent = textIndent(g);
     const w = Math.max(2, metrics.charWidth * 0.4);
 
     for (let c = 0; c < g.columns; c++) {
-      const colX = f.node.x + textOriginX + c * pitch;
+      const colX = f.node.x + textOriginX + c * pitch + indent;
       const rowFrom = Math.max(0, Math.floor((vy0 - yBase) / metrics.lineHeight));
       const rowTo = Math.min(g.linesPerColumn - 1, Math.ceil((vy1 - yBase) / metrics.lineHeight));
       for (let r = rowFrom; r <= rowTo; r++) {

@@ -41,7 +41,11 @@ const DIR_GAP_CELLS = 1;
 export interface FileEntry {
   path: string;
   lineCount: number;
+  /** Width the panel is sized for: the 90th percentile of line widths. */
   maxCols: number;
+  /** Longest line, where text may be clipped. Defaults to `maxCols` when a
+   *  source does not distinguish them. */
+  clipCols?: number;
   /** When set, the file is laid out as a fixed-size stub: present in the
    *  structure, not drawn. Files that should not appear at all are filtered
    *  out before they get here. */
@@ -54,6 +58,7 @@ export interface FileNode {
   path: string;
   lineCount: number;
   maxCols: number;
+  clipCols: number;
   geom: PanelGeometry;
   /** Laid out as a fixed-size placeholder rather than drawn. */
   stub: boolean;
@@ -130,6 +135,7 @@ function buildTree(entries: FileEntry[]): DirNode {
       path: e.path,
       lineCount: e.lineCount,
       maxCols: e.maxCols,
+      clipCols: Math.max(e.clipCols ?? e.maxCols, e.maxCols),
       geom: e.stub ? stubGeometry() : panelGeometry(e.lineCount, e.maxCols),
       stub: Boolean(e.stub),
       fits: true,
@@ -221,7 +227,7 @@ function placeFile(f: FileNode, slot: IntRect): void {
 
   // The panel is the slot. Everything about its text layout is derived from
   // the rectangle it was given, which is what makes the edges align.
-  const fit = fillSlot(f.lineCount, f.maxCols, w, h);
+  const fit = fillSlot(f.lineCount, f.clipCols, w, h);
   f.geom = fit;
   f.w = w;
   f.h = h;

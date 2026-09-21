@@ -19,11 +19,17 @@ pub struct FileInfo {
     pub path: String,
     #[serde(rename = "lineCount")]
     pub line_count: u32,
-    /// 90th percentile of line widths, which is what the panel is sized for.
-    /// The maximum is set by a single outlier and would leave panels mostly
-    /// empty; see the note in `width_percentile`.
+    /// 90th percentile of line widths: what the panel is *sized* for. The
+    /// maximum is set by a single outlier and sizing to it leaves panels
+    /// mostly empty; see the note in `width_percentile`.
     #[serde(rename = "maxCols")]
     pub max_cols: u32,
+    /// Longest line in the file: where the text may be *clipped*. Sizing and
+    /// clipping are different questions, and using the percentile for both is
+    /// what made the last tenth of every long line disappear even when the
+    /// panel had room for it.
+    #[serde(rename = "clipCols")]
+    pub clip_cols: u32,
     /// Reason the filter classified this file as generated, if it did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artefact: Option<String>,
@@ -130,6 +136,7 @@ async fn scan_repo(path: String, state: State<'_, AppState>) -> Result<ScanResul
             path: rel.clone(),
             line_count: info.line_count,
             max_cols: width_percentile(&data.line_cols, 0.9),
+            clip_cols: info.max_cols,
             artefact,
         });
         payloads.push((rel.clone(), encode(&data)));

@@ -98,6 +98,7 @@ function generatePaths(rand: () => number, count: number): string[] {
 function generateFile(rand: () => number, lineCount: number, changedFraction: number): {
   data: FileData;
   maxCols: number;
+  clipCols: number;
 } {
   const spanStart = new Uint32Array(lineCount + 1);
   const lineCols = new Uint16Array(lineCount);
@@ -175,6 +176,7 @@ function generateFile(rand: () => number, lineCount: number, changedFraction: nu
       spans: new Uint32Array(spans),
     },
     maxCols: widthPercentile(lineCols),
+    clipCols: lineCols.reduce((m, c) => Math.max(m, c), 1),
   };
 }
 
@@ -195,9 +197,9 @@ export function synthRepo(opts: SynthOptions): SynthRepo {
     const normal = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
     const lineCount = Math.max(4, Math.min(24000, Math.round(median * Math.exp(normal * 1.05))));
 
-    const { data, maxCols } = generateFile(rand, lineCount, changed);
+    const { data, maxCols, clipCols } = generateFile(rand, lineCount, changed);
     payloads.set(path, encodeFile(data));
-    entries.push({ path, lineCount, maxCols });
+    entries.push({ path, lineCount, maxCols, clipCols });
     totalLines += lineCount;
   }
 

@@ -44,6 +44,15 @@
 	/* text on an accent-filled surface */
 	--on-accent: #ffffff;
 
+	/* Direction every derived colour mixes towards.
+	   A dark theme lightens a hue to make it legible on its ground, a light
+	   theme darkens it. Deriving with a literal `white` meant the light and
+	   paper themes got the dark theme's pale tints on a pale background, so
+	   half the token colours were barely distinguishable from each other. One
+	   token per theme fixes the whole derivation. */
+	--ink-mix: #ffffff;
+	--ground-mix: #000000;
+
 	/* code token colours, one per wire-format Kind. The renderer reads these
 	   by name, so the order here is the order in wire.ts. */
 	--tok-plain: var(--text);
@@ -53,11 +62,11 @@
 	--tok-number: var(--data-4);
 	--tok-keyword: var(--data-2);
 	--tok-type: var(--data-1);
-	--tok-function: color-mix(in srgb, var(--data-1) 70%, white);
+	--tok-function: color-mix(in srgb, var(--data-1) 70%, var(--ink-mix));
 	--tok-variable: var(--text);
 	--tok-punctuation: var(--data-5);
-	--tok-constant: color-mix(in srgb, var(--data-6) 72%, white);
-	--tok-attribute: color-mix(in srgb, var(--data-4) 80%, white);
+	--tok-constant: color-mix(in srgb, var(--data-6) 72%, var(--ink-mix));
+	--tok-attribute: color-mix(in srgb, var(--data-4) 80%, var(--ink-mix));
 
 	/* the same twelve, damped for the overview textures. Most of a line of
 	   code is identifiers and punctuation; at full strength they average down
@@ -66,8 +75,8 @@
 	--ov-plain: #6d7787;
 	--ov-variable: #7b8695;
 	--ov-punctuation: #4e5764;
-	--ov-type: color-mix(in srgb, var(--data-1) 82%, black);
-	--ov-function: color-mix(in srgb, var(--data-1) 92%, black);
+	--ov-type: color-mix(in srgb, var(--data-1) 82%, var(--ground-mix));
+	--ov-function: color-mix(in srgb, var(--data-1) 92%, var(--ground-mix));
 
 	/* change state */
 	--added: var(--data-3);
@@ -133,6 +142,8 @@
 /* --- themes: token overrides on <html data-theme="..."> ------------------- */
 
 [data-theme='light'] {
+	--ink-mix: #000000;
+	--ground-mix: #ffffff;
 	--bg: #ffffff;
 	--bg-panel: #f4f4f5;
 	--bg-inset: #eaeaec;
@@ -157,6 +168,8 @@
 	--data-4: #a86f2c;
 	--data-5: #6c7076;
 	--data-6: #c0392b;
+	/* comments sit closer to the ground on a light theme than on a dark one,
+	   where they have to stay above it to read as text at all */
 	--tok-comment: #8a929c;
 	--tok-doc-comment: #5f7a8f;
 	--ov-plain: #9aa2ad;
@@ -166,6 +179,8 @@
 }
 
 [data-theme='paper'] {
+	--ink-mix: #000000;
+	--ground-mix: #ffffff;
 	--bg: #faf6ef;
 	--bg-panel: #f1ece1;
 	--bg-inset: #e7e0d2;
