@@ -6,21 +6,27 @@ export const MAGIC = 0x594e5453; // "SNTY" little endian
 export const VERSION = 1;
 
 /** Token kinds. 4 bits, so 16 slots. Language agnostic on purpose: the
- *  overview only needs a coarse visual classification, not a parse tree. */
-export const enum Kind {
-  Plain = 0,
-  Comment = 1,
-  DocComment = 2,
-  String = 3,
-  Number = 4,
-  Keyword = 5,
-  Type = 6,
-  Function = 7,
-  Variable = 8,
-  Punctuation = 9,
-  Constant = 10,
-  Attribute = 11,
-}
+ *  overview only needs a coarse visual classification, not a parse tree.
+ *
+ *  A const object rather than an enum: it erases completely, which keeps it
+ *  compatible with isolated modules and with running these files directly
+ *  under node's type stripping, and the resulting union type is stricter than
+ *  an enum would be. */
+export const Kind = {
+  Plain: 0,
+  Comment: 1,
+  DocComment: 2,
+  String: 3,
+  Number: 4,
+  Keyword: 5,
+  Type: 6,
+  Function: 7,
+  Variable: 8,
+  Punctuation: 9,
+  Constant: 10,
+  Attribute: 11,
+} as const;
+export type Kind = (typeof Kind)[keyof typeof Kind];
 export const KIND_COUNT = 12;
 
 /** A line may be up to MAX_COLS columns wide; the rest is clipped. Long lines
@@ -37,13 +43,14 @@ export const spanLen = (s: number): number => (s >>> 12) & 0x3ff;
 export const spanKind = (s: number): Kind => ((s >>> 22) & 0xf) as Kind;
 
 /** Change state of a line, derived from git diff plus the live watcher. */
-export const enum LineState {
-  Unchanged = 0,
-  Added = 1,
-  Modified = 2,
+export const LineState = {
+  Unchanged: 0,
+  Added: 1,
+  Modified: 2,
   /** Line sits directly below a deletion. */
-  DeletedBelow = 3,
-}
+  DeletedBelow: 3,
+} as const;
+export type LineState = (typeof LineState)[keyof typeof LineState];
 
 /**
  * Per-file payload. All arrays are tightly packed little endian, in this order:

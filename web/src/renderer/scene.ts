@@ -127,7 +127,7 @@ export class Scene {
   addFile(node: FileNode, data: FileData): void {
     const slot = this.textures.allocate(data.lineCount);
     node.layer = slot.layer;
-    let state = LineState.Unchanged;
+    let state: LineState = LineState.Unchanged;
     for (let i = 0; i < data.lineState.length; i++) {
       if (data.lineState[i] !== LineState.Unchanged) {
         state = data.lineState[i] as LineState;
