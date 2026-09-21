@@ -6,7 +6,7 @@
 
 import { Camera } from '$lib/canvas/camera';
 import {
-  computeLayout, layoutStats, type FileEntry, type FileNode, type Layout,
+  computeLayout, layoutStats, passesUsed, type FileEntry, type FileNode, type Layout,
 } from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
@@ -137,7 +137,7 @@ export class CanvasApp {
       `${st.dirCount} dirs · misfits ${st.misfits} · unusable ${st.unusable} · ` +
       `overlaps ${st.overlaps} · ` +
       `offgrid ${st.offGrid} · mean aspect ${st.meanAspect.toFixed(2)} · ` +
-      `mean cols ${st.meanCols.toFixed(1)} · ${(performance.now() - t0).toFixed(0)} ms` +
+      `mean cols ${st.meanCols.toFixed(1)} · passes ${passesUsed} · ${(performance.now() - t0).toFixed(0)} ms` +
       (st.overlaps > 0
         ? ` · worst ${st.worstOverlap.path} ${st.worstOverlap.children} kids in ` +
           `${st.worstOverlap.cellsW}x${st.worstOverlap.cellsH} cells`

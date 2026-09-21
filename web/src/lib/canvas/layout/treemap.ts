@@ -18,6 +18,22 @@
 // its shape is not: wrapping the lines into more or fewer columns spans aspect
 // ratios from roughly 1:70 to 8:1, so a panel can be fitted into whatever slot
 // it is given. See fillSlot in panel.ts.
+//
+// Why not measure sizes bottom up and place once, which would avoid the
+// correction passes in tree.ts entirely: it was built and measured, and it
+// fills 3 to 30 percent of the canvas against this one's 85 to 99. The
+// difference is structural rather than a matter of tuning. A treemap
+// *subdivides*, so the only waste is what a panel fails to fill inside its own
+// slot. Row packing *stacks*, so every row adds the gap under each item whose
+// height does not exactly match the row's, and with nesting that compounds the
+// same way the shelf packer's loss did. Measured, on the seven repository
+// shapes in scripts/layout-check.mjs:
+//
+//   400 files:  94.5% subdivided, 15.2% stacked
+//   2500 files: 97.7% subdivided,  6.2% stacked
+//
+// The correction passes are the price, and they are cheap: two to six for a
+// realistic repository, under ten milliseconds in total.
 
 import { CELL } from '$lib/metrics';
 

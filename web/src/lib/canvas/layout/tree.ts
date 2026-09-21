@@ -314,10 +314,17 @@ function fitPasses(root: DirNode, files: FileNode[]): number {
         Math.max(natural.w, natural.h * aspect) * Math.max(natural.h, natural.w / aspect);
       f.area = Math.max(f.area, need) * 1.06;
     }
-    if (remaining === 0) break;
+    if (remaining === 0) {
+      passesUsed = pass + 1;
+      break;
+    }
+    passesUsed = pass + 1;
   }
   return remaining;
 }
+
+/** How many subdivision passes the last layout actually needed. */
+export let passesUsed = 0;
 
 export function computeLayout(entries: FileEntry[]): Layout {
   const root = buildTree(entries);

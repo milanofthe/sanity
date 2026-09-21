@@ -77,6 +77,9 @@ for (const cfg of CASES) {
   // misfits are cosmetic (a panel narrower than preferred); unusable is not.
   if (num('unusable') !== 0) problems.push(`unusable=${num('unusable')}`);
   if (fill < MIN_FILL) problems.push(`fill=${(fill * 100).toFixed(1)}% < ${MIN_FILL * 100}%`);
+  // The pass count is reported, not asserted: the pathological case converges
+  // on its last allowed pass, and the layout it produces is still valid. What
+  // actually has to hold is `unusable`, `overlaps` and `offgrid`, above.
   const verdict = problems.length === 0 ? 'ok' : `FAIL ${problems.join(' ')}`;
   if (problems.length) failures++;
   console.log(`${cfg.padEnd(24)} ${verdict.padEnd(34)} ${lastLine.slice(8)}`);
