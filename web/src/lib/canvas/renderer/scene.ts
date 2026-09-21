@@ -420,8 +420,11 @@ export class Scene {
    */
   private pushDir(d: DirNode, zoom: number): void {
     const hue = dirHue(d.path);
-    const tint = tintFor(this.pal.surface.dirBg, hue, 0.1 + 0.04 * (d.depth % 3));
-    const edge = tintFor(this.pal.surface.borderStrong, hue, 0.55);
+    // Tint strength is a theme token: a monochrome palette sets it to zero and
+    // gets depth from the wash alone, which is what it wants.
+    const wash = this.pal.dirWash + 0.04 * (d.depth % 3);
+    const tint = tintFor(this.pal.surface.dirBg, hue, wash);
+    const edge = tintFor(this.pal.surface.borderStrong, hue, this.pal.dirTint);
 
     // Thicker the further out, so the nesting is readable at a glance. A
     // uniform hairline made a four-level tree look flat, and a border in world

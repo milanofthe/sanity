@@ -126,6 +126,11 @@
 	   height collapses takes its label out of its own box. */
 	--row-h: 26px;
 
+	/* how far a directory's frame rotates towards its own hue, and how much of
+	   that reaches its fill. A monochrome theme sets the first to zero. */
+	--dir-tint: 0.55;
+	--dir-wash: 0.1;
+
 	/* stacking order, one scale for the whole app: every z-index references a
 	   token, so a new surface can be placed without hunting for the number it
 	   has to beat. Ascending = painted later. */
@@ -261,4 +266,92 @@
 	--dir-bg: hsl(195, 11%, 88%);
 	--reduced-bg: hsl(195, 11%, 90%);
 	--reduced-ink: hsl(200, 8%, 62%);
+}
+
+[data-theme='sanity'] {
+	/* --- Sanity's own: the signature red, white, and charcoal ---------------
+
+	   Monochrome with one accent, which is what a palette of three colours
+	   actually is. The differentiation the overview needs comes from value
+	   rather than hue: red for what a language reserves to itself (keywords,
+	   literals, constants), white for the names a program gives things, and
+	   greys for the structure around them. That ordering is also what the
+	   damped overview colours reduce to, so a file's signature at a distance
+	   is its ratio of red to white to grey.
+
+	   Directory tinting is off: rotating hues is the one thing a scheme built
+	   from a single accent must not do. Depth reads through the wash and the
+	   border weight instead. */
+
+	--dir-tint: 0;
+	--dir-wash: 0.16;
+
+	--ink-mix: #ffffff;
+	--ground-mix: #000000;
+
+	/* the logo's red, then two steps for interaction and for text on charcoal */
+	--sanity-red: #ff0000;
+	--red-ink: #ff2020;
+	--red-mid: #ff5050;
+	--red-soft: #ff8a8a;
+	--red-deep: #c40000;
+
+	--accent: var(--red-ink);
+	--accent-deep: var(--red-deep);
+	--on-accent: #ffffff;
+
+	/* Five of the six data hues are values, not hues. Kept in the same slots
+	   so everything derived from them keeps working. */
+	--data-1: #ffffff;
+	--data-2: var(--red-ink);
+	--data-3: #c3c8cc;
+	--data-4: var(--red-soft);
+	--data-5: #767c82;
+	--data-6: var(--red-mid);
+
+	--bg: #16181a;
+	--bg-panel: #1e2124;
+	--bg-inset: #1a1c1f;
+	--bg-hover: #262a2e;
+	--bg-active: #2e3338;
+	--border: #2c3136;
+	--border-strong: #454b51;
+	--text: #f4f5f6;
+	--text-dim: #9aa0a6;
+	--text-faint: #656b71;
+
+	--tok-plain: #e6e8ea;
+	--tok-comment: #5c6368;
+	--tok-doc-comment: #6f777d;
+	--tok-string: #c3c8cc;
+	--tok-number: var(--red-soft);
+	--tok-keyword: var(--red-ink);
+	--tok-type: #ffffff;
+	--tok-function: #d5d9dc;
+	--tok-variable: #e6e8ea;
+	--tok-punctuation: #767c82;
+	--tok-constant: var(--red-mid);
+	--tok-attribute: var(--red-soft);
+
+	--ov-plain: color-mix(in srgb, var(--tok-plain) 52%, var(--bg-panel));
+	--ov-variable: color-mix(in srgb, var(--tok-variable) 58%, var(--bg-panel));
+	--ov-punctuation: color-mix(in srgb, var(--tok-punctuation) 66%, var(--bg-panel));
+	--ov-type: color-mix(in srgb, var(--tok-type) 82%, var(--bg-panel));
+	--ov-function: color-mix(in srgb, var(--tok-function) 76%, var(--bg-panel));
+
+	/* Change state by intensity rather than hue, since the theme has one hue.
+	   An addition is the brightest thing on the panel, a modification is the
+	   accent, a deletion is the accent at full strength. */
+	--added: #f4f5f6;
+	--modified: var(--red-mid);
+	--deleted: var(--sanity-red);
+	--heat: var(--red-ink);
+
+	--dir-bg: #101214;
+	--reduced-bg: #191b1e;
+	--reduced-ink: #3d4348;
+
+	--ok: var(--text);
+	--warn: var(--red-soft);
+	--error: var(--red-ink);
 }

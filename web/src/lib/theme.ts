@@ -6,7 +6,7 @@
 // chrome and the canvas from the same override block, and a colour cannot
 // drift between the two.
 
-export type ThemeId = 'mariana' | 'monokai' | 'breakers';
+export type ThemeId = 'sanity' | 'mariana' | 'monokai' | 'breakers';
 
 export interface ThemeInfo {
   id: ThemeId;
@@ -28,6 +28,7 @@ export interface ThemeInfo {
  * ground.
  */
 export const THEMES: ThemeInfo[] = [
+  { id: 'sanity', label: 'Sanity', bg: '#16181a', panel: '#1e2124', accent: '#ff2020' },
   { id: 'mariana', label: 'Mariana', bg: '#2f3640', panel: '#30383f', accent: '#e05561' },
   { id: 'monokai', label: 'Monokai', bg: '#1a1a15', panel: '#272822', accent: '#f92672' },
   { id: 'breakers', label: 'Breakers', bg: '#ebeff0', panel: '#fbfcfc', accent: '#cf4550' },
@@ -95,6 +96,16 @@ const SURFACE_VARS = {
 export type SurfaceKey = keyof typeof SURFACE_VARS;
 
 export interface Palette {
+  /**
+   * How far a directory's frame and wash rotate towards its own hue, 0 to 1.
+   *
+   * A theme token rather than a constant because a monochrome palette has to
+   * be able to turn it off: rotating hues is exactly what a scheme built from
+   * one accent does not want, and without this the sanity theme would grow
+   * rainbow directory borders it never asked for.
+   */
+  dirTint: number;
+  dirWash: number;
   /** 0xRRGGBB per token kind, for readable text. Sixteen entries: the twelve
    *  wire-format kinds followed by the UI slots in `UiInk`. */
   token: number[];
@@ -138,6 +149,13 @@ function makeResolver(): (cssVar: string) => number {
   };
 }
 
+/** A numeric custom property, with a fallback if the theme omits it. */
+function readNumber(name: string, fallback: number): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const v = Number.parseFloat(raw);
+  return Number.isFinite(v) ? v : fallback;
+}
+
 /** Read the palette of whatever theme is currently on `<html>`. */
 export function readPalette(): Palette {
   const resolve = makeResolver();
@@ -151,7 +169,13 @@ export function readPalette(): Palette {
   for (const [key, v] of Object.entries(SURFACE_VARS)) {
     surface[key as SurfaceKey] = resolve(v);
   }
-  return { token, overview, surface };
+  return {
+    token,
+    overview,
+    surface,
+    dirTint: readNumber('--dir-tint', 0.55),
+    dirWash: readNumber('--dir-wash', 0.1),
+  };
 }
 
 export const rgb = (hex: number): [number, number, number] => [
@@ -180,5 +204,5 @@ export function storedTheme(): ThemeId {
   } catch {
     // Fall through to the default.
   }
-  return 'mariana';
+  return 'sanity';
 }

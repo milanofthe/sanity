@@ -8,10 +8,17 @@
 	// in full buries everything else. So a type can be drawn, stubbed, or
 	// dropped, and artefacts default to stubbed.
 	import Segmented from '$lib/ui/Segmented.svelte';
-	import Button from '$lib/ui/Button.svelte';
 	import { project, VIEW_MODES, type ViewMode } from '$lib/state/project.svelte';
 
 	const n = (v: number) => v.toLocaleString('en-US');
+
+	/** The mode a set of rows agrees on, or '' when they differ. A control
+	 *  showing one of several states as selected would be a lie. */
+	const groupMode = (rows: { mode: ViewMode }[]): ViewMode | '' => {
+		if (rows.length === 0) return '';
+		const first = rows[0].mode;
+		return rows.every((r) => r.mode === first) ? first : '';
+	};
 	const share = (lines: number) =>
 		project.totalLines > 0 ? lines / project.totalLines : 0;
 </script>
@@ -48,15 +55,21 @@
 		{/each}
 
 		{#if project.artefacts.length > 0}
+			<!-- Same grid as the rows, with a control in the mode column that sets
+			     every row below it. Two loose buttons in a section heading read
+			     as labels for the column rather than as something you click,
+			     and sat in a different type size from the heading beside
+			     them. -->
 			<div class="group-head">
-				<span>Generated</span>
-				<span class="actions">
-					<Button title="Stub every generated type" onclick={() => project.setAll('reduced', 'artefacts')}>
-						Stub all
-					</Button>
-					<Button title="Leave every generated type out" onclick={() => project.setAll('off', 'artefacts')}>
-						Off
-					</Button>
+				<span class="col-name">Generated</span>
+				<span class="col-num">{n(project.artefacts.reduce((s, g) => s + g.files, 0))}</span>
+				<span class="col-num">{n(project.artefactLines)}</span>
+				<span class="col-mode">
+					<Segmented
+						options={VIEW_MODES}
+						value={groupMode(project.artefacts)}
+						onchange={(m: ViewMode) => project.setAll(m, 'artefacts')}
+					/>
 				</span>
 			</div>
 			{#each project.artefacts as g (g.id)}
@@ -79,12 +92,17 @@
 		{/if}
 
 		<div class="foot">
-			<span>
+			<!-- A sentence, not a label, so it spans the three columns the rows
+			     use for a type and its counts. -->
+			<span class="summary">
 				drawing <b>{n(project.shownLines)}</b> of {n(project.totalLines)} lines
 			</span>
-			<span class="actions">
-				<Button onclick={() => project.setAll('full', 'code')}>All code</Button>
-				<Button onclick={() => project.setAll('full')}>Everything</Button>
+			<span class="col-mode">
+				<Segmented
+					options={VIEW_MODES}
+					value={groupMode(project.groups)}
+					onchange={(m: ViewMode) => project.setAll(m)}
+				/>
 			</span>
 		</div>
 	{/if}
@@ -128,7 +146,13 @@
 	/* The column headings are one label each, so they share one style. The
 	   `.col-num` rule below also matched them, which put FILES and LINES in
 	   monospace at a larger size than TYPE beside them. */
-	.head > span {
+	/* Column headings and section headings are labels, so they share the one
+	   style of the row they sit in. Without this the `.col-num` rule for the
+	   data rows also matched them, which put the numbers in monospace at a
+	   larger size than the label beside them. */
+	.head > span,
+	.group-head > span,
+	.foot > .summary {
 		font-family: inherit;
 		font-size: inherit;
 		font-weight: inherit;
@@ -197,7 +221,6 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.group-head {
-		grid-template-columns: minmax(0, 1fr) var(--mode-w);
 		border-top: var(--sep-w) solid var(--border);
 		margin-top: var(--sp-2);
 		padding-top: var(--sp-2);
@@ -209,12 +232,19 @@
 		color: var(--text-faint);
 	}
 	.foot {
-		grid-template-columns: minmax(0, 1fr) auto;
 		border-top: var(--sep-w) solid var(--border);
 		margin-top: var(--sp-2);
 		padding-top: var(--sp-2);
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
+	}
+	.summary {
+		/* Across the type and count columns, so the sentence is not wrapped
+		   into the width of one of them. */
+		grid-column: 1 / 4;
+		white-space: nowrap;
+		font-size: var(--fs-xs);
+		color: var(--text-dim);
 	}
 	.foot b {
 		color: var(--text);
@@ -223,9 +253,5 @@
 		display: flex;
 		justify-content: flex-end;
 	}
-	.actions {
-		display: inline-flex;
-		gap: var(--sp-1);
-		justify-content: flex-end;
-	}
+
 </style>
