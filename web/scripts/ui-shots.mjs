@@ -59,7 +59,7 @@ for (const label of ['Project', 'View', 'Theme']) {
 }
 
 // Each theme, applied to the whole window including the canvas.
-for (const theme of ['dark', 'light', 'paper', 'onyx']) {
+for (const theme of ['mariana', 'monokai', 'breakers']) {
   await page.getByRole('button', { name: /^Theme/ }).click();
   await page.waitForTimeout(150);
   await page.getByRole('button', { name: new RegExp(theme, 'i') }).click();

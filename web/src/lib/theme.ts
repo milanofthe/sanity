@@ -6,7 +6,7 @@
 // chrome and the canvas from the same override block, and a colour cannot
 // drift between the two.
 
-export type ThemeId = 'dark' | 'light' | 'paper' | 'onyx';
+export type ThemeId = 'mariana' | 'monokai' | 'breakers';
 
 export interface ThemeInfo {
   id: ThemeId;
@@ -17,11 +17,20 @@ export interface ThemeInfo {
   accent: string;
 }
 
+/**
+ * The Sublime Text default schemes, values verbatim from
+ * Packages/Color Scheme - Default in the Sublime distribution.
+ *
+ * Celeste, Sublime's light default, is deliberately absent: it paints keywords
+ * and types in the same black as ordinary text, and an app whose whole point
+ * is telling code apart at a distance cannot use a scheme that does not. Its
+ * light slot is filled by Breakers, which is Mariana's palette on a light
+ * ground.
+ */
 export const THEMES: ThemeInfo[] = [
-  { id: 'dark', label: 'Dark', bg: '#0d1117', panel: '#151b23', accent: '#e63030' },
-  { id: 'light', label: 'Light', bg: '#ffffff', panel: '#f4f4f5', accent: '#e63030' },
-  { id: 'paper', label: 'Paper', bg: '#faf6ef', panel: '#f1ece1', accent: '#e63030' },
-  { id: 'onyx', label: 'Onyx', bg: '#08090b', panel: '#101317', accent: '#e63030' },
+  { id: 'mariana', label: 'Mariana', bg: '#2f3640', panel: '#30383f', accent: '#e05561' },
+  { id: 'monokai', label: 'Monokai', bg: '#1a1a15', panel: '#272822', accent: '#f92672' },
+  { id: 'breakers', label: 'Breakers', bg: '#ebeff0', panel: '#fbfcfc', accent: '#cf4550' },
 ];
 
 /** Token colours, in the order of `Kind` in the wire format. */
@@ -171,5 +180,5 @@ export function storedTheme(): ThemeId {
   } catch {
     // Fall through to the default.
   }
-  return 'dark';
+  return 'mariana';
 }

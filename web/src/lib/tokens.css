@@ -1,100 +1,99 @@
-/* sanity design tokens — the single source for colour, type, spacing, chrome.
-   The palette follows the logo: one red accent, a hard frame, square corners.
-   The logo is a wordmark inside a box, so the box is the form language: every
-   surface in this app is a framed rectangle, and nothing is rounded.
-
-   Structure follows SANE's tokens.css. Six data hues carry every coloured
-   surface, so overriding those six recolours the whole app, canvas included:
-   the WebGL renderer resolves them at runtime rather than keeping a second
-   palette (see src/lib/theme.ts). */
-
 :root {
-	/* brand */
+	/* --- Mariana, the Sublime Text default ------------------------------------
+
+	   Values taken verbatim from Packages/Color Scheme - Default/Mariana
+	   .sublime-color-scheme, in the HSL notation Sublime writes them in, so
+	   they can be compared against the original without converting anything.
+
+	   Sublime describes a text editor, so its background becomes this app's
+	   *panel* colour and the canvas behind the panels is a step darker. That
+	   is the only liberty taken with the palette: everything a panel contains
+	   is the scheme as shipped. */
+
+	--sublime-blue: hsl(210, 50%, 60%);
+	--sublime-blue2: hsl(210, 13%, 40%);
+	--sublime-blue3: hsl(210, 15%, 22%);
+	--sublime-blue4: hsl(210, 13%, 45%);
+	--sublime-blue5: hsl(180, 36%, 54%);
+	--sublime-blue6: hsl(221, 12%, 69%);
+	--sublime-green: hsl(114, 31%, 68%);
+	--sublime-orange: hsl(32, 93%, 66%);
+	--sublime-orange3: hsl(40, 94%, 68%);
+	--sublime-pink: hsl(300, 30%, 68%);
+	--sublime-red: hsl(357, 79%, 65%);
+	--sublime-white3: hsl(219, 28%, 88%);
+
+	/* brand: the logo's red, and a settled version for interaction */
 	--sanity-red: #ff0000;
-	/* pure red vibrates on a dark ground; the UI uses a settled version and
-	   leaves #ff0000 to the logo itself */
-	--sanity-red-ui: #e63030;
-	--sanity-red-deep: #b81d1d;
+	--accent: var(--sublime-red);
+	--accent-deep: hsl(357, 60%, 52%);
+	--on-accent: hsl(210, 15%, 14%);
 
-	/* THE data palette: the six hues of the theme. Token colours, change
-	   states and chart marks all derive from these, so a theme is a palette
-	   override and nothing else. */
-	--data-1: #6fa8c7; /* cool: types, structure */
-	--data-2: #b07fc7; /* violet: keywords */
-	--data-3: #8ab77b; /* green: strings, additions */
-	--data-4: #d6a06a; /* amber: numbers, modifications */
-	--data-5: #7f8794; /* grey: filler, punctuation */
-	--data-6: #d1493f; /* warm: deletions, errors */
+	/* THE data palette: the six hues every coloured surface derives from, so
+	   a theme is a palette override and nothing else. */
+	--data-1: var(--sublime-blue); /* cool: types, structure */
+	--data-2: var(--sublime-pink); /* keywords */
+	--data-3: var(--sublime-green); /* strings, additions */
+	--data-4: var(--sublime-orange); /* numbers, modifications */
+	--data-5: var(--sublime-blue4); /* filler, punctuation */
+	--data-6: var(--sublime-red); /* deletions, errors */
 
-	/* neutrals: a dark ground by default, because the canvas is code */
-	--bg: #0d1117;
-	--bg-panel: #151b23;
-	--bg-inset: #11171f;
-	--bg-hover: #1c2430;
-	--bg-active: #232d3a;
-	--border: #232b36;
-	--border-strong: #3d4855;
-	--text: #c9d1d9;
-	--text-dim: #8b949e;
-	--text-faint: #6b7684;
-
-	/* interaction accent: buttons, active states, focus, the mark */
-	--accent: var(--sanity-red-ui);
-	--accent-deep: var(--sanity-red-deep);
-	/* text on an accent-filled surface */
-	--on-accent: #ffffff;
-
-	/* Direction every derived colour mixes towards.
-	   A dark theme lightens a hue to make it legible on its ground, a light
-	   theme darkens it. Deriving with a literal `white` meant the light and
-	   paper themes got the dark theme's pale tints on a pale background, so
-	   half the token colours were barely distinguishable from each other. One
-	   token per theme fixes the whole derivation. */
+	/* direction derived colours mix towards: a dark theme lightens a hue to
+	   make it legible, a light theme darkens it */
 	--ink-mix: #ffffff;
 	--ground-mix: #000000;
 
-	/* code token colours, one per wire-format Kind. The renderer reads these
-	   by name, so the order here is the order in wire.ts. */
-	--tok-plain: var(--text);
-	--tok-comment: #5c6773;
-	--tok-doc-comment: #6b8299;
-	--tok-string: var(--data-3);
-	--tok-number: var(--data-4);
-	--tok-keyword: var(--data-2);
-	--tok-type: var(--data-1);
-	--tok-function: color-mix(in srgb, var(--data-1) 70%, var(--ink-mix));
-	--tok-variable: var(--text);
-	--tok-punctuation: var(--data-5);
-	--tok-constant: color-mix(in srgb, var(--data-6) 72%, var(--ink-mix));
-	--tok-attribute: color-mix(in srgb, var(--data-4) 80%, var(--ink-mix));
+	/* neutrals: the scheme's background is the panel, the canvas is darker */
+	--bg: hsl(210, 15%, 13%);
+	--bg-panel: var(--sublime-blue3);
+	--bg-inset: hsl(210, 15%, 18%);
+	--bg-hover: hsl(210, 15%, 27%);
+	--bg-active: hsl(210, 14%, 32%);
+	--border: hsl(210, 14%, 31%);
+	--border-strong: var(--sublime-blue4);
+	--text: var(--sublime-white3);
+	--text-dim: var(--sublime-blue6);
+	--text-faint: var(--sublime-blue4);
 
-	/* the same twelve, damped for the overview textures. Most of a line of
-	   code is identifiers and punctuation; at full strength they average down
-	   to a grey smear and every file looks alike. Comments, strings and
-	   keywords stay strong because they are the signature. */
-	--ov-plain: #6d7787;
-	--ov-variable: #7b8695;
-	--ov-punctuation: #4e5764;
-	--ov-type: color-mix(in srgb, var(--data-1) 82%, var(--ground-mix));
-	--ov-function: color-mix(in srgb, var(--data-1) 92%, var(--ground-mix));
+	/* code token colours, one per wire-format Kind, in the order of wire.ts */
+	--tok-plain: var(--text);
+	--tok-comment: var(--sublime-blue6);
+	--tok-doc-comment: color-mix(in srgb, var(--sublime-blue6) 80%, var(--sublime-blue5));
+	--tok-string: var(--sublime-green);
+	--tok-number: var(--sublime-orange);
+	--tok-keyword: var(--sublime-pink);
+	--tok-type: var(--sublime-blue);
+	--tok-function: var(--sublime-blue5);
+	--tok-variable: var(--text);
+	--tok-punctuation: var(--sublime-blue4);
+	--tok-constant: var(--sublime-red);
+	--tok-attribute: var(--sublime-orange3);
+
+	/* the same twelve, damped for the overview textures: most of a line of
+	   code is identifiers and punctuation, and at full strength they average
+	   down to a grey smear that makes every file look alike */
+	--ov-plain: color-mix(in srgb, var(--text) 55%, var(--bg-panel));
+	--ov-variable: color-mix(in srgb, var(--text) 62%, var(--bg-panel));
+	--ov-punctuation: color-mix(in srgb, var(--data-5) 70%, var(--bg-panel));
+	--ov-type: color-mix(in srgb, var(--data-1) 88%, var(--ground-mix));
+	--ov-function: color-mix(in srgb, var(--tok-function) 92%, var(--ground-mix));
 
 	/* change state */
-	--added: var(--data-3);
-	--modified: var(--data-4);
-	--deleted: var(--data-6);
-	/* recency glow on a panel that just changed */
-	--heat: #ffb86c;
+	--added: var(--sublime-green);
+	--modified: var(--sublime-orange);
+	--deleted: var(--sublime-red);
+	--heat: var(--sublime-orange3);
 
 	/* canvas surfaces the renderer draws */
 	--canvas-bg: var(--bg);
 	--panel-bg: var(--bg-panel);
 	--panel-bg-alt: var(--bg-inset);
-	--dir-bg: #0a0e14;
+	--dir-bg: hsl(210, 15%, 10%);
 	--dir-label: var(--text-faint);
 	--panel-label: var(--text-dim);
 	/* a file kept only as a placeholder: present, deliberately not readable */
-	--reduced-bg: #10151c;
-	--reduced-ink: #4a525e;
+	--reduced-bg: hsl(210, 14%, 16%);
+	--reduced-ink: hsl(210, 13%, 34%);
 
 	/* semantic status */
 	--ok: var(--data-3);
@@ -118,117 +117,148 @@
 	--radius: 0px;
 	--sep-w: 1px;
 
-	/* chrome dimensions: one bar height across toolbar and menus */
+	/* chrome dimensions */
 	--toolbar-h: 34px;
 	--statusbar-h: 24px;
 	--menu-w: 280px;
 	/* One row in a menu or a picker. Fixed rather than derived from content:
-	   a list of rows that each size themselves is a list whose rows do not
-	   line up, and one whose intrinsic height can collapse. */
+	   rows that size themselves do not line up, and one whose intrinsic
+	   height collapses takes its label out of its own box. */
 	--row-h: 26px;
 
 	/* stacking order, one scale for the whole app: every z-index references a
 	   token, so a new surface can be placed without hunting for the number it
 	   has to beat. Ascending = painted later. */
 	--z-canvas: 0;
-	--z-labels: 10; /* DOM labels over the canvas */
-	--z-chrome: 20; /* toolbar, status bar */
-	--z-menu: 40; /* dropdowns from the toolbar */
+	--z-labels: 10;
+	--z-chrome: 20;
+	--z-menu: 40;
 	--z-backdrop: 50;
-	--z-sheet: 60; /* settings and project sheets */
+	--z-sheet: 60;
 	--z-tooltip: 100;
 }
 
-/* --- themes: token overrides on <html data-theme="..."> ------------------- */
+/* --- themes: token overrides on <html data-theme="..."> -------------------
+   Each is a Sublime Text default scheme, values verbatim from
+   Packages/Color Scheme - Default. Only the neutrals are re-derived, because
+   Sublime has one background and this app needs a canvas, a panel, an inset
+   and a directory ground. */
 
-[data-theme='light'] {
-	--ink-mix: #000000;
-	--ground-mix: #ffffff;
-	--bg: #ffffff;
-	--bg-panel: #f4f4f5;
-	--bg-inset: #eaeaec;
-	--bg-hover: #efefF1;
-	--bg-active: #e3e3e6;
-	--border: #d9d9dc;
-	--border-strong: #b5b5bc;
-	--text: #1d2126;
-	--text-dim: #5f646b;
-	--text-faint: #8f949c;
-	/* the canvas needs more separation than the chrome: a panel sits on a
-	   directory box, and on a light ground those two were a shade apart */
-	--panel-bg: #ffffff;
-	--dir-bg: #e2e2e6;
-	--panel-bg-alt: #f2f2f4;
-	--reduced-bg: #d7d7db;
-	--reduced-ink: #a9adb4;
-	/* the hues darken for legibility on a light ground */
-	--data-1: #3f7fa0;
-	--data-2: #8455a0;
-	--data-3: #5b8b4a;
-	--data-4: #a86f2c;
-	--data-5: #6c7076;
-	--data-6: #c0392b;
-	/* comments sit closer to the ground on a light theme than on a dark one,
-	   where they have to stay above it to read as text at all */
-	--tok-comment: #8a929c;
-	--tok-doc-comment: #5f7a8f;
-	--ov-plain: #9aa2ad;
-	--ov-variable: #8d95a1;
-	--ov-punctuation: #b4bac2;
-	--heat: #d97706;
+[data-theme='monokai'] {
+	--sublime-black3: hsl(70, 8%, 15%);
+	--sublime-blue: hsl(190, 81%, 67%);
+	--sublime-orange: hsl(32, 98%, 56%);
+	--sublime-orange3: hsl(47, 100%, 79%);
+	--sublime-purple: hsl(261, 100%, 75%);
+	--sublime-red: hsl(0, 93%, 59%);
+	--sublime-red2: hsl(338, 95%, 56%);
+	--sublime-white3: hsl(60, 30%, 96%);
+	--sublime-yellow: hsl(54, 70%, 68%);
+	--sublime-yellow2: hsl(80, 76%, 53%);
+	--sublime-yellow3: hsl(60, 12%, 79%);
+	--sublime-yellow5: hsl(50, 11%, 41%);
+
+	--data-1: var(--sublime-blue);
+	--data-2: var(--sublime-red2);
+	--data-3: var(--sublime-yellow2);
+	--data-4: var(--sublime-orange);
+	--data-5: var(--sublime-yellow5);
+	--data-6: var(--sublime-purple);
+
+	--accent: var(--sublime-red2);
+	--accent-deep: hsl(338, 80%, 45%);
+	--on-accent: hsl(60, 30%, 96%);
+
+	--bg: hsl(70, 8%, 9%);
+	--bg-panel: var(--sublime-black3);
+	--bg-inset: hsl(70, 8%, 12%);
+	--bg-hover: hsl(60, 9%, 20%);
+	--bg-active: hsl(60, 10%, 25%);
+	--border: hsl(55, 9%, 26%);
+	--border-strong: hsl(55, 10%, 38%);
+	--text: var(--sublime-white3);
+	--text-dim: var(--sublime-yellow3);
+	--text-faint: hsl(50, 11%, 50%);
+
+	--tok-comment: var(--sublime-yellow5);
+	--tok-doc-comment: hsl(50, 13%, 52%);
+	--tok-string: var(--sublime-yellow);
+	--tok-number: var(--sublime-purple);
+	--tok-keyword: var(--sublime-red2);
+	--tok-type: var(--sublime-blue);
+	--tok-function: var(--sublime-yellow2);
+	--tok-punctuation: hsl(55, 10%, 45%);
+	--tok-constant: var(--sublime-purple);
+	--tok-attribute: var(--sublime-orange);
+
+	--added: var(--sublime-yellow2);
+	--modified: var(--sublime-orange);
+	--deleted: var(--sublime-red);
+	--heat: var(--sublime-orange3);
+
+	--dir-bg: hsl(70, 8%, 7%);
+	--reduced-bg: hsl(70, 8%, 12%);
+	--reduced-ink: hsl(55, 9%, 30%);
 }
 
-[data-theme='paper'] {
+[data-theme='breakers'] {
+	/* Mariana's hues on a light ground, so the derivation has to darken
+	   rather than lighten. */
 	--ink-mix: #000000;
 	--ground-mix: #ffffff;
-	--bg: #faf6ef;
-	--bg-panel: #f1ece1;
-	--bg-inset: #e7e0d2;
-	--bg-hover: #ece7da;
-	--bg-active: #e0d9c8;
-	--border: #d8d0c0;
-	--border-strong: #b3a992;
-	--text: #2a251c;
-	--text-dim: #6f6759;
-	--text-faint: #9b9280;
-	--panel-bg: #fdfbf6;
-	--dir-bg: #e3dccc;
-	--panel-bg-alt: #f3efe5;
-	--reduced-bg: #dcd4c2;
-	--reduced-ink: #aaa290;
-	--data-1: #3f7fa0;
-	--data-2: #8455a0;
-	--data-3: #5b8b4a;
-	--data-4: #a86f2c;
-	--data-5: #6f6759;
-	--data-6: #c0392b;
-	--tok-comment: #9b9280;
-	--tok-doc-comment: #6f7f8a;
-	--ov-plain: #a59c8a;
-	--ov-variable: #999080;
-	--ov-punctuation: #c0b8a6;
-	--heat: #c2700f;
-}
 
-[data-theme='onyx'] {
-	/* near-black, low chroma: the version for staring at all day */
-	--bg: #08090b;
-	--bg-panel: #101317;
-	--bg-inset: #0c0f12;
-	--bg-hover: #171c22;
-	--bg-active: #1f262e;
-	--border: #1c2127;
-	--border-strong: #343c45;
-	--text: #d6dbe0;
-	--text-dim: #8a929c;
-	--text-faint: #5d656e;
-	--dir-bg: #050607;
-	--reduced-bg: #0b0d10;
-	--reduced-ink: #3d444c;
-	--data-1: #6fc3e0;
-	--data-2: #b99ae0;
-	--data-3: #7fc98f;
-	--data-4: #e0b463;
-	--data-5: #7d858f;
-	--data-6: #e05050;
+	--sublime-white5: hsl(180, 9%, 99%);
+	--sublime-white4: hsl(195, 11%, 93%);
+	--sublime-grey: hsl(0, 0%, 73%);
+	--sublime-grey2: hsl(0, 0%, 60%);
+	--sublime-grey3: hsl(0, 0%, 20%);
+	--sublime-green: hsl(114, 31%, 42%);
+	--sublime-blue: hsl(210, 55%, 45%);
+	--sublime-blue5: hsl(180, 40%, 38%);
+	--sublime-pink: hsl(300, 35%, 48%);
+	--sublime-orange: hsl(32, 80%, 45%);
+	--sublime-orange3: hsl(40, 85%, 45%);
+	--sublime-red: hsl(357, 65%, 52%);
+
+	--data-1: var(--sublime-blue);
+	--data-2: var(--sublime-pink);
+	--data-3: var(--sublime-green);
+	--data-4: var(--sublime-orange);
+	--data-5: var(--sublime-grey2);
+	--data-6: var(--sublime-red);
+
+	--accent: var(--sublime-red);
+	--accent-deep: hsl(357, 60%, 42%);
+	--on-accent: #ffffff;
+
+	--bg: var(--sublime-white4);
+	--bg-panel: var(--sublime-white5);
+	--bg-inset: hsl(195, 11%, 96%);
+	--bg-hover: hsl(195, 12%, 91%);
+	--bg-active: hsl(195, 12%, 87%);
+	--border: hsl(200, 10%, 80%);
+	--border-strong: var(--sublime-grey);
+	--text: var(--sublime-grey3);
+	--text-dim: hsl(0, 0%, 42%);
+	--text-faint: var(--sublime-grey2);
+
+	--tok-comment: var(--sublime-grey2);
+	--tok-doc-comment: hsl(200, 15%, 52%);
+	--tok-string: var(--sublime-green);
+	--tok-number: var(--sublime-orange);
+	--tok-keyword: var(--sublime-pink);
+	--tok-type: var(--sublime-blue);
+	--tok-function: var(--sublime-blue5);
+	--tok-punctuation: var(--sublime-grey2);
+	--tok-constant: var(--sublime-red);
+	--tok-attribute: var(--sublime-orange3);
+
+	--added: var(--sublime-green);
+	--modified: var(--sublime-orange);
+	--deleted: var(--sublime-red);
+	--heat: hsl(32, 85%, 48%);
+
+	--dir-bg: hsl(195, 11%, 88%);
+	--reduced-bg: hsl(195, 11%, 90%);
+	--reduced-ink: hsl(200, 8%, 62%);
 }
