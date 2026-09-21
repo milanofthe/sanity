@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"What the window is allowed to ask the backend for. Commands this app defines itself need no entry; only the core and plugin commands do, and leaving one out fails silently at runtime, which is how the file watcher came to emit events that nothing was permitted to listen for.","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open"]}}

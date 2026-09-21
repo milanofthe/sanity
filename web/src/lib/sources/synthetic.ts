@@ -50,7 +50,7 @@ function groupsOf(repo: SynthRepo): Omit<FileGroup, 'mode'>[] {
  * `regenerate` draws a new repository; otherwise the same one is re-laid out,
  * which is what a change in the picker needs.
  */
-export function openSynthetic(app: CanvasApp, regenerate = false): void {
+export function openSynthetic(app: CanvasApp, regenerate = false, keepView = false): void {
   if (!cached || regenerate) {
     cached = synthRepo({
       fileCount: num('files', 400),
@@ -66,11 +66,14 @@ export function openSynthetic(app: CanvasApp, regenerate = false): void {
     .map((e) => ({ ...e, stub: project.modeForPath(e.path) === 'reduced' }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
 
-  app.open({
-    entries,
-    payload: (path) => repo.payloads.get(path),
-    text: new PseudoText(
-      new Map([...repo.payloads].map(([p, buf]) => [p, decodeFile(buf)])),
-    ),
-  });
+  app.open(
+    {
+      entries,
+      payload: (path) => repo.payloads.get(path),
+      text: new PseudoText(
+        new Map([...repo.payloads].map(([p, buf]) => [p, decodeFile(buf)])),
+      ),
+    },
+    keepView,
+  );
 }

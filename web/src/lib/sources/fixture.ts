@@ -59,7 +59,7 @@ export async function loadFixture(name: string): Promise<void> {
   project.load(s.root, s.groups, false);
 }
 
-export function openFixture(app: CanvasApp): void {
+export function openFixture(app: CanvasApp, keepView = false): void {
   if (!scan) return;
   const entries = scan.files
     .map((f) => ({
@@ -70,7 +70,7 @@ export function openFixture(app: CanvasApp): void {
       stub: project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
-  app.open({ entries, payload: (p) => payloads.get(p), text });
+  app.open({ entries, payload: (p) => payloads.get(p), text }, keepView);
 }
 
 export function fixtureLoaded(): boolean {

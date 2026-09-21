@@ -82,6 +82,44 @@ class BackendText implements TextSource {
 
 const text = new BackendText();
 
+/**
+ * Put a line where a terminal can see it.
+ *
+ * The webview console does not reach stdout, so the live update path, whose
+ * whole point is that it happens without anyone asking, would otherwise be
+ * unobservable. Costs one IPC call per batch and prints nothing unless
+ * `SANITY_WATCH_LOG` is set.
+ */
+export function uiLog(message: string): void {
+  console.log(message);
+  if (inTauri()) void invoke('log_line', { message }).catch(() => {});
+}
+
+/**
+ * Send frontend errors to the terminal as well as the console.
+ *
+ * Without this, a throw inside the window is invisible: there is no console to
+ * look at, and the symptom is a feature that simply does not happen. That is
+ * exactly how the watch wiring failed silently the first time.
+ */
+export function bridgeErrors(): void {
+  if (!inTauri()) return;
+  window.addEventListener('error', (e) => uiLog(`error: ${e.message} at ${e.filename}:${e.lineno}`));
+  window.addEventListener('unhandledrejection', (e) =>
+    uiLog(`unhandled rejection: ${e.reason instanceof Error ? e.reason.stack : e.reason}`),
+  );
+  const warn = console.warn.bind(console);
+  console.warn = (...args: unknown[]) => {
+    warn(...args);
+    uiLog(`warn: ${args.map(String).join(' ')}`);
+  };
+  const err = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    err(...args);
+    uiLog(`error: ${args.map(String).join(' ')}`);
+  };
+}
+
 /** Open a file in the user's editor. Returns the command that handled it. */
 export async function openInEditor(path: string): Promise<string> {
   return invoke<string>('open_in_editor', { path });
@@ -115,6 +153,8 @@ export async function loadRepo(path: string): Promise<void> {
   payloads = unpack(blob);
   decoded = new Map();
   project.load(scan.root, scan.groups, false);
+  project.baseline = scan.baseline === 'branch' ? 'branch' : 'head';
+  project.changed = scan.changed;
 }
 
 /** Build the scene from the loaded scan and the current view modes. */
@@ -197,6 +237,7 @@ async function applyRemoved(paths: string[]): Promise<boolean> {
 async function restructure(app: CanvasApp): Promise<void> {
   scan = await invoke<ScanResult>('repo_index');
   project.refreshGroups(scan.groups);
+  project.changed = scan.changed;
   openLoaded(app, true);
 }
 
@@ -210,6 +251,7 @@ async function restructure(app: CanvasApp): Promise<void> {
  */
 export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
   let busy: Promise<void> = Promise.resolve();
+  project.watching = true;
 
   const unlisten = await listen<ChangeBatch>('sanity://changed', (event) => {
     const batch = event.payload;
@@ -234,18 +276,48 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
         }
 
         if (structural) await restructure(app);
+        // From the scene rather than from a local tally: the scene has every
+        // drawn file's state, and counting only the files this session has
+        // refreshed would report one when five differ.
+        else project.changed = app.changedCount();
+        project.sawChanges(project.changed);
+        uiLog(
+          `batch: ${batch.changed.length} changed, ${batch.removed.length} removed` +
+            `${batch.headMoved ? ', head moved' : ''}` +
+            `${structural ? ' (relayout)' : ' (in place)'} · ${project.changed} files differ`,
+        );
       })
       // A failed batch must not stop the ones after it, and the next save
       // re-reads the file anyway.
-      .catch((e) => console.warn('watch batch failed', e));
+      .catch((e) => uiLog(`batch failed: ${e}`));
   });
 
   return unlisten;
 }
 
+/**
+ * Switch what the change state is measured against, and repaint.
+ *
+ * A baseline change touches every file's state at once, so it goes through the
+ * same cold path a commit does: the highlighting moves, the recency glow does
+ * not, because nothing was written.
+ */
+export async function setBaseline(app: CanvasApp, baseline: 'head' | 'branch'): Promise<void> {
+  const blob = await invoke<ArrayBuffer>('refresh_changes', { baseline });
+  for (const [path, buf] of unpack(blob)) {
+    payloads.set(path, buf);
+    const data = decodeFile(buf);
+    decoded.set(path, data);
+    app.touch(path, data, false);
+  }
+  project.baseline = baseline;
+  project.changed = app.changedCount();
+}
+
 /** Stop watching. */
 export async function stopWatching(): Promise<void> {
   if (!inTauri()) return;
+  project.watching = false;
   try {
     await invoke('stop_watch');
   } catch {

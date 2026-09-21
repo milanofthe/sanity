@@ -18,7 +18,8 @@
         "minWidth": 800,
         "minHeight": 500,
         "titleBarStyle": "Transparent",
-        "theme": "Dark"
+        "theme": "Dark",
+        "label": "main"
       }
     ],
     "security": {

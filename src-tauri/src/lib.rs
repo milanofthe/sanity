@@ -325,6 +325,13 @@ pub fn pack_payloads(payloads: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> 
     Ok(out)
 }
 
+/// Whether the watch diagnostics are on. `SANITY_WATCH_LOG` turns them on,
+/// which is the only way to see the live update loop from a terminal: the
+/// webview console does not reach stdout.
+fn watch_log() -> bool {
+    std::env::var("SANITY_WATCH_LOG").is_ok()
+}
+
 /// Which baseline the frontend asked for. Unknown or absent means HEAD, the
 /// answer to "what am I doing right now", which is what a monitor wants by
 /// default.
@@ -434,6 +441,9 @@ async fn refresh_files(
 
     let out: Vec<(String, Vec<u8>)> =
         fresh.iter().map(|(rel, d)| (rel.clone(), encode(d))).collect();
+    if watch_log() {
+        eprintln!("refresh_files: {} of {} paths re-read", out.len(), paths.len());
+    }
 
     // Keep the held copy in step, so a later full payload request does not
     // hand back what was true before the edit.
@@ -492,6 +502,10 @@ async fn refresh_changes(
         }
     }
 
+    if watch_log() {
+        eprintln!("refresh_changes: {} files changed state", out.len());
+    }
+
     {
         let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
         for (rel, bytes) in &out {
@@ -513,6 +527,9 @@ async fn refresh_changes(
 #[tauri::command]
 async fn repo_index(state: State<'_, AppState>) -> Result<ScanResult, String> {
     let repo = state.repo.lock().map_err(|e| e.to_string())?;
+    if watch_log() {
+        eprintln!("repo_index: {} files (relayout)", repo.files.len());
+    }
     Ok(ScanResult {
         root: repo.root.to_string_lossy().into_owned(),
         files: repo.files.clone(),
@@ -533,10 +550,24 @@ fn start_watch(app: &tauri::AppHandle, root: &Path, filter: Filter) -> Result<wa
     // process per keystroke; it is asked once per batch instead, below.
     let keep = move |rel: &str| filter.keep(Path::new(""), rel);
 
+    // The webview console is not visible from a terminal, so there has to be
+    // some way to see that a batch went out. Off unless asked for: this fires
+    // on every save.
+    let log = watch_log();
+
     watch::start(root.to_path_buf(), keep, move |batch| {
         let batch = settle_batch(&handle, batch);
         if batch.is_empty() {
             return;
+        }
+        if log {
+            eprintln!(
+                "watch: {} changed, {} removed{} {:?}",
+                batch.changed.len(),
+                batch.removed.len(),
+                if batch.head_moved { ", head moved" } else { "" },
+                &batch.changed[..batch.changed.len().min(4)],
+            );
         }
         // An emit failure means the window is gone, which is not something to
         // recover from in a watch callback.
@@ -576,8 +607,23 @@ fn settle_batch(app: &tauri::AppHandle, mut batch: watch::Batch) -> watch::Batch
 /// another being opened.
 #[tauri::command]
 async fn stop_watch(state: State<'_, AppState>) -> Result<(), String> {
+    if watch_log() {
+        eprintln!("stop_watch");
+    }
     *state.watch.0.lock().map_err(|e| e.to_string())? = None;
     Ok(())
+}
+
+/// A line from the webview, on stderr.
+///
+/// The webview console does not reach the terminal, so without this there is
+/// no way to see what the frontend did with an event that the backend can
+/// prove it sent. Only prints with `SANITY_WATCH_LOG` set.
+#[tauri::command]
+fn log_line(message: String) {
+    if watch_log() {
+        eprintln!("ui: {message}");
+    }
 }
 
 /// Forget a file that is gone, so a later full payload request does not hand
@@ -748,7 +794,8 @@ pub fn run() {
             refresh_changes,
             stop_watch,
             drop_files,
-            repo_index
+            repo_index,
+            log_line
         ])
         .run(tauri::generate_context!())
         .expect("error while running sanity");

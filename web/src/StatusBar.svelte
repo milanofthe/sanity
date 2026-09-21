@@ -8,6 +8,21 @@
 	let { stats, error = null }: { stats: CanvasStats | null; error?: string | null } = $props();
 
 	const n = (v: number) => v.toLocaleString('en-US');
+
+	// A change that arrived within this window is still worth pointing at; past
+	// it the panel glow has faded anyway and the count is the whole story.
+	const RECENT_MS = 8000;
+	let now = $state(performance.now());
+	$effect(() => {
+		// One tick a second, only while something is being watched: the "just
+		// now" marker is the only thing here that changes without a frame.
+		if (!project.watching) return;
+		const id = setInterval(() => (now = performance.now()), 1000);
+		return () => clearInterval(id);
+	});
+	let justChanged = $derived(
+		project.lastChangeAt > 0 && now - project.lastChangeAt < RECENT_MS
+	);
 </script>
 
 <footer>
@@ -35,6 +50,21 @@
 			<span class="dot">·</span>
 			{n(stats.visibleFiles)} visible
 		</span>
+		{#if project.watching}
+			<span
+				class="group"
+				title={project.baseline === 'branch'
+					? 'Changes since this branch left main'
+					: 'Uncommitted changes against HEAD'}
+			>
+				<span class="pip" class:hot={justChanged}></span>
+				live
+				<span class="dot">·</span>
+				<span class="dim">{project.baseline}</span>
+				<span class="dot">·</span>
+				<b>{n(project.changed)}</b> changed
+			</span>
+		{/if}
 		<span class="spacer"></span>
 		{#if stats.indexing > 0}
 			<span class="group accent">indexing {Math.round(stats.indexing * 100)}%</span>
@@ -87,6 +117,18 @@
 	}
 	.accent {
 		color: var(--accent);
+	}
+	/* A watching indicator, not a decoration: filled while a change is fresh,
+	   outlined while the watch is simply up. */
+	.pip {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		border: var(--sep-w) solid var(--text-faint);
+	}
+	.pip.hot {
+		background: var(--accent);
+		border-color: var(--accent);
 	}
 	.err {
 		color: var(--error);

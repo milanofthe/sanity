@@ -15,8 +15,8 @@
 		fixtureLoaded, fixtureName, loadFixture, openFixture,
 	} from '$lib/sources/fixture';
 	import {
-		inTauri, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder, startup,
-		stopWatching, watchRepo,
+		inTauri, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder, setBaseline,
+		startup, stopWatching, watchRepo,
 	} from '$lib/sources/tauri';
 	import type { UnlistenFn } from '@tauri-apps/api/event';
 	import { bandsFromQuery, setBands } from '$lib/canvas/lod';
@@ -43,15 +43,29 @@
 	// the view picker: change what is in the list and lay it out again.
 	let modeKey = $derived(project.groups.map((g) => `${g.id}:${g.mode}`).join(','));
 
-	function rebuild() {
+	/**
+	 * Lay the scene out again.
+	 *
+	 * Keeps the camera by default. Fitting belongs to opening a project, not to
+	 * rebuilding a scene: a watcher-driven relayout used to fly the view back
+	 * to the whole project on every save, which made the live updates unusable
+	 * for the thing they are for.
+	 */
+	function rebuild(keepView = true) {
 		if (!app) return;
-		if (fixtureLoaded()) openFixture(app);
-		else if (loadedRoot()) openLoaded(app);
-		else openSynthetic(app);
+		if (fixtureLoaded()) openFixture(app, keepView);
+		else if (loadedRoot()) openLoaded(app, keepView);
+		else openSynthetic(app, false, keepView);
 	}
 
+	// Only when the picker's own key actually changed. The groups array is
+	// rebuilt whenever the watcher adds a file, and reacting to that reference
+	// rather than to its content meant a save cost a second full layout.
+	let lastModeKey = '';
 	$effect(() => {
 		if (!app || !modeKey) return;
+		if (modeKey === lastModeKey) return;
+		lastModeKey = modeKey;
 		rebuild();
 	});
 
@@ -75,7 +89,9 @@
 			await stopWatching();
 
 			await loadRepo(target);
-			rebuild();
+			// A fresh project is fitted; everything after this keeps the view.
+			lastModeKey = project.groups.map((g) => `${g.id}:${g.mode}`).join(',');
+			rebuild(false);
 			app.fit();
 			// Watching is what makes this a monitor rather than a snapshot, so
 			// it starts with the folder. A folder that cannot be watched is
@@ -116,7 +132,7 @@
 			busy = true;
 			loadFixture(fixture)
 				.then(() => {
-					rebuild();
+					rebuild(false);
 					app?.fit();
 				})
 				.catch((e) => (error = e instanceof Error ? e.message : String(e)))
@@ -145,6 +161,9 @@
 	onfit={() => app?.fit()}
 	onopen={() => openFolder()}
 	onreload={(path) => openFolder(path)}
+	onbaseline={(b) => {
+		if (app) setBaseline(app, b).catch((e) => (error = e instanceof Error ? e.message : String(e)));
+	}}
 	{busy}
 />
 <Canvas

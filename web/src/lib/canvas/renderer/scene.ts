@@ -338,6 +338,13 @@ export class Scene {
     return rows <= geom.columns * geom.linesPerColumn && rows <= f.slot.texRows;
   }
 
+  /** Files that differ from the baseline, by their own drawn state. */
+  changedCount(): number {
+    let n = 0;
+    for (const f of this.files.values()) if (f.state !== LineState.Unchanged) n++;
+    return n;
+  }
+
   /** Current heat per file, so a relayout does not throw the recency away. */
   heatMap(): Map<string, number> {
     const out = new Map<string, number>();

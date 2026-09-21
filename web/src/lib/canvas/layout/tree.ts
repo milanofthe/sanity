@@ -342,6 +342,27 @@ const FIT_PASSES = 40;
  * passes, and unlike a safety factor it costs nothing in fill where the first
  * guess was already right.
  */
+/**
+ * Lay out once, then correct.
+ *
+ * Known weakness, measured rather than suspected: the root extent is derived
+ * from the *corrected* total area, so which files happened to need a
+ * correction decides how big the whole canvas is. Adding five lines to one
+ * file can change that, the root moves by about a percent, every integer
+ * split lands differently, and 95 percent of panels change place. It is not
+ * the common case: the median five line edit moves nothing at all, and
+ * scripts/stability-check.mjs reports both numbers.
+ *
+ * Fixing the root on the first pass, from the uncorrected areas, was tried and
+ * does not work. The first estimate is badly wrong for files whose natural
+ * shape cannot match their slot, and the loop has to be able to grow the
+ * canvas to accommodate them: with the root fixed and headroom swept from 1.0
+ * to 1.25, a repository of 200 files of 4000 lines left 95 to 104 panels
+ * unusable and 145 overflowing, and 800 files of twelve lines fell to 81
+ * percent fill. The amplification is in the integer treemap, where a one
+ * percent change to a parent rectangle flips a row boundary, so that is where
+ * a fix has to go. Tracked as issue #8.
+ */
 function fitPasses(root: DirNode, files: FileNode[], aspect: number): number {
   let remaining = 0;
   for (let pass = 0; pass < FIT_PASSES; pass++) {

@@ -107,6 +107,13 @@ export class CanvasApp {
       relayout: () => {
         if (this.lastSource) this.open(this.lastSource);
       },
+      // The layout as a pure function, for measuring it without going through
+      // a scene: scripts/stability-check.mjs asks it the same question twice
+      // with one file changed.
+      computeLayout,
+      // Decoded payloads, which is where the per-line widths live. The layout
+      // needs them and the entries do not carry them.
+      decoded: () => this.decoded,
     };
   }
 
@@ -188,6 +195,11 @@ export class CanvasApp {
   relayout(source?: RepoSource): void {
     const use = source ?? this.lastSource;
     if (use) this.open(use, true);
+  }
+
+  /** Files that differ from the baseline, as the scene has them. */
+  changedCount(): number {
+    return this.scene?.changedCount() ?? 0;
   }
 
   /**

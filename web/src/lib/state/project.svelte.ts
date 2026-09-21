@@ -40,6 +40,19 @@ class ProjectState {
 	/** Recently opened folders, most recent first. */
 	recent = $state<string[]>([]);
 
+	/** True while a file watcher is running on the open folder. Shown in the
+	 *  status bar, because the difference between a live view and a snapshot is
+	 *  not something you can see by looking at the canvas. */
+	watching = $state(false);
+	/** What the change state is measured against: `head` for uncommitted work,
+	 *  `branch` for everything since the merge base. */
+	baseline = $state<'head' | 'branch'>('head');
+	/** Files that differ from the baseline. */
+	changed = $state(0);
+	/** When the last batch of changes arrived, as a performance timestamp, or
+	 *  0 if none has. */
+	lastChangeAt = $state(0);
+
 	totalLines = $derived(this.groups.reduce((s, g) => s + g.lines, 0));
 	shownLines = $derived(
 		this.groups.filter((g) => g.mode === 'full').reduce((s, g) => s + g.lines, 0)
@@ -92,6 +105,12 @@ class ProjectState {
 	 * every mode to its default, which is right for opening a project and
 	 * wrong for a file being saved.
 	 */
+	/** Record that a batch of changes arrived, for the status bar. */
+	sawChanges(changed: number) {
+		this.changed = changed;
+		this.lastChangeAt = performance.now();
+	}
+
 	refreshGroups(rows: Omit<FileGroup, 'mode'>[]) {
 		const chosen = new Map(this.groups.map((g) => [g.id, g.mode]));
 		this.load(this.root, rows, this.synthetic);
