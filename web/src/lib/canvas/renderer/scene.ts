@@ -14,7 +14,7 @@ import {
   applyTo, finished, IDENTITY, same, settleIn, slideFrom, transformFor,
   type PanelAnim, type Rect as PanelRect, type Transform,
 } from '$lib/canvas/anim';
-import { diffLines, seams, signatures, type Signature } from '$lib/canvas/linediff';
+import { diffLines, seams, signatures, type Seam, type Signature } from '$lib/canvas/linediff';
 import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
 import { bandColour, mixToward } from '$lib/canvas/colour';
 import { rgb, UiInk, type Palette } from '$lib/theme';
@@ -90,9 +90,9 @@ interface LineChangeAnim {
   removedRows: number[];
   /** Line indices in the version replacing it. */
   addedRows: number[];
-  /** Line indices in the new version where a removal left a gap, so a
-   *  deletion leaves a trace instead of simply vanishing. */
-  seamRows: number[];
+  /** Where a removal left a gap in the new version, with the edge of the line
+   *  it sits at, so a deletion leaves a trace instead of simply vanishing. */
+  gaps: Seam[];
   /** The new payload, held until the removal has played. */
   pending: FileData | null;
   /** Set when the next version should also warm the panel: a write, not a
@@ -146,6 +146,18 @@ const HAIRLINE_PX = 1;
  */
 const BAND_MIX = 0.12;
 const CHANGE_MIX = 0.4;
+
+/**
+ * How thick the crack marking a removal is: at least this many CSS pixels,
+ * and at most this fraction of a line.
+ *
+ * Both ends matter. It has to hold together at the zoom where the gutter marks
+ * first come up, which is two or three pixels a line, and it must not grow
+ * into something that reads as a line of its own when the text is large, since
+ * what it stands for is precisely the absence of lines.
+ */
+const GAP_PX = 2;
+const GAP_OF_LINE = 0.16;
 
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
@@ -616,7 +628,7 @@ export class Scene {
       t: 0,
       removedRows: diff.removed,
       addedRows: diff.added,
-      seamRows: seams(diff, f.data.lineCount, data.lineCount),
+      gaps: seams(diff, f.data.lineCount, data.lineCount),
       pending: data,
       warm,
     };
@@ -664,9 +676,9 @@ export class Scene {
       for (const line of ch.addedRows) {
         if (line < state.length) state[line] = LineState.Added;
       }
-      for (const line of ch.seamRows) {
+      for (const { line, side } of ch.gaps) {
         if (line < state.length && state[line] === LineState.Unchanged) {
-          state[line] = LineState.DeletedBelow;
+          state[line] = side === 'above' ? LineState.GapAbove : LineState.GapBelow;
         }
       }
       f.state = aggregateState(f.data);
@@ -879,7 +891,7 @@ export class Scene {
         this.pushLineNumbers(f, glyphFade, vx0, vy0, vx1, vy1);
       }
       if (spanFade > 0.004 || glyphFade > 0.004) {
-        this.pushGutter(f, vy0, vy1);
+        this.pushGutter(f, cam.zoom, vy0, vy1);
         this.pushChangeBands(f, vy0, vy1);
       }
     }
@@ -1528,17 +1540,24 @@ export class Scene {
   }
 
   /**
-   * Changed lines, as a band across the line plus a marker in the margin.
+   * Changed lines, as a band across the line plus a marker in the margin, and
+   * removals as a crack between two lines.
    *
    * The band is what says *which* lines: a marker in the margin tells you a
    * line changed and a band tells you which of the lines in front of you it
    * was, without having to look away from the code to the edge of the panel.
    * It sits behind the text at low alpha so the code stays the readable thing.
    *
-   * During a change the alpha is driven by the animation instead, and the
-   * rows come from the diff rather than from git: see `pushChangeBands`.
+   * A removal is the one case a band gets wrong. There is no line left to
+   * mark, so the mark goes on the line next to the gap, and banding that line
+   * says it changed when it did not: it is the same line it always was, it
+   * only moved. So a gap is drawn as a crack across the boundary the removed
+   * lines used to occupy, which is where they were and is not a line.
+   *
+   * During a change the alpha is driven by the animation instead, and the rows
+   * come from the diff rather than from git: see `pushChangeBands`.
    */
-  private pushGutter(f: SceneFile, vy0: number, vy1: number): void {
+  private pushGutter(f: SceneFile, zoom: number, vy0: number, vy1: number): void {
     if (f.state === LineState.Unchanged) return;
     const w = Math.max(2, metrics.charWidth * 0.4);
     const [vx0, vx1] = [-Infinity, Infinity];
@@ -1547,6 +1566,13 @@ export class Scene {
     // a change is worth seeing for a while after the save and not beyond it.
     const fade = Math.min(1, f.heat * 1.5);
     if (fade <= 0.02) return;
+
+    // A crack sits between two lines, so unlike a band it has no height of its
+    // own to take from the layout. A fraction of the line height keeps it in
+    // proportion when the text is large, and the floor in screen pixels keeps
+    // it visible when the text is small, which is where the gutter marks come
+    // up at all.
+    const thick = Math.max(GAP_PX / zoom, metrics.lineHeight * GAP_OF_LINE);
 
     for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
       for (let row = firstRow; row <= lastRow; row++) {
@@ -1557,6 +1583,23 @@ export class Scene {
         const st = f.data.lineState[line];
         if (st === LineState.Unchanged) continue;
         const color = this.changeColour(st);
+
+        if (st === LineState.GapAbove || st === LineState.GapBelow) {
+          // On the row that carries the edge in question: the first row of the
+          // line for a gap above it, the last for a gap below it. A wrapped
+          // line has several rows and the gap is at one boundary, not at each.
+          const below = st === LineState.GapBelow;
+          const rows = f.rows[line + 1] - f.rows[line];
+          if (below ? wrap !== rows - 1 : wrap !== 0) continue;
+          const edge = below ? y + metrics.lineHeight : y;
+          // Through the margin as well, so it reads as a cut across the column
+          // rather than as an underline belonging to the code.
+          this.pushRect(
+            this.fgRects, colX - w - 1, edge - thick / 2, colW + w + 1, thick,
+            color, 0.9 * fade, 0, 0,
+          );
+          continue;
+        }
 
         // The band covers every row a wrapped line occupies: the change is the
         // whole line, however many rows it takes to show it.

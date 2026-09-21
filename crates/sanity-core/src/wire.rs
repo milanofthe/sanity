@@ -43,15 +43,24 @@ pub enum Kind {
 
 pub const KIND_COUNT: usize = 12;
 
-/// Change state of a line, from git plus the live watcher.
+/// Change state of a line, written by the frontend from a diff of the version
+/// on screen against the version that just arrived.
+///
+/// A deletion has no line of its own to mark, so it is marked on the line next
+/// to the gap it left, and which side that gap is on has to be part of the
+/// state: the renderer draws it as a crack at that edge of the line, and a
+/// crack on the wrong edge points at the wrong place in the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum LineState {
     Unchanged = 0,
     Added = 1,
     Modified = 2,
-    /// The line sits directly below a deletion.
-    DeletedBelow = 3,
+    /// Lines were removed directly above this one.
+    GapAbove = 3,
+    /// Lines were removed directly below this one, which only happens at the
+    /// end of a file, where a removal has nothing under it.
+    GapBelow = 4,
 }
 
 /// A line may be this many columns wide before it is clipped. Long lines are

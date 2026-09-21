@@ -182,20 +182,35 @@ function walkBack(
   return { removed, added, wholesale: false };
 }
 
+/** A gap left by a removal: the line it is marked on, and which edge of that
+ *  line it sits at. */
+export interface Seam {
+  line: number;
+  /** `above` means the lines were removed above `line`, which is the usual
+   *  case. `below` happens only at the end of a file, where a removal has no
+   *  line under it and the last line has to carry it. */
+  side: 'above' | 'below';
+}
+
 /**
  * Where each removal leaves a seam in the new version.
  *
  * A removed line is not in the file any more, so after the change there is
- * nothing of it left to mark. What can be marked is the line that now sits
- * where it was, which is what makes a deletion leave a trace instead of simply
+ * nothing of it left to mark. What can be marked is the boundary it left
+ * behind, which is what makes a deletion leave a trace instead of simply
  * vanishing. Lines that are themselves additions are left out: a replacement
  * is already marked as an arrival and saying both would say less.
+ *
+ * The side is part of the answer and not a detail. The renderer draws a gap as
+ * a crack at one edge of a line, so `above` and `below` are two different
+ * pictures, and at the end of a file the only line available to carry the mark
+ * is the one before the gap rather than the one after it.
  */
-export function seams(diff: LineDiff, oldLen: number, newLen: number): number[] {
+export function seams(diff: LineDiff, oldLen: number, newLen: number): Seam[] {
   if (diff.removed.length === 0) return [];
   const removed = new Set(diff.removed);
   const added = new Set(diff.added);
-  const out: number[] = [];
+  const out: Seam[] = [];
 
   let oi = 0;
   let ni = 0;
@@ -204,10 +219,13 @@ export function seams(diff: LineDiff, oldLen: number, newLen: number): number[] 
     // both happen. The other order walks past the arrival first and then
     // blames the line after it, which reported a seam for every replaced line.
     if (oi < oldLen && removed.has(oi)) {
-      // The line now standing at this point, clamped for a removal at the end
-      // of the file, which has nothing below it.
-      const at = Math.min(ni, newLen - 1);
-      if (at >= 0 && !added.has(at) && out[out.length - 1] !== at) out.push(at);
+      // The line now standing at this point. Past the end of the new file
+      // there is none, so the gap goes under the last line instead.
+      const past = ni >= newLen;
+      const at = past ? newLen - 1 : ni;
+      if (at >= 0 && !added.has(at) && out[out.length - 1]?.line !== at) {
+        out.push({ line: at, side: past ? 'below' : 'above' });
+      }
       oi++;
       continue;
     }

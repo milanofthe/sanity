@@ -117,7 +117,7 @@ test('a removal leaves a seam at the line that took its place', () => {
   const d = diffLines(before, after);
   assert.deepEqual(d.removed, [2, 3]);
   // Old lines 3 and 4 are gone; new line 2, the old line 5, now sits there.
-  assert.deepEqual(seams(d, before.length, after.length), [2]);
+  assert.deepEqual(seams(d, before.length, after.length), [{ line: 2, side: 'above' }]);
 });
 
 test('a replacement has no seam of its own', () => {
@@ -133,7 +133,9 @@ test('a removal at the end of the file marks the last line', () => {
   const after = sig(1, 2);
   const d = diffLines(before, after);
   const s = seams(d, before.length, after.length);
-  assert.deepEqual(s, [1], 'nothing sits below it, so the line above carries it');
+  // Nothing sits below it, so the line above carries it, and the gap is drawn
+  // under that line rather than over it.
+  assert.deepEqual(s, [{ line: 1, side: 'below' }]);
 });
 
 test('a pure addition has no seams', () => {
@@ -151,8 +153,11 @@ test('seams are inside the new file', () => {
   ];
   for (const [a, b] of cases) {
     const d = diffLines(sig(...a), sig(...b));
-    for (const i of seams(d, a.length, b.length)) {
-      assert.ok(i >= 0 && i < Math.max(1, b.length), `seam ${i} of ${b.length}`);
+    for (const { line, side } of seams(d, a.length, b.length)) {
+      assert.ok(line >= 0 && line < Math.max(1, b.length), `seam ${line} of ${b.length}`);
+      // A gap below is only ever the last line: anywhere else there is a line
+      // under the removal to carry it.
+      if (side === 'below') assert.equal(line, b.length - 1, 'a gap below is not at the end');
     }
   }
 });

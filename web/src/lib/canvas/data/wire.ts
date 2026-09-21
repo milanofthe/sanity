@@ -47,8 +47,11 @@ export const LineState = {
   Unchanged: 0,
   Added: 1,
   Modified: 2,
-  /** Line sits directly below a deletion. */
-  DeletedBelow: 3,
+  /** Lines were removed directly above this one. */
+  GapAbove: 3,
+  /** Lines were removed directly below this one, which only happens at the end
+   *  of a file, where a removal has nothing under it. */
+  GapBelow: 4,
 } as const;
 export type LineState = (typeof LineState)[keyof typeof LineState];
 
