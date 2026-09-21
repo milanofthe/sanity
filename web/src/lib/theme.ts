@@ -31,6 +31,29 @@ const TOKEN_VARS = [
   '--tok-variable', '--tok-punctuation', '--tok-constant', '--tok-attribute',
 ] as const;
 
+/**
+ * Colour slots past the twelve token kinds, for text the renderer draws that
+ * is not code: panel headers, directory labels, type badges.
+ *
+ * `Kind` is four bits, so there are sixteen slots and the wire format only
+ * ever uses twelve. Reusing the spare four means header text goes through the
+ * same glyph pass as code, with one palette uniform, instead of needing a
+ * second shader.
+ */
+export const UiInk = {
+  Name: 12,
+  Path: 13,
+  Badge: 14,
+  DirLabel: 15,
+} as const;
+
+const UI_VARS: Record<number, string> = {
+  [UiInk.Name]: '--text',
+  [UiInk.Path]: '--text-faint',
+  [UiInk.Badge]: '--text-dim',
+  [UiInk.DirLabel]: '--dir-label',
+};
+
 /** Overview overrides, applied on top of the token colours. */
 const OVERVIEW_OVERRIDES: Partial<Record<number, string>> = {
   0: '--ov-plain',
@@ -63,7 +86,8 @@ const SURFACE_VARS = {
 export type SurfaceKey = keyof typeof SURFACE_VARS;
 
 export interface Palette {
-  /** 0xRRGGBB per token kind, for readable text. */
+  /** 0xRRGGBB per token kind, for readable text. Sixteen entries: the twelve
+   *  wire-format kinds followed by the UI slots in `UiInk`. */
   token: number[];
   /** Same, damped, for the overview textures. */
   overview: number[];
@@ -109,6 +133,7 @@ function makeResolver(): (cssVar: string) => number {
 export function readPalette(): Palette {
   const resolve = makeResolver();
   const token = TOKEN_VARS.map(resolve);
+  for (const [slot, v] of Object.entries(UI_VARS)) token[Number(slot)] = resolve(v);
   const overview = token.slice();
   for (const [i, v] of Object.entries(OVERVIEW_OVERRIDES)) {
     overview[Number(i)] = resolve(v!);

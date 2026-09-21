@@ -14,7 +14,8 @@ body {
 	overflow: hidden;
 	background: var(--bg);
 	color: var(--text);
-	font: var(--fs-s) var(--font-ui);
+	font-family: var(--font-ui);
+	font-size: var(--fs-s);
 	-webkit-font-smoothing: antialiased;
 }
 
@@ -24,28 +25,13 @@ body {
 	height: 100%;
 }
 
-/* --- canvas labels: pooled DOM over the WebGL surface -------------------- */
-
-.label {
-	position: absolute;
-	top: 0;
-	left: 0;
-	white-space: nowrap;
-	transform-origin: 0 0;
-	will-change: transform;
-	letter-spacing: 0.02em;
-	pointer-events: none;
-	font-family: var(--font-ui);
-	text-shadow: 0 1px 2px var(--bg);
-}
-.label-dir {
-	color: var(--dir-label);
-	font-weight: 600;
-}
-.label-file {
-	color: var(--panel-label);
-	font-weight: 500;
-}
+/* Panel and directory labels are drawn by the renderer in world space, so
+   they scale with what they label. There are deliberately no styles for them
+   here: the global `.label` rules that used to position the DOM overlay
+   survived the switch and, being unscoped, applied to every element in the app
+   with that class name. They pulled each menu item's label out of its own row
+   and stacked all of them at the top of the dropdown. Global class names for
+   app-specific elements are the hazard; components own their own. */
 
 /* --- scrollbars: square, in border colour, matching the rest of the UI --- */
 

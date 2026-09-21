@@ -80,7 +80,7 @@ in vec2 aCorner;
 in vec4 aRect;
 in vec2 aKindFade; // token kind index, alpha
 uniform mat3 uView;
-uniform vec3 uKind[12];
+uniform vec3 uKind[16];
 out vec4 vColor;
 void main() {
   vec2 world = aRect.xy + aCorner * aRect.zw;
@@ -99,7 +99,7 @@ in vec2 aCorner;
 in vec4 aPosGlyph;  // world x, y, glyph index, token kind
 in vec2 aSizeFade;  // em size in world units, alpha
 uniform mat3 uView;
-uniform vec3 uKind[12];
+uniform vec3 uKind[16];
 uniform vec2 uCell;      // cell size in atlas uv
 uniform vec2 uGlyphScale; // glyph box size relative to em (w, h)
 uniform float uGridCols;

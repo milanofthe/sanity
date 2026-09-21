@@ -53,7 +53,9 @@
 		position: relative;
 	}
 	.trigger {
-		font: 500 var(--fs-s) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-s);
+		font-weight: 500;
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;

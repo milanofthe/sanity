@@ -37,8 +37,9 @@ export const HARD_MIN_COLS = 12;
 export const MIN_PANEL_COLS = PREFERRED_MIN_COLS;
 /** Nor wider, so one runaway line does not blow up the panel. */
 export const MAX_PANEL_COLS = 120;
-/** Gutter between two text columns, in world units. */
-export const COLUMN_GUTTER = 12;
+/** Gutter between two text columns. Lives in metrics.ts so it stays on the
+ *  character lattice with everything else. */
+export const COLUMN_GUTTER = metrics.columnGutter;
 
 /**
  * Round up to a stable step of roughly 12 percent of the magnitude. Panel
@@ -79,7 +80,7 @@ export function stubGeometry(): PanelGeometry {
     columns: 1,
     linesPerColumn: 0,
     w: MIN_PANEL_COLS * metrics.charWidth + 2 * metrics.panelPadX,
-    h: metrics.titleHeight + 2 * metrics.panelPadY,
+    h: metrics.titleHeight,
   };
 }
 
@@ -152,6 +153,8 @@ export function fillSlot(lineCount: number, slotW: number, slotH: number): SlotF
     };
   }
 
+  // Exact, not rounded: the slot is a whole number of cells and a cell is one
+  // line tall, so the division comes out even.
   const linesPerColumn = Math.max(1, Math.floor(innerH / metrics.lineHeight));
   const columns = Math.max(1, Math.ceil(lines / linesPerColumn));
   if (columns > MAX_COLUMNS) {
@@ -166,8 +169,12 @@ export function fillSlot(lineCount: number, slotW: number, slotH: number): SlotF
     };
   }
 
-  const columnWidth = (innerW - (columns - 1) * COLUMN_GUTTER) / columns;
-  const cols = Math.floor(columnWidth / metrics.charWidth);
+  // Snap the column pitch to whole characters, so every code column of every
+  // panel starts on the same lattice. Whatever does not divide evenly is left
+  // at the right edge rather than spread into fractional offsets.
+  const pitch = Math.floor((innerW + COLUMN_GUTTER) / columns / metrics.charWidth)
+    * metrics.charWidth;
+  const cols = Math.floor((pitch - COLUMN_GUTTER) / metrics.charWidth);
 
   return {
     cols: Math.min(MAX_PANEL_COLS, cols),
@@ -215,18 +222,18 @@ export const textOriginY = metrics.titleHeight + metrics.panelPadY;
 /**
  * Advance from one code column to the next, in world units.
  *
- * Derived from the panel's own width rather than from `cols * charWidth`: the
- * panel fills its slot, so the columns have to be spread across the real width
- * or the last one would not end at the right edge.
+ * A whole number of characters, matching what `fillSlot` computed: the columns
+ * have to land on the character lattice, so any width that does not divide
+ * evenly is left over at the right edge instead of being spread across the
+ * columns as a fractional offset.
  */
 export function columnPitch(g: PanelGeometry): number {
-  const innerW = g.w - 2 * metrics.panelPadX;
-  return (innerW + COLUMN_GUTTER) / g.columns;
+  return g.cols * metrics.charWidth + COLUMN_GUTTER;
 }
 
 /** Usable text width of one code column, in world units. */
 export function columnWidth(g: PanelGeometry): number {
-  return columnPitch(g) - COLUMN_GUTTER;
+  return g.cols * metrics.charWidth;
 }
 
 /** Where line `i` sits inside the panel's text area, in world units. */

@@ -5,12 +5,15 @@
 	import type { CanvasStats } from '$lib/canvas/app';
 	import { project } from '$lib/state/project.svelte';
 
-	let { stats }: { stats: CanvasStats | null } = $props();
+	let { stats, error = null }: { stats: CanvasStats | null; error?: string | null } = $props();
 
 	const n = (v: number) => v.toLocaleString('en-US');
 </script>
 
 <footer>
+	{#if error}
+		<span class="group err" title={error}>{error}</span>
+	{/if}
 	{#if stats}
 		<span class="group">
 			<b>{n(stats.files)}</b> files
@@ -54,7 +57,9 @@
 		padding: 0 var(--sp-3);
 		background: var(--bg-panel);
 		border-top: var(--sep-w) solid var(--border);
-		font: 500 var(--fs-xs) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-xs);
+		font-weight: 500;
 		color: var(--text-dim);
 		font-variant-numeric: tabular-nums;
 		z-index: var(--z-chrome);
@@ -78,6 +83,12 @@
 	}
 	.accent {
 		color: var(--accent);
+	}
+	.err {
+		color: var(--error);
+		max-width: 50ch;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.spacer {
 		flex: 1;

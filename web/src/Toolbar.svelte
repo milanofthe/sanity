@@ -8,6 +8,7 @@
 	import MenuItem from '$lib/ui/MenuItem.svelte';
 	import MenuSection from '$lib/ui/MenuSection.svelte';
 	import SanityMark from '$lib/ui/SanityMark.svelte';
+	import Swatches from '$lib/ui/Swatches.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import FileTypePicker from './FileTypePicker.svelte';
 	import { ui } from '$lib/state/ui.svelte';
@@ -17,11 +18,13 @@
 	let {
 		onopen,
 		onfit,
-		onreload
+		onreload,
+		busy = false
 	}: {
 		onopen?: () => void;
 		onfit?: () => void;
 		onreload?: (path: string) => void;
+		busy?: boolean;
 	} = $props();
 
 	const short = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
@@ -41,7 +44,14 @@
 		ontoggle={toggle('project')}
 		onclose={close}
 	>
-		<MenuItem label="Open folder…" onclick={() => { ui.openMenu = null; onopen?.(); }} />
+		<MenuItem
+			label="Open folder…"
+			disabled={busy}
+			onclick={() => {
+				ui.openMenu = null;
+				onopen?.();
+			}}
+		/>
 		{#if project.recent.length > 0}
 			<MenuSection title="Recent">
 				{#each project.recent as path (path)}
@@ -80,11 +90,7 @@
 	>
 		{#each THEMES as t (t.id)}
 			<MenuItem checked={ui.theme === t.id} onclick={() => ui.setTheme(t.id)}>
-				<span class="swatches" aria-hidden="true">
-					<i style:background={t.bg}></i>
-					<i style:background={t.panel}></i>
-					<i style:background={t.accent}></i>
-				</span>
+				<Swatches colors={[t.bg, t.panel, t.accent]} />
 				{t.label}
 			</MenuItem>
 		{/each}
@@ -92,7 +98,9 @@
 
 	<span class="spacer"></span>
 
-	{#if project.synthetic}
+	{#if busy}
+		<span class="badge busy" title="Scanning">scanning</span>
+	{:else if project.synthetic}
 		<span class="badge" title="Showing generated data, not a real repository">synthetic</span>
 	{/if}
 	<Button title="Fit the whole project in view (f)" onclick={() => onfit?.()}>Fit</Button>
@@ -119,26 +127,21 @@
 		flex: 1;
 	}
 	.path {
-		font: 400 var(--fs-xs) var(--font-mono);
+		font-family: var(--font-mono);
+		font-size: var(--fs-xs);
 		color: var(--text-faint);
 		padding: 2px var(--sp-3) var(--sp-1);
 		overflow-wrap: anywhere;
 	}
-	.swatches {
-		display: inline-flex;
-		gap: 2px;
-		margin-right: 7px;
-		vertical-align: -1px;
-	}
-	.swatches i {
-		width: 8px;
-		height: 8px;
-		display: inline-block;
-		border: var(--sep-w) solid var(--border);
+	.badge.busy {
+		color: var(--warn);
+		border-color: var(--warn);
 	}
 	.badge {
 		align-self: center;
-		font: 600 var(--fs-xxs) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-xxs);
+		font-weight: 600;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 		color: var(--accent);

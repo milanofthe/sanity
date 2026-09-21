@@ -1,5 +1,10 @@
 <script lang="ts">
-	// One row in a Menu: a label, an optional trailing hint, an optional check.
+	// One row in a Menu: an optional check mark, a label, an optional hint.
+	//
+	// The row height is fixed. Letting each row size itself to its content had
+	// rows of 10 and 24 pixels in the same menu, with the taller labels
+	// overlapping their neighbours, because whether a row contained a check
+	// mark changed its intrinsic height.
 	import type { Snippet } from 'svelte';
 
 	let {
@@ -20,8 +25,10 @@
 </script>
 
 <button class="item" class:checked {disabled} {onclick}>
-	<span class="mark" aria-hidden="true">{checked ? '·' : ''}</span>
-	<span class="label">{children ? '' : label}{#if children}{@render children()}{/if}</span>
+	<span class="mark" aria-hidden="true">{checked ? '\u00b7' : ''}</span>
+	<span class="label">
+		{#if children}{@render children()}{:else}{label}{/if}
+	</span>
 	{#if hint}<span class="hint">{hint}</span>{/if}
 </button>
 
@@ -31,11 +38,15 @@
 		align-items: center;
 		gap: var(--sp-2);
 		width: 100%;
-		padding: 5px var(--sp-3);
+		min-height: var(--row-h);
+		padding: 0 var(--sp-3);
 		background: none;
 		border: none;
 		color: var(--text-dim);
-		font: 500 var(--fs-s) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-s);
+		font-weight: 500;
+		line-height: 1;
 		text-align: left;
 		cursor: pointer;
 	}
@@ -51,11 +62,15 @@
 		width: 6px;
 		flex: none;
 		color: var(--accent);
-		font-size: 14px;
+		font-size: var(--fs-l);
 		line-height: 1;
 	}
 	.label {
+		display: flex;
+		align-items: center;
+		gap: 7px;
 		flex: 1;
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -64,7 +79,8 @@
 		color: var(--text);
 	}
 	.hint {
-		font: 400 var(--fs-xs) var(--font-mono);
+		font-family: var(--font-mono);
+		font-size: var(--fs-xs);
 		color: var(--text-faint);
 		font-variant-numeric: tabular-nums;
 		flex: none;

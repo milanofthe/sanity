@@ -10,7 +10,7 @@
 
 import { Camera } from '$lib/canvas/camera';
 import { lodThresholds, metrics, timing } from '$lib/metrics';
-import { rgb, type Palette } from '$lib/theme';
+import { rgb, UiInk, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
 import { columnPitch, columnWidth, textOriginX, textOriginY } from '$lib/canvas/layout/panel';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
@@ -59,6 +59,49 @@ const GLYPH_STRIDE = 6;
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
 
+/**
+ * A stable hue per directory path, in turns.
+ *
+ * Hashed rather than assigned in tree order so that a directory keeps its
+ * colour when siblings are added or removed. The golden-ratio step spreads
+ * adjacent hash values far apart, which matters because sibling directories
+ * often share a prefix.
+ */
+function dirHue(path: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < path.length; i++) {
+    h ^= path.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (((h >>> 0) / 4294967296) * 0.6180339887) % 1;
+}
+
+/**
+ * Rotate a colour towards a hue, keeping its luminance.
+ *
+ * The base colour comes from the theme, so a tint stays inside the theme's
+ * range instead of introducing saturation the palette never asked for: at
+ * `amount` 0 it is the theme colour exactly.
+ */
+function tintFor(base: number, hue: number, amount: number): number {
+  const [br, bg, bb] = rgb(base);
+  const lum = 0.2126 * br + 0.7152 * bg + 0.0722 * bb;
+  // Hue to RGB at full saturation, then pulled to the base's luminance.
+  const k = (n: number) => (n + hue * 6) % 6;
+  const f = (n: number) => {
+    const t = k(n);
+    return Math.max(0, Math.min(1, Math.min(t, 4 - t, 1)));
+  };
+  const hr = f(5);
+  const hg = f(3);
+  const hb = f(1);
+  const hlum = 0.2126 * hr + 0.7152 * hg + 0.0722 * hb || 1;
+  const scale = lum / hlum;
+  const mix = (b: number, h: number) =>
+    Math.max(0, Math.min(255, Math.round(255 * (b * (1 - amount) + h * scale * amount))));
+  return (mix(br, hr) << 16) | (mix(bg, hg) << 8) | mix(bb, hb);
+}
+
 const smoothstep = (a: number, b: number, x: number): number => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -90,6 +133,8 @@ export class Scene {
   private kindFlat: Float32Array;
 
   files = new Map<string, SceneFile>();
+  /** Path whose header the pointer is over, for the hover highlight. */
+  hoveredPath: string | null = null;
   stats: FrameStats = {
     visibleFiles: 0, overviewQuads: 0, spanQuads: 0, glyphQuads: 0,
     rectQuads: 0, pxPerLine: 0, cpuMs: 0,
@@ -245,7 +290,7 @@ export class Scene {
     const dirs = [...this.layout.dirs].sort((a, b) => a.depth - b.depth);
     for (const d of dirs) {
       if (d.x > vx1 || d.y > vy1 || d.x + d.w < vx0 || d.y + d.h < vy0) continue;
-      this.pushDir(d);
+      this.pushDir(d, cam.zoom);
     }
 
     let visibleFiles = 0;
@@ -264,7 +309,8 @@ export class Scene {
         continue;
       }
 
-      this.pushPanel(f, pxPerLine);
+      this.pushPanel(f);
+      this.pushHeader(f, cam.zoom, f.node.path === this.hoveredPath);
       if (overviewFade > 0.004) this.pushOverview(f, overviewFade);
       if (spanFade > 0.004) this.pushSpans(f, spanFade, vx0, vy0, vx1, vy1);
       if (glyphFade > 0.004) this.pushGlyphs(f, glyphFade, vx0, vy0, vx1, vy1);
@@ -297,9 +343,122 @@ export class Scene {
     };
   }
 
-  private pushDir(d: DirNode): void {
-    const shade = d.depth % 2 === 0 ? this.pal.surface.dirBg : this.pal.surface.panelBgAlt;
-    this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, shade, 1, this.pal.surface.border, 1);
+  /**
+   * A directory box: a tinted frame and a label, both in world space.
+   *
+   * Alternating two shades by depth, which is what this did first, says
+   * nothing about which directory you are looking at, and at four levels deep
+   * the boxes were indistinguishable. A hue derived from the path gives each
+   * directory a stable identity you can navigate by, and keeping it to the
+   * frame and a wash rather than a fill leaves the code itself as the only
+   * saturated thing on screen.
+   */
+  private pushDir(d: DirNode, zoom: number): void {
+    const hue = dirHue(d.path);
+    const tint = tintFor(this.pal.surface.dirBg, hue, 0.1 + 0.04 * (d.depth % 3));
+    const edge = tintFor(this.pal.surface.borderStrong, hue, 0.55);
+
+    this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, tint, 1, edge, 1);
+
+    // The label sits in the frame's own strip, so it never overlaps a panel.
+    const px = metrics.dirLabelHeight * zoom;
+    const fade = Math.min(1, Math.max(0, (px - 6) / 5));
+    if (fade <= 0.004 || !d.name) return;
+    const room = Math.floor((d.w - 2 * metrics.dirPad) / metrics.charWidth);
+    if (room < 3) return;
+    const shown = d.name.length <= room ? d.name : `${d.name.slice(0, Math.max(1, room - 2))}..`;
+    this.pushText(
+      shown, d.x + metrics.dirPad, d.y + metrics.dirPad - metrics.dirLabelHeight + 1,
+      UiInk.DirLabel, fade, room,
+    );
+  }
+
+  /**
+   * Draw a string at a world position, one glyph per instance.
+   *
+   * Goes through the same pass as code, which is the point: header text lives
+   * in world space and scales with its panel, instead of being a DOM label
+   * blended over the canvas at its own independent size. The overlay it
+   * replaces looked pasted on precisely because it did not share the panel's
+   * transform.
+   *
+   * Returns the width drawn, so runs can be laid out one after another.
+   */
+  private pushText(
+    str: string, x: number, y: number, ink: number, fade: number, maxChars: number,
+  ): number {
+    if (fade <= 0.004 || maxChars <= 0) return 0;
+    const b = this.glyphs;
+    const em = metrics.charWidth / this.atlas.advanceRatio;
+    const n = Math.min(str.length, maxChars);
+    for (let i = 0; i < n; i++) {
+      const idx = GlyphAtlas.index(str.charCodeAt(i));
+      if (idx < 0) continue;
+      const o = b.alloc();
+      const d = b.data;
+      d[o] = x + i * metrics.charWidth;
+      d[o + 1] = y;
+      d[o + 2] = idx;
+      d[o + 3] = ink;
+      d[o + 4] = em;
+      d[o + 5] = fade;
+    }
+    return n * metrics.charWidth;
+  }
+
+  /**
+   * The panel header: name, the directory it sits in, and its type.
+   *
+   * One line tall, laid out by what fits. The name always wins; the type badge
+   * and then the path appear as the panel gets wider. Truncation is two dots
+   * rather than an ellipsis because the glyph atlas is ASCII.
+   */
+  private pushHeader(f: SceneFile, zoom: number, hovered: boolean): void {
+    const n = f.node;
+    const px = metrics.titleHeight * zoom;
+    // Below this the glyphs are noise and the bar alone reads as a header.
+    const fade = Math.min(1, Math.max(0, (px - 5) / 4));
+
+    this.pushRect(
+      this.bgRects, n.x, n.y, n.w, metrics.titleHeight,
+      hovered ? this.pal.surface.accent : this.pal.surface.panelBgAlt,
+      hovered ? 0.3 : 1, 0, 0,
+    );
+    if (fade <= 0.004) return;
+
+    const room = Math.floor((n.w - 2 * metrics.panelPadX) / metrics.charWidth);
+    if (room <= 0) return;
+
+    const x = n.x + metrics.panelPadX;
+    const y = n.y;
+    const dot = n.name.lastIndexOf('.');
+    const ext = dot > 0 ? n.name.slice(dot + 1) : '';
+    const dir = n.path.slice(0, Math.max(0, n.path.length - n.name.length - 1));
+
+    // The badge is right-aligned and is the first thing dropped when space
+    // runs short, since the extension is also visible in the name.
+    const badge = ext && room > n.name.length + ext.length + 3 ? ext : '';
+    if (badge) {
+      this.pushText(
+        badge, x + (room - badge.length) * metrics.charWidth, y,
+        UiInk.Badge, fade, badge.length,
+      );
+    }
+
+    const budget = room - (badge ? badge.length + 2 : 0);
+    const shown =
+      n.name.length <= budget ? n.name : `${n.name.slice(0, Math.max(1, budget - 2))}..`;
+    const used = this.pushText(shown, x, y, UiInk.Name, fade, budget);
+
+    // The path takes what is left, truncated from the front so the part
+    // nearest the file stays readable.
+    const pathBudget = budget - shown.length - 2;
+    if (dir && pathBudget > 4) {
+      const tail = dir.length <= pathBudget ? dir : `..${dir.slice(dir.length - pathBudget + 2)}`;
+      this.pushText(
+        tail, x + used + 2 * metrics.charWidth, y, UiInk.Path, fade * 0.8, pathBudget,
+      );
+    }
   }
 
   /**
@@ -332,7 +491,7 @@ export class Scene {
     );
   }
 
-  private pushPanel(f: SceneFile, pxPerLine: number): void {
+  private pushPanel(f: SceneFile): void {
     const n = f.node;
     // Recency, not aggregate git state: at any realistic change rate nearly
     // every file has one changed line somewhere, so colouring borders by state
@@ -343,13 +502,6 @@ export class Scene {
     const borderPx = hot ? 1 + 2 * f.heat : 1;
     this.pushRect(this.bgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 1, border, borderPx);
 
-    // Title bar, only once it is tall enough to mean anything.
-    if (pxPerLine >= lodThresholds.texture) {
-      this.pushRect(
-        this.bgRects, n.x, n.y, n.w, metrics.titleHeight,
-        this.pal.surface.panelBgAlt, 1, this.pal.surface.border, 0,
-      );
-    }
   }
 
   private overviewBuffer(classIdx: number, chunkIdx: number): InstanceBuffer {

@@ -19,18 +19,9 @@
 // ratios from roughly 1:70 to 8:1, so a panel can be fitted into whatever slot
 // it is given. See fillSlot in panel.ts.
 
-import { metrics } from '$lib/metrics';
+import { CELL } from '$lib/metrics';
 
-/**
- * Grid cell size in world units: one line height square.
- *
- * Chosen rather than a coarser cell because the quantization is pure overhead
- * and this is the finest cell that still aligns to something meaningful. A
- * cell is exactly one line of code tall and two characters wide, so panel
- * edges land on line boundaries, which is the lattice the content already
- * lives on.
- */
-export const CELL = metrics.lineHeight;
+export { CELL };
 
 /** Rectangle in grid cells, all integers. */
 export interface IntRect {

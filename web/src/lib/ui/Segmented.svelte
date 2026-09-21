@@ -43,7 +43,10 @@
 		overflow: hidden;
 	}
 	button {
-		font: 500 var(--fs-xs) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-xs);
+		font-weight: 500;
+		line-height: 1;
 		background: none;
 		border: none;
 		border-left: var(--sep-w) solid var(--border);

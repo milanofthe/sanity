@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "sanity",
+  "version": "0.1.0",
+  "identifier": "com.milanofthe.sanity",
+  "build": {
+    "beforeDevCommand": "npm --prefix web run dev",
+    "devUrl": "http://localhost:5183",
+    "beforeBuildCommand": "npm --prefix web run build",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "sanity",
+        "width": 1600,
+        "height": 1000,
+        "minWidth": 800,
+        "minHeight": 500,
+        "titleBarStyle": "Transparent",
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}

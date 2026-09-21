@@ -5,8 +5,9 @@
 // this file never touches the DOM outside its own canvas and label host.
 
 import { Camera } from '$lib/canvas/camera';
-import { Labels } from '$lib/canvas/labels';
-import { computeLayout, layoutStats, type FileEntry, type Layout } from '$lib/canvas/layout/tree';
+import {
+  computeLayout, layoutStats, type FileEntry, type FileNode, type Layout,
+} from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
 import { Scene, type TextSource } from '$lib/canvas/renderer/scene';
@@ -44,7 +45,6 @@ export class CanvasApp {
   readonly cam = new Camera();
   private gl: WebGL2RenderingContext;
   private scene: Scene | null = null;
-  private labels: Labels | null = null;
   private layout: Layout | null = null;
   private pal: Palette;
 
@@ -56,6 +56,13 @@ export class CanvasApp {
   private lastFrame = performance.now();
   private observer: ResizeObserver;
   private dragging = false;
+  /** Set on pointerdown, cleared once the pointer has moved: a drag must not
+   *  also count as a click on whatever was under the cursor. */
+  private moved = false;
+  private hovered: FileNode | null = null;
+
+  /** Called when a panel header is clicked. */
+  onOpenFile: ((path: string) => void) | null = null;
 
   private fill = 0;
   private frameMs = 16.7;
@@ -67,7 +74,7 @@ export class CanvasApp {
   /** Called after each frame so the chrome can render the status bar. */
   onStats: ((s: CanvasStats) => void) | null = null;
 
-  constructor(private canvas: HTMLCanvasElement, private labelHost: HTMLElement) {
+  constructor(private canvas: HTMLCanvasElement) {
     this.gl = createContext(canvas);
     this.pal = readPalette();
     this.observer = new ResizeObserver(() => this.resize());
@@ -108,7 +115,7 @@ export class CanvasApp {
    *  spread across frames so opening a large repo does not lock the window. */
   open(source: RepoSource): void {
     this.scene = null;
-    this.labels?.destroy();
+    this.hovered = null;
     this.decoded.clear();
 
     const t0 = performance.now();
@@ -136,7 +143,6 @@ export class CanvasApp {
     }
 
     this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
-    this.labels = new Labels(this.labelHost, this.layout);
     this.pending = this.layout.files.map((f) => f.path);
     this.uploaded = 0;
     this.fit();
@@ -157,18 +163,66 @@ export class CanvasApp {
     this.scene?.touch(path, data);
   }
 
+  /**
+   * The panel whose header is under a screen position, if any.
+   *
+   * Linear over the visible files. At the zoom where a header can be hit it is
+   * at least a few pixels tall, so only a handful of panels qualify, and a
+   * spatial index would be machinery for a case that cannot get hot.
+   */
+  private headerAt(sx: number, sy: number): FileNode | null {
+    if (!this.layout) return null;
+    // A header shorter than this cannot be aimed at, so treat it as absent
+    // rather than letting a stray click open a file.
+    if (metrics.titleHeight * this.cam.zoom < 6) return null;
+    const [wx, wy] = this.cam.screenToWorld(sx, sy);
+    for (const f of this.layout.files) {
+      if (f.stub) continue;
+      if (wx < f.x || wx > f.x + f.w) continue;
+      if (wy < f.y || wy > f.y + metrics.titleHeight) continue;
+      return f;
+    }
+    return null;
+  }
+
   private attachInput(): void {
     const c = this.canvas;
+    const local = (e: PointerEvent): [number, number] => {
+      const r = c.getBoundingClientRect();
+      return [e.clientX - r.left, e.clientY - r.top];
+    };
+
     c.addEventListener('pointerdown', (e) => {
       this.dragging = true;
+      this.moved = false;
       c.setPointerCapture(e.pointerId);
     });
     c.addEventListener('pointerup', (e) => {
+      const wasDrag = this.moved;
       this.dragging = false;
       c.releasePointerCapture(e.pointerId);
+      if (wasDrag) return;
+      const hit = this.headerAt(...local(e));
+      if (hit) this.onOpenFile?.(hit.path);
     });
     c.addEventListener('pointermove', (e) => {
-      if (this.dragging) this.cam.panBy(e.movementX, e.movementY);
+      if (this.dragging) {
+        // A pointer that barely twitches is still a click, not a drag.
+        if (Math.abs(e.movementX) + Math.abs(e.movementY) > 2) this.moved = true;
+        this.cam.panBy(e.movementX, e.movementY);
+        return;
+      }
+      const hit = this.headerAt(...local(e));
+      if (hit !== this.hovered) {
+        this.hovered = hit;
+        if (this.scene) this.scene.hoveredPath = hit?.path ?? null;
+        c.style.cursor = hit ? 'pointer' : '';
+      }
+    });
+    c.addEventListener('pointerleave', () => {
+      this.hovered = null;
+      if (this.scene) this.scene.hoveredPath = null;
+      c.style.cursor = '';
     });
     c.addEventListener(
       'wheel',
@@ -212,7 +266,6 @@ export class CanvasApp {
     const t0 = performance.now();
     if (this.scene && this.layout) {
       this.scene.render(this.cam, dt);
-      this.labels?.update(this.cam);
       const s = this.scene.stats;
       const tex = this.scene.textures.stats();
       this.stats = {
@@ -281,6 +334,5 @@ export class CanvasApp {
   destroy(): void {
     cancelAnimationFrame(this.raf);
     this.observer.disconnect();
-    this.labels?.destroy();
   }
 }

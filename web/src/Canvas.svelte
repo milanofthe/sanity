@@ -5,17 +5,18 @@
 	import { onMount } from 'svelte';
 	import { CanvasApp, type CanvasStats } from '$lib/canvas/app';
 
-	let { app = $bindable(), onstats }: {
+	let { app = $bindable(), onstats, onopenfile }: {
 		app?: CanvasApp;
 		onstats?: (s: CanvasStats) => void;
+		onopenfile?: (path: string) => void;
 	} = $props();
 
 	let canvas: HTMLCanvasElement;
-	let labelHost: HTMLDivElement;
 
 	onMount(() => {
-		const instance = new CanvasApp(canvas, labelHost);
+		const instance = new CanvasApp(canvas);
 		if (onstats) instance.onStats = onstats;
+		if (onopenfile) instance.onOpenFile = onopenfile;
 		app = instance;
 		return () => instance.destroy();
 	});
@@ -23,7 +24,6 @@
 
 <div class="stage">
 	<canvas bind:this={canvas}></canvas>
-	<div class="labels" bind:this={labelHost}></div>
 </div>
 
 <style>
@@ -44,12 +44,5 @@
 	}
 	canvas:active {
 		cursor: grabbing;
-	}
-	.labels {
-		position: absolute;
-		inset: 0;
-		pointer-events: none;
-		overflow: hidden;
-		z-index: var(--z-labels);
 	}
 </style>

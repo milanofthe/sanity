@@ -8,19 +8,53 @@
 	import { project } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { openSynthetic } from '$lib/sources/synthetic';
+	import {
+		inTauri, initialRepo, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
+	} from '$lib/sources/tauri';
 
 	let app = $state<CanvasApp | undefined>();
 	let stats = $state<CanvasStats | null>(null);
+	let busy = $state(false);
+	let error = $state<string | null>(null);
 
 	// Re-open the scene whenever the set of drawn types changes. The layout is
 	// a pure function of the file list, so this is the whole implementation of
 	// the view picker: change what is in the list and lay it out again.
 	let modeKey = $derived(project.groups.map((g) => `${g.id}:${g.mode}`).join(','));
 
+	function rebuild() {
+		if (!app) return;
+		if (loadedRoot()) openLoaded(app);
+		else openSynthetic(app);
+	}
+
 	$effect(() => {
 		if (!app || !modeKey) return;
-		openSynthetic(app);
+		rebuild();
 	});
+
+	async function openFolder(path?: string) {
+		if (!app || busy) return;
+		if (!inTauri()) {
+			// In a plain browser tab there is no folder to open, so the Project
+			// menu draws a fresh synthetic repo instead of doing nothing.
+			openSynthetic(app, true);
+			return;
+		}
+		const target = path ?? (await pickFolder());
+		if (!target) return;
+		busy = true;
+		error = null;
+		try {
+			await loadRepo(target);
+			rebuild();
+			app.fit();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			busy = false;
+		}
+	}
 
 	// The canvas resolves its colours from CSS, so a theme switch has to tell
 	// it to read them again.
@@ -30,10 +64,16 @@
 		app?.refreshTheme();
 	});
 
+	let started = false;
 	$effect(() => {
-		// Nothing is open on first paint: show generated data so the app has
-		// something to be, until the Tauri folder picker lands.
-		if (app && project.groups.length === 0) openSynthetic(app, true);
+		if (!app || started) return;
+		started = true;
+		// A folder from the command line wins; otherwise show generated data so
+		// the window has something to be before one is chosen.
+		initialRepo().then((path) => {
+			if (path) openFolder(path);
+			else if (app && project.groups.length === 0) openSynthetic(app, true);
+		});
 	});
 
 	function onKeyDown(e: KeyboardEvent) {
@@ -47,10 +87,20 @@
 
 <Toolbar
 	onfit={() => app?.fit()}
-	onopen={() => {
-		// Replaced by the Tauri dialog; until then a new synthetic repo.
-		if (app) openSynthetic(app, true);
+	onopen={() => openFolder()}
+	onreload={(path) => openFolder(path)}
+	{busy}
+/>
+<Canvas
+	bind:app
+	onstats={(s) => (stats = s)}
+	onopenfile={(path) => {
+		// Clicking a panel header opens the file. Only meaningful with a real
+		// repository behind it, so it is a no-op on synthetic data.
+		if (!inTauri() || !loadedRoot()) return;
+		openInEditor(path).catch((e) => {
+			error = e instanceof Error ? e.message : String(e);
+		});
 	}}
 />
-<Canvas bind:app onstats={(s) => (stats = s)} />
-<StatusBar {stats} />
+<StatusBar {stats} {error} />

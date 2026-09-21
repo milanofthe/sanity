@@ -62,7 +62,9 @@
 		outline-offset: 1px;
 	}
 	.lbl {
-		font: 500 var(--fs-s) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-s);
+		font-weight: 500;
 		color: var(--text-dim);
 	}
 	.on .lbl {

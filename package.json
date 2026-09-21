@@ -1,0 +1,23 @@
+{
+  "name": "sanity",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Structural overview of a repository",
+  "scripts": {
+    "app": "tauri dev",
+    "app:build": "tauri build",
+    "tauri": "tauri",
+    "dev": "npm --prefix web run dev",
+    "check": "npm --prefix web run check && npm --prefix web exec svelte-check -- --threshold error && cargo clippy --workspace --all-targets -- -D warnings",
+    "test": "npm --prefix web test && cargo test --workspace",
+    "shots": "npm --prefix web exec -- node scripts/shot.mjs",
+    "ui-shots": "npm --prefix web exec -- node scripts/ui-shots.mjs",
+    "layout-check": "npm --prefix web exec -- node scripts/layout-check.mjs",
+    "menu-check": "npm --prefix web exec -- node scripts/menu-check.mjs",
+    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

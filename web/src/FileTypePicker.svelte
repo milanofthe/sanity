@@ -90,7 +90,9 @@
 <style>
 	.picker {
 		padding: 0 var(--sp-2);
-		font: 500 var(--fs-s) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-s);
+		font-weight: 500;
 	}
 	.empty {
 		color: var(--text-faint);
@@ -105,10 +107,13 @@
 		grid-template-columns: 1fr 48px 70px auto;
 		align-items: center;
 		gap: var(--sp-2);
-		padding: 3px var(--sp-2);
+		min-height: var(--row-h);
+		padding: 0 var(--sp-2);
 	}
 	.head {
-		font: 600 var(--fs-xxs) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-xxs);
+		font-weight: 600;
 		letter-spacing: 0.09em;
 		text-transform: uppercase;
 		color: var(--text-faint);
@@ -122,7 +127,8 @@
 		min-width: 0;
 	}
 	.name {
-		font: 500 var(--fs-s) var(--font-mono);
+		font-family: var(--font-mono);
+		font-size: var(--fs-s);
 		color: var(--text);
 	}
 	/* Share of the repository as a fill behind the row, so the list reads as a
@@ -142,7 +148,8 @@
 		color: var(--text-dim);
 	}
 	.why {
-		font: 400 var(--fs-xxs) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-xxs);
 		color: var(--text-faint);
 		white-space: nowrap;
 		overflow: hidden;
@@ -150,7 +157,8 @@
 	}
 	.col-num {
 		text-align: right;
-		font: 400 var(--fs-xs) var(--font-mono);
+		font-family: var(--font-mono);
+		font-size: var(--fs-xs);
 		color: var(--text-dim);
 		font-variant-numeric: tabular-nums;
 	}
@@ -159,7 +167,9 @@
 		border-top: var(--sep-w) solid var(--border);
 		margin-top: var(--sp-2);
 		padding-top: var(--sp-2);
-		font: 600 var(--fs-xxs) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-xxs);
+		font-weight: 600;
 		letter-spacing: 0.09em;
 		text-transform: uppercase;
 		color: var(--text-faint);

@@ -26,7 +26,10 @@
 
 <style>
 	button {
-		font: 500 var(--fs-s) var(--font-ui);
+		font-family: var(--font-ui);
+		font-size: var(--fs-s);
+		font-weight: 500;
+		line-height: 1;
 		border: var(--sep-w) solid transparent;
 		border-radius: var(--radius);
 		cursor: pointer;

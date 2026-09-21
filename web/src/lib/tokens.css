@@ -113,6 +113,10 @@
 	--toolbar-h: 34px;
 	--statusbar-h: 24px;
 	--menu-w: 280px;
+	/* One row in a menu or a picker. Fixed rather than derived from content:
+	   a list of rows that each size themselves is a list whose rows do not
+	   line up, and one whose intrinsic height can collapse. */
+	--row-h: 26px;
 
 	/* stacking order, one scale for the whole app: every z-index references a
 	   token, so a new surface can be placed without hunting for the number it

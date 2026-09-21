@@ -13,10 +13,15 @@ import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
 /** Width over height the whole canvas aims for; screens are wide. */
 const ROOT_ASPECT = 16 / 9;
 
-/** Inset between a panel and the edge of its slot, in world units. Small on
- *  purpose: the point of filling the slot is that edges line up, and a wide
- *  margin would hide that they do. */
-const PANEL_INSET = 2;
+/**
+ * Inset between a panel and the edge of its slot.
+ *
+ * Zero: the panels tile. Their one pixel borders then sit directly against
+ * each other, which is what makes the alignment visible rather than something
+ * you have to take on trust. A margin here would also push the text off the
+ * character lattice, since it is not a multiple of the character width.
+ */
+const PANEL_INSET = 0;
 
 /** Directory frame, in grid cells, so the nesting also lands on the lattice. */
 const DIR_PAD_CELLS = 1;
