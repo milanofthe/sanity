@@ -24,7 +24,8 @@
     "anim-check": "node web/scripts/anim-check.mjs",
     "sharp-check": "node web/scripts/sharp-check.mjs",
     "linechange-check": "node web/scripts/linechange-check.mjs",
-    "idle-check": "node web/scripts/idle-check.mjs"
+    "idle-check": "node web/scripts/idle-check.mjs",
+    "icons": "node web/scripts/make-icon.mjs && node web/scripts/render-svg.mjs web/public/favicon.svg web/public/favicon 32 && node web/scripts/render-svg.mjs assets/sanity-icon.svg /tmp/sanity-app-icon 1024 && npx tauri icon /tmp/sanity-app-icon.png -o src-tauri/icons && rm -rf src-tauri/icons/android src-tauri/icons/ios src-tauri/icons/Square*.png src-tauri/icons/StoreLogo.png"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

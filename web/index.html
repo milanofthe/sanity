@@ -4,6 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
     <title>sanity</title>
+    <!-- The SVG is what every current browser uses, at whatever size it wants.
+         The PNG is for the ones that do not, and for the places that ask for a
+         bitmap regardless: a bookmark bar, a pinned tab. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="alternate icon" type="image/png" sizes="32x32" href="/favicon.png" />
+    <meta name="theme-color" content="#16181a" />
   </head>
   <body>
     <div id="app"></div>

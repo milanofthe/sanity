@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>sanity</title>
+  <rect x="0" y="0" width="1024" height="1024" rx="112" fill="#16181a"/>
+  <rect x="117.8" y="117.8" width="459" height="469" rx="12.6" fill="#f4f5f6"/>
+  <rect x="117.8" y="616.7" width="459" height="289.5" rx="12.6" fill="#ff2020"/>
+  <rect x="606.7" y="117.8" width="299.5" height="379.3" rx="12.6" fill="#f4f5f6"/>
+  <rect x="606.7" y="527" width="299.5" height="379.3" rx="12.6" fill="#c3c8cc"/>
+</svg>

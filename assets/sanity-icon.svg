@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>sanity</title>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#16181a"/>
+  <rect x="194.8" y="194.8" width="369" height="377" rx="10.2" fill="#f4f5f6"/>
+  <rect x="222.4" y="222.4" width="247.2" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="222.4" y="247.3" width="173.4" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="252" y="272.2" width="206.6" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="252" y="297.1" width="155" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="281.5" y="322" width="188.2" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="281.5" y="346.8" width="121.8" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="252" y="371.7" width="221.4" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="222.4" y="396.6" width="132.8" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="222.4" y="421.5" width="239.9" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="252" y="446.4" width="166.1" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="252" y="471.3" width="199.3" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="281.5" y="496.1" width="107" height="10.5" rx="3.1" fill="#16181a" opacity="0.8"/>
+  <rect x="194.8" y="595.9" width="369" height="233.4" rx="10.2" fill="#ff2020"/>
+  <rect x="587.9" y="194.8" width="241.4" height="195.4" rx="10.2" fill="#f4f5f6"/>
+  <rect x="587.9" y="414.3" width="241.4" height="195.4" rx="10.2" fill="#c3c8cc"/>
+  <rect x="587.9" y="633.8" width="241.4" height="195.4" rx="10.2" fill="#f4f5f6"/>
+</svg>

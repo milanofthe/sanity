@@ -7,5 +7,7 @@ web/shots/
 artifacts/
 # Fixtures dumped from other repositories by `cargo run -p sanity-core
 # --example dump`. Several megabytes each, regenerated in one command, and
-# what is in them is somebody else's code rather than this project's.
-web/public/
+# what is in them is somebody else's code rather than this project's. The rest
+# of web/public is served as it is, the favicon among it, so only the dumps
+# are ignored.
+web/public/fixture*/
