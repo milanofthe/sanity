@@ -23,6 +23,7 @@
 		onprev,
 		query = '',
 		matches = 0,
+		note = '',
 		at = 0,
 		busy = false
 	}: {
@@ -33,6 +34,8 @@
 		onprev?: () => void;
 		query?: string;
 		matches?: number;
+		/** What the count means, for the field's tooltip. */
+		note?: string;
 		at?: number;
 		busy?: boolean;
 	} = $props();
@@ -120,6 +123,7 @@
 		bind:this={search}
 		value={query}
 		count={matches}
+		{note}
 		{at}
 		oninput={(q) => onsearch?.(q)}
 		onnext={() => onnext?.()}

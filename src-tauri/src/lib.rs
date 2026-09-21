@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 mod watch;
 
+use sanity_core::find;
 use sanity_core::scan::{self, ScannedFile};
 use sanity_core::wire::{encode, FileData, FLAG_BINARY};
 use serde::Serialize;
@@ -620,6 +621,77 @@ async fn file_text(path: String, state: State<'_, AppState>) -> Result<String, S
     read_text(&root, &path)
 }
 
+/// Hits for a query across the whole open folder.
+///
+/// Reads and scans the tree on every call rather than holding its text: at
+/// 18.6 MB over 1062 files that measured 7 to 8 milliseconds warm, across
+/// eight cores, which is inside a keystroke. Holding the text instead would
+/// cost more memory than the renderer uses and would be wrong the moment a
+/// file is written, which for this tool is constantly.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FoundFile {
+    path: String,
+    /// Line and column pairs, flattened: two numbers per hit. Flat because a
+    /// long query can find thousands and an object each would dominate the
+    /// message.
+    at: Vec<u32>,
+    /// Hits past the per-file cap.
+    more: u32,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FoundResult {
+    files: Vec<FoundFile>,
+    /// Hits reported, and hits there are, which differ once a cap bites.
+    shown: u32,
+    total: u32,
+    elapsed_ms: u32,
+}
+
+#[tauri::command]
+async fn find_text(
+    query: String,
+    cap: usize,
+    state: State<'_, AppState>,
+) -> Result<FoundResult, String> {
+    let (root, paths) = {
+        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        (
+            repo.root.clone(),
+            repo.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
+        )
+    };
+    if root.as_os_str().is_empty() {
+        return Err("no folder open".into());
+    }
+    let started = std::time::Instant::now();
+    let found = find::find_in_files(&root, &paths, &query, cap.max(1));
+
+    let mut shown = 0u32;
+    let mut total = 0u32;
+    let files = found
+        .into_iter()
+        .map(|f| {
+            shown += f.hits.len() as u32;
+            total += f.hits.len() as u32 + f.more;
+            let mut at = Vec::with_capacity(f.hits.len() * 2);
+            for h in &f.hits {
+                at.push(h.line);
+                at.push(h.col);
+            }
+            FoundFile { path: f.path, at, more: f.more }
+        })
+        .collect();
+    Ok(FoundResult {
+        files,
+        shown,
+        total,
+        elapsed_ms: started.elapsed().as_millis() as u32,
+    })
+}
+
 fn read_text(root: &Path, rel: &str) -> Result<String, String> {
     // Refuse to escape the open folder, however the path was spelled.
     let full = root.join(rel);
@@ -647,6 +719,7 @@ pub fn run() {
             scan_repo,
             repo_payloads,
             file_text,
+            find_text,
             startup,
             open_in_editor,
             refresh_files,

@@ -168,6 +168,12 @@ const GAP_OF_LINE = 0.16;
  */
 const SEARCH_DIM = 0.22;
 
+/** Strength of the band on a line a search found, and on the one the camera
+ *  is on. Both above the standing change band, since a query is a question
+ *  being asked right now. */
+const HIT_MIX = 0.22;
+const HIT_MIX_CURRENT = 0.55;
+
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
 
@@ -317,6 +323,42 @@ export class Scene {
   private matchedDirs = new Set<string>();
   /** Scratch transform for a dimmed panel, so dimming allocates nothing. */
   private dimTf: Transform = { scale: 1, bx: 0, by: 0, alpha: 1 };
+
+  /**
+   * Content hits per path, as flat line and column pairs.
+   *
+   * Separate from the matching path set because they answer different
+   * questions and are drawn differently: a path match lights a whole panel,
+   * a content hit marks the lines inside it.
+   */
+  private hits = new Map<string, number[]>();
+  /** The hit the camera is on, so it can be drawn as the current one. */
+  private current: { path: string; line: number } | null = null;
+
+  setHits(hits: Map<string, number[]>, current: { path: string; line: number } | null): void {
+    this.hits = hits;
+    this.current = current;
+  }
+
+  /**
+   * World rectangle of one source line, for the camera to fly to.
+   *
+   * Follows the same wrap offsets and column geometry the text pass draws
+   * from, rather than a second calculation of where a line is: those two
+   * drifting apart is how a search flies to the wrong place in a panel that
+   * wraps into eleven columns.
+   */
+  lineRect(path: string, line: number): [number, number, number, number] | null {
+    const f = this.files.get(path);
+    if (!f || f.node.stub) return null;
+    const g = f.node.geom;
+    const row = f.rows[Math.min(line, Math.max(0, f.data.lineCount - 1))];
+    const column = Math.min(g.columns - 1, Math.floor(row / g.linesPerColumn));
+    const x = f.node.x + textOriginX + column * columnPitch(g);
+    const y =
+      f.node.y + textOriginY + (row - column * g.linesPerColumn) * metrics.lineHeight;
+    return [x, y, columnWidth(g), metrics.lineHeight];
+  }
 
   /** Take a set of matching paths, or null to stop searching. */
   setSearch(paths: Set<string> | null): void {
@@ -960,6 +1002,7 @@ export class Scene {
       if (spanFade > 0.004 || glyphFade > 0.004) {
         this.pushGutter(f, cam.zoom, vy0, vy1);
         this.pushChangeBands(f, vy0, vy1);
+        this.pushHits(f, vy0, vy1);
       }
     }
     this.tf = IDENTITY;
@@ -1688,6 +1731,40 @@ export class Scene {
         this.pushRect(
           this.fgRects, colX - w - 1, y, w, metrics.lineHeight, color, 0.85 * fade, 0, 0,
         );
+      }
+    }
+  }
+
+  /**
+   * The lines a content search found, as a band each.
+   *
+   * The same shape as a changed line's band, in the accent rather than a
+   * change colour, because they are the same kind of statement about a line
+   * and reading them as one vocabulary is the point. The line the camera is
+   * on is drawn at full strength and the others at a third, so stepping
+   * through hits inside one file is visible without leaving the panel.
+   */
+  private pushHits(f: SceneFile, vy0: number, vy1: number): void {
+    const at = this.hits.get(f.node.path);
+    if (!at || at.length === 0) return;
+    const [vx0, vx1] = [-Infinity, Infinity];
+    const colW = columnWidth(f.node.geom);
+    const g = f.node.geom;
+    const here = this.current?.path === f.node.path ? this.current.line : -1;
+
+    for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      for (let k = 0; k < at.length; k += 2) {
+        const line = at[k];
+        if (line >= f.data.lineCount) continue;
+        const from = f.rows[line];
+        const to = line + 1 <= f.data.lineCount ? f.rows[line + 1] : from + 1;
+        const mix = line === here ? HIT_MIX_CURRENT : HIT_MIX;
+        const band = bandColour(this.pal.surface.panelBg, this.pal.surface.accent, mix);
+        for (let row = from; row < to; row++) {
+          if (row < firstRow || row > lastRow) continue;
+          const y = f.node.y + textOriginY + (row - c * g.linesPerColumn) * metrics.lineHeight;
+          this.pushRect(this.bgRects, colX, y, colW, metrics.lineHeight, band, 1, 0, 0);
+        }
       }
     }
   }

@@ -4,6 +4,7 @@
 //! thin wrapper, and keeping the logic here means it can be tested and checked
 //! without a WebView.
 
+pub mod find;
 pub mod lang;
 pub mod scan;
 pub mod simple;

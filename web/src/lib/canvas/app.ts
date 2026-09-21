@@ -17,6 +17,7 @@ import {
   bandsFromQuery, lodBands, lodName, lodWeights, setBands, type LodName,
 } from '$lib/canvas/lod';
 import { rank, type Ranked } from '$lib/canvas/search';
+import { countHits, type FileHits } from '$lib/canvas/content';
 import { readPalette, type Palette } from '$lib/theme';
 
 export type { LodName };
@@ -51,9 +52,43 @@ export interface RepoSource {
   /** Payload per path, in the wire format. */
   payload(path: string): ArrayBuffer | undefined;
   text: TextSource;
+  /**
+   * Search the text of every file, or absent when the source cannot.
+   *
+   * A capability of the source rather than a method here, because where the
+   * text is decides where the search happens: a real folder is searched in
+   * Rust, which has the bytes and reads 18 megabytes in 7 milliseconds, while
+   * a fixture is searched in the browser, which already holds them.
+   */
+  find?: (query: string, capPerFile: number) => Promise<FileHits[]>;
 }
 
 const UPLOAD_BUDGET_MS = 6;
+
+/**
+ * Hits reported per file, and the shortest query that searches text at all.
+ *
+ * The cap is per file rather than overall so one enormous file cannot crowd
+ * out every other: what the canvas needs is where the hits are, and past a
+ * few dozen in one file the panel is marked either way. The floor on the
+ * query is there because two characters match half a repository, which is a
+ * lot of reading for an answer nobody can use.
+ */
+const HITS_PER_FILE = 64;
+const MIN_CONTENT_QUERY = 3;
+
+/** Lines of context kept around a hit the camera flies to. */
+const LINE_CONTEXT = 14;
+
+export interface ContentResult {
+  /** Files with at least one hit. */
+  files: number;
+  /** Hits reported, and hits there are, which differ once the cap bites. */
+  shown: number;
+  total: number;
+  /** True when a newer query overtook this one, so the caller ignores it. */
+  stale: boolean;
+}
 
 export class CanvasApp {
   readonly cam = new Camera();
@@ -323,36 +358,158 @@ export class CanvasApp {
   search(query: string): Ranked[] {
     const q = query.trim();
     if (!this.layout || !this.scene) return [];
+    this.current = null;
     if (!q) {
-      this.scene.setSearch(null);
       this.matches = [];
+      this.hitFiles = [];
+      this.findToken++;
+      this.scene.setHits(new Map(), null);
+      this.scene.setSearch(null);
       this.invalidate();
       return [];
     }
     this.matches = rank(q, this.layout.files.map((f) => f.path));
-    this.scene.setSearch(new Set(this.matches.map((m) => m.path)));
-    this.invalidate();
+    this.applyLit();
     return this.matches;
   }
 
   /**
-   * Fly to the nth match, counting from the best one and wrapping around.
+   * Ask the source to search the text of every file.
    *
-   * Wrapping rather than stopping at the end, because with a query like a file
-   * extension there are dozens of matches and stepping through them in a loop
-   * is how you look at them.
+   * Separate from `search` and asynchronous because it is a different kind of
+   * question: a path match is arithmetic on a list the frontend already has,
+   * while a content hit means reading the repository. Measured in Rust on a
+   * real project, 18.6 MB over 1062 files, that read and scan is 7 to 8
+   * milliseconds, so it runs per keystroke behind a short debounce rather
+   * than on a button.
+   *
+   * The stale-result guard matters more than it looks: a slow query typed one
+   * character further arrives after the fast one, and without the check the
+   * canvas would end up lit for a query nobody is looking at.
+   */
+  async findText(query: string, capPerFile = HITS_PER_FILE): Promise<ContentResult> {
+    const q = query.trim();
+    const token = ++this.findToken;
+    if (!this.lastSource?.find || q.length < MIN_CONTENT_QUERY) {
+      this.hitFiles = [];
+      this.applyLit();
+      return { files: 0, shown: 0, total: 0, stale: false };
+    }
+    let files: FileHits[] = [];
+    try {
+      files = await this.lastSource.find(q, capPerFile);
+    } catch {
+      files = [];
+    }
+    if (token !== this.findToken) return { files: 0, shown: 0, total: 0, stale: true };
+    // In the order the panels are laid out in, so stepping through hits walks
+    // the project rather than jumping by whatever order the backend produced.
+    const order = new Map(this.layout?.files.map((f, i) => [f.path, i]) ?? []);
+    files.sort((a, b) => (order.get(a.path) ?? 1e9) - (order.get(b.path) ?? 1e9));
+    this.hitFiles = files;
+    this.applyLit();
+    const { shown, total } = countHits(files);
+    return { files: files.length, shown, total, stale: false };
+  }
+
+  /** Hits of the current query, flattened in the order they are stepped. */
+  get hits(): { path: string; line: number; col: number }[] {
+    const out: { path: string; line: number; col: number }[] = [];
+    for (const f of this.hitFiles) {
+      for (let k = 0; k < f.at.length; k += 2) {
+        out.push({ path: f.path, line: f.at[k], col: f.at[k + 1] });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Everything the current query found, in the order Enter walks it: the files
+   * whose names match, then the lines whose text matches.
+   *
+   * Names first because a name is the stronger claim. Typing "scene" in a
+   * project with a scene.ts means that file, and flying to the sixth mention
+   * of the word in a comment somewhere else is not the answer, however
+   * correct it is. The text hits are right behind it, so the same keystroke
+   * keeps going.
+   */
+  get steps(): { path: string; line: number | null }[] {
+    const out: { path: string; line: number | null }[] = [];
+    for (const m of this.matches) out.push({ path: m.path, line: null });
+    for (const h of this.hits) out.push({ path: h.path, line: h.line });
+    return out;
+  }
+
+  /**
+   * Fly to the nth thing the query found, wrapping around.
+   *
+   * Wrapping rather than stopping at the end, because with a common word there
+   * are hundreds of hits and stepping through them in a loop is how you read
+   * them.
    */
   focusMatch(index: number): string | null {
-    if (this.matches.length === 0) return null;
-    const n = this.matches.length;
-    const at = ((index % n) + n) % n;
-    const { path } = this.matches[at];
-    this.focusFile(path);
-    return path;
+    const steps = this.steps;
+    if (steps.length === 0) return null;
+    const at = ((index % steps.length) + steps.length) % steps.length;
+    const step = steps[at];
+    if (step.line === null) {
+      this.current = null;
+      this.applyLit();
+      this.focusFile(step.path);
+    } else {
+      this.current = { path: step.path, line: step.line };
+      this.applyLit();
+      this.focusLine(step.path, step.line);
+    }
+    return step.path;
+  }
+
+  /**
+   * Put one line of one file in the middle of the window, at a zoom where it
+   * can be read.
+   *
+   * Flying to the panel and leaving the reader to find the line is what this
+   * did first, and in a file of two thousand lines that is not an answer. The
+   * zoom is the one where glyphs are fully up, so what arrives is text.
+   */
+  focusLine(path: string, line: number): void {
+    const rect = this.scene?.lineRect(path, line);
+    if (!rect) {
+      this.focusFile(path);
+      return;
+    }
+    const [x, y, w] = rect;
+    // A window of lines around it, so the hit has context rather than filling
+    // the screen on its own.
+    const half = metrics.lineHeight * LINE_CONTEXT;
+    this.invalidate();
+    this.cam.flyToRect(x, y - half, x + w, y + metrics.lineHeight + half, 0.5);
   }
 
   /** Matches of the current query, best first. */
   private matches: Ranked[] = [];
+  /** Files with content hits, in layout order. */
+  private hitFiles: FileHits[] = [];
+  /** The hit the camera was last sent to. */
+  private current: { path: string; line: number } | null = null;
+  /** Guards against a slow query landing after a newer one. */
+  private findToken = 0;
+
+  /** Hand the scene what is lit: path matches, files with hits, and where the
+   *  camera is. */
+  private applyLit(): void {
+    if (!this.scene) return;
+    const lit = new Set<string>();
+    for (const m of this.matches) lit.add(m.path);
+    const hits = new Map<string, number[]>();
+    for (const f of this.hitFiles) {
+      lit.add(f.path);
+      hits.set(f.path, f.at);
+    }
+    this.scene.setHits(hits, this.current);
+    this.scene.setSearch(this.matches.length > 0 || this.hitFiles.length > 0 ? lit : null);
+    this.invalidate();
+  }
 
   focusFile(path: string, seconds = 0.5): void {
     const node = this.layout?.files.find((f) => f.path === path);

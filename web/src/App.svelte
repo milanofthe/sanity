@@ -157,8 +157,31 @@
 	let hover = $state<string | null>(null);
 	let query = $state('');
 	let matches = $state(0);
+	let hitShown = $state(0);
+	let hitTotal = $state(0);
+	let hitFiles = $state(0);
 	let at = $state(0);
 	let toolbar: ReturnType<typeof Toolbar> | null = $state(null);
+	let findTimer = 0;
+
+	// Names and then text hits, in one list and one counter: the field says how
+	// many places the query names, and Enter walks them in that order.
+	const stepCount = $derived(matches + hitShown);
+	const shownCount = $derived(matches + hitTotal);
+	const searchNote = $derived(
+		[
+			matches > 0 ? `${matches} ${matches === 1 ? 'file' : 'files'} by name` : '',
+			hitTotal > 0 ? `${hitTotal} in the text of ${hitFiles} ${hitFiles === 1 ? 'file' : 'files'}` : '',
+			hitTotal > hitShown ? `first ${hitShown} of them steppable` : ''
+		]
+			.filter(Boolean)
+			.join(', ')
+	);
+
+	/** Debounce before the text search, in ms. A keystroke reads the whole
+	 *  repository, which is 7 to 8 ms in the backend, but a burst of typing
+	 *  should not queue eight of them. */
+	const FIND_DELAY = 140;
 
 	function onSearch(q: string) {
 		query = q;
@@ -166,13 +189,26 @@
 		// Back to the first match on every keystroke: the ranking changed, so a
 		// position in the old list means nothing in the new one.
 		at = 0;
+		hitShown = 0;
+		hitTotal = 0;
+		hitFiles = 0;
+		clearTimeout(findTimer);
+		if (!q) return;
+		findTimer = setTimeout(() => {
+			void app?.findText(q).then((r) => {
+				if (!r || r.stale || q !== query) return;
+				hitShown = r.shown;
+				hitTotal = r.total;
+				hitFiles = r.files;
+			});
+		}, FIND_DELAY) as unknown as number;
 	}
 
-	/** Step through the matches, flying to each. */
+	/** Step through the hits, flying to each. */
 	function step(by: number) {
-		if (!app || matches === 0) return;
+		if (!app || stepCount === 0) return;
 		const next = at === 0 && by > 0 ? 1 : at + by;
-		const wrapped = ((next - 1 + matches) % matches) + 1;
+		const wrapped = ((next - 1 + stepCount) % stepCount) + 1;
 		at = wrapped;
 		app.focusMatch(wrapped - 1);
 	}
@@ -204,7 +240,8 @@
 	onnext={() => step(1)}
 	onprev={() => step(-1)}
 	{query}
-	{matches}
+	matches={shownCount}
+	note={searchNote}
 	{at}
 	{busy}
 />

@@ -11,6 +11,7 @@
 	let {
 		value = '',
 		count = 0,
+		note = '',
 		at = 0,
 		placeholder = 'Search files',
 		oninput,
@@ -21,6 +22,8 @@
 		value?: string;
 		/** Matches for the current query. */
 		count?: number;
+		/** What the count is counting, for the tooltip. */
+		note?: string;
 		/** Which match the camera is on, counting from one. Zero means none yet. */
 		at?: number;
 		placeholder?: string;
@@ -67,7 +70,12 @@
 		oninput={(e) => oninput?.(e.currentTarget.value)}
 	/>
 	{#if value}
-		<span class="count" title="Enter for the next match, shift and Enter for the previous">
+		<span
+			class="count"
+			title={note
+				? `${note}. Enter for the next, shift and Enter for the previous`
+				: 'Enter for the next match, shift and Enter for the previous'}
+		>
 			{count === 0 ? 'none' : `${at || 1}/${count}`}
 		</span>
 	{/if}

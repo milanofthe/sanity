@@ -9,6 +9,7 @@
 // payloads.bin,texts.json}.
 
 import type { CanvasApp } from '$lib/canvas/app';
+import { findInTexts, type FileHits } from '$lib/canvas/content';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
 import { unpack } from './payload.ts';
@@ -37,6 +38,22 @@ class FixtureText implements TextSource {
 }
 
 const text = new FixtureText();
+
+/**
+ * Search the fixture's own text, in the browser.
+ *
+ * The backend does this for a real folder; a fixture has no backend and
+ * already holds every line, so the same definition of a hit is applied here
+ * instead. Both implementations are tested against the same cases; see
+ * canvas/content.ts.
+ */
+async function find(query: string, capPerFile: number): Promise<FileHits[]> {
+  return findInTexts(
+    Object.entries(texts).map(([path, lines]) => [path, lines.join('\n')] as [string, string]),
+    query,
+    capPerFile,
+  );
+}
 
 /** The fixture named in the query string, if any. */
 export function fixtureName(): string | null {
@@ -69,7 +86,7 @@ export function openFixture(app: CanvasApp, keepView = false): void {
       stub: project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
-  app.open({ entries, payload: (p) => payloads.get(p), text }, keepView);
+  app.open({ entries, payload: (p) => payloads.get(p), text, find }, keepView);
 }
 
 export function fixtureLoaded(): boolean {

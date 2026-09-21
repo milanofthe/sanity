@@ -32,12 +32,15 @@ agents work in the repository.
   63 to 88 percent of its characters, prose markup on less because prose is
   supposed to stay plain; `--example coverage` reports it per language and
   fails if one falls below what is expected of it.
-- **Search from the toolbar.** Typing filters live: matches keep their
-  brightness and take an accent border, everything else drops to a fifth, and
-  the directories on the way to a match stay lit so the path is visible. Enter
-  flies the camera to the best match and steps through the rest, Escape clears.
-  A name beats a path, a run of characters beats a scattered one, and a query
-  that matches nothing says so.
+- **Search from the toolbar**, over names and over text. Typing filters live:
+  matching panels keep their brightness and take an accent border, everything
+  else drops to a fifth, and the directories on the way to a match stay lit so
+  the path is visible. Lines whose text matches are banded inside their panels.
+  Enter walks what was found, files by name first and then hits line by line,
+  flying the camera to each; Escape clears. The text search runs in the
+  backend, which reads and scans 18.6 MB across 1062 files in 7 to 8
+  milliseconds, so it happens per keystroke and nothing has to be held in
+  memory.
 - **Four themes**: Mariana, Monokai, Breakers, and sanity's own. A file type
   picker draws each extension in full, as a placeholder, or not at all.
 - Read-only. A panel's header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
@@ -55,6 +58,7 @@ On `sane`, 1062 files and 217,823 lines, release build, Apple M3.
 | read and tokenise | 349 ms, across 8 cores |
 | compute the layout | 19 ms |
 | rasterise 989 overview textures | 308 ms |
+| search every file for a word | 7 to 8 ms, across 8 cores |
 | draw a frame | 0.32 to 1.32 ms of CPU |
 | idle | 0.00 percent of a core |
 | memory | 196 MB resident, 249 MB of texture |
@@ -93,14 +97,14 @@ way to see them: a Tauri window has no console a terminal can read.
 npm run check-all
 ```
 
-Type checks, clippy with warnings denied, 88 TypeScript tests and 58 Rust
+Type checks, clippy with warnings denied, 99 TypeScript tests and 66 Rust
 tests, then eleven checks that drive a real browser and assert on pixels: the
 layout invariants, the dropdown geometry, that borders do not shimmer under a
 subpixel pan, that the glow reacts to a change and fades, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
 animate and come to rest, that an idle canvas draws nothing, that the overview
 texture is not smeared vertically, that a change plays as remove then add, and
-that a search dims the project, lights its matches and flies to one. Last, a
+that a search dims the project, lights its matches and flies to a line. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.
 

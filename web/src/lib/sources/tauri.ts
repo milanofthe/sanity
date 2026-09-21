@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { CanvasApp } from '$lib/canvas/app';
+import type { FileHits } from '$lib/canvas/content';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
@@ -75,6 +76,23 @@ class BackendText implements TextSource {
 }
 
 const text = new BackendText();
+
+/**
+ * Search every file in the open folder, in the backend.
+ *
+ * The backend has the bytes and the frontend does not: measured on a real
+ * repository, 18.6 MB over 1062 files, reading and scanning the whole tree
+ * takes 7 to 8 milliseconds across eight cores, which is inside a keystroke.
+ * Sending the text here instead so it could be searched in the webview would
+ * cost more memory than the renderer uses.
+ */
+async function find(query: string, capPerFile: number): Promise<FileHits[]> {
+  const res = await invoke<{ files: FileHits[]; shown: number; total: number; elapsedMs: number }>(
+    'find_text',
+    { query, cap: capPerFile },
+  );
+  return res.files;
+}
 
 /**
  * Put a line where a terminal can see it.
@@ -167,6 +185,7 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       entries,
       payload: (p) => payloads.get(p),
       text,
+      find,
     },
     keepView,
   );
