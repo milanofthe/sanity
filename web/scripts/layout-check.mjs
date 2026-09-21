@@ -1,31 +1,39 @@
 // Asserts the layout invariants across a range of repository sizes.
 //
 // Three of these are hard: no sibling overlaps, no edge off the grid, and no
-// panel too narrow to draw. Fill is a quality number rather than an invariant,
-// but it regressed from 87 percent to 9 once already, so it gets a floor too.
-// `misfits` is reported but not asserted: it counts panels narrower than the
-// preferred width, which is cosmetic.
+// panel too narrow to draw. Fill and bloat are quality numbers rather than
+// invariants, but fill regressed from 87 percent to 9 once already and bloat
+// from 1 to 137, so both get floors. `misfits` is reported but not asserted:
+// it counts panels narrower than the preferred width, which is cosmetic.
+//
+// Fill and bloat pull in opposite directions and that is the point of having
+// both. Fill is the share of the canvas covered by panels, so a correction
+// loop that hands a three line file ten times the area it needs *raises* fill:
+// the waste moves inside a panel, where fill cannot see it. Bloat is how many
+// times larger a panel is than the file needs, at the 95th percentile, and it
+// sees exactly that. Neither alone says the layout is good.
 
 import { launch, settled } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
-// Every panel and directory gives up one grid cell at its right and bottom
-// edge, so no two neighbours draw their border along the same line. On a
-// realistic repository that costs two or three points of fill; the floor is
-// set for the pathological case in this list, 800 files of twelve lines, where
-// a 14 unit gap is a fifth of a panel's height. Separated borders are worth
-// more than the area.
-const MIN_FILL = Number(process.env.SANITY_MIN_FILL ?? 0.85);
 
+// Floors per case, from measurement, with a little slack. Per case rather than
+// one number for all of them because the shapes differ by more than the
+// quality does: a repository of 800 twelve line files spends a fifth of every
+// panel's height on the one cell gap that keeps neighbouring borders apart, so
+// its fill is structurally lower, and 200 files of 4000 lines each run into the
+// twelve column cap, so their panels cannot fill a wide slot and the fitting
+// loop buys area instead. Both are real weaknesses rather than noise; the
+// numbers are here so a change that makes either worse is visible.
 const CASES = [
-  'files=120&lines=90',
-  'files=400&lines=180',
-  'files=1000&lines=300',
-  'files=1200&lines=400',
-  'files=2500&lines=600',
+  { cfg: 'files=120&lines=90', fill: 0.92, bloat: 1.15 },
+  { cfg: 'files=400&lines=180', fill: 0.94, bloat: 1.15 },
+  { cfg: 'files=1000&lines=300', fill: 0.95, bloat: 1.15 },
+  { cfg: 'files=1200&lines=400', fill: 0.96, bloat: 1.15 },
+  { cfg: 'files=2500&lines=600', fill: 0.96, bloat: 1.25 },
   // Pathological shapes: almost all tiny files, and a few enormous ones.
-  'files=800&lines=12',
-  'files=200&lines=4000',
+  { cfg: 'files=800&lines=12', fill: 0.81, bloat: 3.2 },
+  { cfg: 'files=200&lines=4000', fill: 0.98, bloat: 8.5 },
 ];
 
 const browser = await launch();
@@ -37,7 +45,7 @@ page.on('console', (m) => {
 page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
 
 let failures = 0;
-for (const cfg of CASES) {
+for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   lastLine = null;
   await page.goto(`${base}/?${cfg}`, { waitUntil: 'load' });
   await page.waitForFunction(() => Boolean(window.__sanity), null, { timeout: 60000 });
@@ -61,7 +69,9 @@ for (const cfg of CASES) {
   // Lines with nowhere to go: the wrapping equivalent of clipping, and just
   // as much a loss of content.
   if (num('overflowing') !== 0) problems.push(`overflowing=${num('overflowing')}`);
-  if (fill < MIN_FILL) problems.push(`fill=${(fill * 100).toFixed(1)}% < ${MIN_FILL * 100}%`);
+  if (fill < minFill) problems.push(`fill=${(fill * 100).toFixed(1)}% < ${minFill * 100}%`);
+  const bloat = num('bloat p95');
+  if (!(bloat <= maxBloat)) problems.push(`bloat p95=${bloat.toFixed(2)} > ${maxBloat}`);
   // The pass count is reported, not asserted: the pathological case converges
   // on its last allowed pass, and the layout it produces is still valid. What
   // actually has to hold is `unusable`, `overlaps` and `offgrid`, above.

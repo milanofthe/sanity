@@ -6,8 +6,10 @@
 
 import { metrics } from '$lib/metrics';
 import {
-  fillSlot, panelArea, panelGeometry, stubArea, stubGeometry, type PanelGeometry,
+  COLUMN_GUTTER, fillSlot, MAX_COLUMNS, MIN_PANEL_COLS, panelArea as panelArea_, panelGeometry,
+  stubArea, stubGeometry, type PanelGeometry,
 } from './panel';
+import { visualRowsCached } from './wrap';
 import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
 
 /**
@@ -177,7 +179,7 @@ function buildTree(entries: FileEntry[]): DirNode {
       holdsAll: true,
       // The treemap weight: a stub's fixed box, or the area the file needs
       // once its long lines have wrapped.
-      area: e.stub ? stubArea() : panelArea(lineCols, e.maxCols),
+      area: e.stub ? stubArea() : panelArea_(lineCols, e.maxCols),
       slotW: 0,
       slotH: 0,
       x: 0,
@@ -332,6 +334,16 @@ function collect(dir: DirNode, files: FileNode[], dirs: DirNode[]): void {
 const FIT_PASSES = 40;
 
 /**
+ * How far a file's current slot aspect is taken at face value when it asks for
+ * more area, as a factor either side of square.
+ *
+ * Three, because that is about the worst aspect a squarified treemap hands out
+ * for a slot a panel can still use, so anything beyond it is a sliver the next
+ * pass will not repeat.
+ */
+const ASPECT_TRUST = 3;
+
+/**
  * Lay out once, then correct.
  *
  * A panel's area depends on the shape of the slot it gets, and the slot
@@ -374,15 +386,53 @@ function fitPasses(root: DirNode, files: FileNode[], aspect: number): number {
     for (const f of files) {
       if (f.fits) continue;
       remaining++;
-      // Ask for the area a slot of this aspect ratio would need to hold the
-      // panel at its natural shape. Asking merely for the panel's own area is
-      // what made an earlier version of this loop fail to converge: a panel
-      // that cannot use a flat slot usually has the same area as the slot, so
-      // the correction was a few percent when a factor of three was needed.
+      // Ask for the smallest slot of this aspect that the panel could fill in
+      // *any* of the shapes it is allowed to take.
+      //
+      // That is the honest question, and it is the same one `fillSlot` answers
+      // in reverse. A panel is not a fixed rectangle: it may wrap its lines at
+      // any column width from the narrowest readable one up to its own longest
+      // line, and it may stack up to MAX_COLUMNS code columns. So the area it
+      // needs is the minimum over that set, and asking for anything else is
+      // asking for a shape it never insisted on.
+      //
+      // Two earlier versions asked for one fixed shape each, and both were
+      // wrong in opposite directions. The preferred shape overshoots on width:
+      // the preferred width of a file with long lines is several times what it
+      // needs to be readable, and a one line JSON file with a 411 character
+      // line came out with a panel of 4690 by 7350, larger than a 1661 line
+      // source file. The narrowest usable shape overshoots on height: at 24
+      // columns a 4000 line file is 16,000 rows tall, and asking for a slot
+      // that holds that in twelve columns demanded seven times the file's own
+      // area.
+      //
+      // The aspect is clamped, and that is not a safety margin, it is the
+      // difference between a correction and a runaway. The slot a file has
+      // right now is not a constraint on the slot it gets next pass: its area
+      // is about to change, so the treemap will place it somewhere else. Taken
+      // literally, a sliver asks for an absurd area, and `Math.max` keeps it
+      // for good: the same JSON file landed in a slot 42 by 1890 and
+      // extrapolated a need of 33 million from that one pass.
       const natural = panelGeometry(f.lineCols, f.maxCols);
-      const aspect = f.slotW / Math.max(1, f.slotH);
-      const need =
-        Math.max(natural.w, natural.h * aspect) * Math.max(natural.h, natural.w / aspect);
+      const raw = f.slotW / Math.max(1, f.slotH);
+      const aspect = Math.min(ASPECT_TRUST, Math.max(1 / ASPECT_TRUST, raw));
+      let need = Infinity;
+      // Widths halved down to the floor rather than every step of eight: the
+      // minimum is flat enough that three or four samples find it, and each
+      // width costs a walk over every line of the file.
+      for (let c = natural.cols; ; c = Math.max(MIN_PANEL_COLS, Math.floor(c / 16) * 8)) {
+        const rows = visualRowsCached(f.lineCols, c);
+        const pitch = c * metrics.charWidth + COLUMN_GUTTER;
+        for (let k = 1; k <= MAX_COLUMNS; k++) {
+          const w = k * pitch - COLUMN_GUTTER + 2 * metrics.panelPadX;
+          const h =
+            Math.ceil(rows / k) * metrics.lineHeight
+            + metrics.titleHeight + 2 * metrics.panelPadY;
+          const area = Math.max(w, h * aspect) * Math.max(h, w / aspect);
+          if (area < need) need = area;
+        }
+        if (c <= MIN_PANEL_COLS) break;
+      }
       f.area = Math.max(f.area, need) * 1.06;
     }
     if (remaining === 0) {
@@ -453,6 +503,27 @@ export interface LayoutStats {
    *  fewer, and if this drops far below the natural width the treemap is
    *  handing out badly shaped slots. */
   meanCols: number;
+  /**
+   * How many times larger a panel is than the file needs, at the 95th
+   * percentile and at the worst panel.
+   *
+   * Fill says how much of the canvas is panel. This says whether a panel is
+   * the size of its file, and the two can disagree: a correction loop that
+   * hands a three line file ten times the area it needs raises fill, because
+   * the waste is inside a panel rather than between panels. Fill did not
+   * notice exactly that, and read 96 percent while a one line JSON file had
+   * the second largest panel in the project.
+   *
+   * Against the preferred area rather than the text's own area on purpose. A
+   * panel is allowed to hold wide gutters between its code columns, which is
+   * what surplus slot width turns into, and that is a different question from
+   * whether the slot should have been that large at all.
+   *
+   * A percentile rather than a mean, because a mean over a thousand files
+   * hides the handful of panels anyone would notice.
+   */
+  bloatP95: number;
+  bloatMax: number;
   /** The directory with the most children among those that had an overlap,
    *  with its size in cells. Points straight at whether the integer split ran
    *  out of cells or got the arithmetic wrong. */
@@ -466,6 +537,7 @@ export function layoutStats(l: Layout): LayoutStats {
   let misfits = 0;
   let unusable = 0;
   let overflowing = 0;
+  const bloat: number[] = [];
   for (const f of l.files) {
     panelArea += f.w * f.h;
     aspectSum += f.w / Math.max(1, f.h);
@@ -473,7 +545,9 @@ export function layoutStats(l: Layout): LayoutStats {
     if (!f.fits) misfits++;
     if (!f.usable) unusable++;
     if (!f.holdsAll) overflowing++;
+    if (!f.stub) bloat.push((f.w * f.h) / Math.max(1, panelArea_(f.lineCols, f.maxCols)));
   }
+  bloat.sort((a, b) => a - b);
 
   let overlaps = 0;
   let offGrid = 0;
@@ -503,6 +577,8 @@ export function layoutStats(l: Layout): LayoutStats {
   }
 
   return {
+    bloatP95: bloat.length ? bloat[Math.floor(0.95 * (bloat.length - 1))] : 1,
+    bloatMax: bloat.length ? bloat[bloat.length - 1] : 1,
     fill: panelArea / Math.max(1, l.root.w * l.root.h),
     aspect: l.root.w / Math.max(1, l.root.h),
     misfits,

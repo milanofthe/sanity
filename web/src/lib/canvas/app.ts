@@ -229,7 +229,9 @@ export class CanvasApp {
       `overflowing ${st.overflowing} · ` +
       `overlaps ${st.overlaps} · ` +
       `offgrid ${st.offGrid} · mean aspect ${st.meanAspect.toFixed(2)} · ` +
-      `mean cols ${st.meanCols.toFixed(1)} · passes ${passesUsed} · ${(performance.now() - t0).toFixed(0)} ms` +
+      `mean cols ${st.meanCols.toFixed(1)} · ` +
+      `bloat p95 ${st.bloatP95.toFixed(2)} · bloat max ${st.bloatMax.toFixed(2)} · ` +
+      `passes ${passesUsed} · ${(performance.now() - t0).toFixed(0)} ms` +
       (st.overlaps > 0
         ? ` · worst ${st.worstOverlap.path} ${st.worstOverlap.children} kids in ` +
           `${st.worstOverlap.cellsW}x${st.worstOverlap.cellsH} cells`
