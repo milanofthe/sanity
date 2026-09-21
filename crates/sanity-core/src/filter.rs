@@ -104,52 +104,13 @@ impl Filter {
     /// Ask git which paths are marked `linguist-generated`. One call for the
     /// whole repository rather than one per file.
     pub fn load_gitattributes(&mut self, root: &Path, paths: &[String]) {
-        if paths.is_empty() {
-            return;
-        }
-        let mut child = match Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["check-attr", "--stdin", "-z", "linguist-generated"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
-        // The write has to happen on its own thread. git answers one line per
-        // path as it reads, so on a repository of any size its stdout pipe
-        // fills up long before the last path has been written; writing and
-        // reading from the same thread deadlocks both processes, which is
-        // exactly what it did on a 1508 file repo.
-        let stdin = child.stdin.take();
-        let mut buf = Vec::with_capacity(paths.iter().map(|p| p.len() + 1).sum());
-        for p in paths {
-            buf.extend_from_slice(p.as_bytes());
-            buf.push(0);
-        }
-        let writer = std::thread::spawn(move || {
-            if let Some(mut s) = stdin {
-                use std::io::Write;
-                // A broken pipe here just means git stopped early; the paths
-                // that did get through are still answered.
-                let _ = s.write_all(&buf);
-                let _ = s.flush();
-            }
-            // Dropping the handle closes the pipe, which is what tells git to
-            // stop waiting for more input.
-        });
-
-        let Ok(out) = child.wait_with_output() else {
-            let _ = writer.join();
+        let Some(stdout) =
+            git_over_stdin(root, &["check-attr", "--stdin", "-z", "linguist-generated"], paths)
+        else {
             return;
         };
-        let _ = writer.join();
         // Output is NUL separated triples: path, attribute, value.
-        let fields: Vec<&[u8]> = out.stdout.split(|&b| b == 0).collect();
+        let fields: Vec<&[u8]> = stdout.split(|&b| b == 0).collect();
         for chunk in fields.chunks(3) {
             if chunk.len() < 3 {
                 continue;
@@ -229,6 +190,73 @@ impl Filter {
     }
 }
 
+/// Feed a NUL separated path list to a git subcommand on stdin and return its
+/// stdout.
+///
+/// The write has to happen on its own thread. git answers as it reads, so on a
+/// repository of any size its stdout pipe fills up long before the last path
+/// has been written, and writing and reading from the same thread deadlocks
+/// both processes. That is exactly what it did on a 1508 file repo.
+///
+/// The exit status is deliberately not checked: `check-ignore` exits 1 when
+/// nothing matched, which is a perfectly good answer.
+fn git_over_stdin(root: &Path, args: &[&str], paths: &[String]) -> Option<Vec<u8>> {
+    if paths.is_empty() {
+        return None;
+    }
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let stdin = child.stdin.take();
+    let mut buf = Vec::with_capacity(paths.iter().map(|p| p.len() + 1).sum());
+    for p in paths {
+        buf.extend_from_slice(p.as_bytes());
+        buf.push(0);
+    }
+    let writer = std::thread::spawn(move || {
+        if let Some(mut s) = stdin {
+            use std::io::Write;
+            // A broken pipe here just means git stopped early; the paths that
+            // did get through are still answered.
+            let _ = s.write_all(&buf);
+            let _ = s.flush();
+        }
+        // Dropping the handle closes the pipe, which is what tells git to stop
+        // waiting for more input.
+    });
+
+    let out = child.wait_with_output().ok();
+    let _ = writer.join();
+    out.map(|o| o.stdout)
+}
+
+/// Which of `paths` git considers ignored.
+///
+/// Used by the watcher for paths the scan never saw: a build writing into
+/// `target/` produces thousands of events, and the only correct answer to
+/// whether they matter is git's own. Tracked files are never reported as
+/// ignored, which is what `check-ignore` does by default and what we want.
+pub fn ignored_paths(root: &Path, paths: &[String]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(stdout) = git_over_stdin(root, &["check-ignore", "--stdin", "-z"], paths) else {
+        return out;
+    };
+    for field in stdout.split(|&b| b == 0) {
+        if field.is_empty() {
+            continue;
+        }
+        out.insert(String::from_utf8_lossy(field).into_owned());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +325,31 @@ mod tests {
         assert!(!f.keep(Path::new("."), "Cargo.lock"));
         f.show_artefacts = true;
         assert!(f.keep(Path::new("."), "Cargo.lock"));
+    }
+}
+
+#[cfg(test)]
+mod ignore_tests {
+    use super::*;
+
+    #[test]
+    fn git_reports_ignored_paths_and_leaves_tracked_ones() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+        if !root.join(".git").exists() {
+            return; // A source tarball rather than a checkout.
+        }
+        let probe = vec![
+            "target/debug/whatever".to_string(),
+            "crates/sanity-core/src/filter.rs".to_string(),
+        ];
+        let ignored = ignored_paths(root, &probe);
+        assert!(ignored.contains("target/debug/whatever"), "target should be ignored");
+        assert!(!ignored.contains("crates/sanity-core/src/filter.rs"), "source is not ignored");
+    }
+
+    #[test]
+    fn an_empty_list_asks_git_nothing() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(ignored_paths(root, &[]).is_empty());
     }
 }

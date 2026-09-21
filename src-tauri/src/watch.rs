@@ -1,0 +1,363 @@
+//! File watching, debounced into batches.
+//!
+//! The renderer can rewrite one texture layer per file cheaply, so the job here
+//! is to say *which* files moved and nothing more. Two things make that less
+//! trivial than forwarding events:
+//!
+//! 1. A single save produces several events on macOS, and a `git checkout`
+//!    produces thousands. Both have to arrive as one batch, or the frontend
+//!    re-decodes the same file five times and a branch switch stutters.
+//! 2. Most of what happens under `.git` is object churn that changes nothing on
+//!    screen. Only a move of `HEAD`, the index or a ref changes what the diff
+//!    says, and that one has to be noticed, because a commit turns every warm
+//!    panel cold without any file being written.
+
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use notify::{Event, RecursiveMode, Watcher as _};
+use serde::Serialize;
+
+/// How long the batch waits for silence before it is emitted. Long enough that
+/// the three events of one save coalesce, short enough that a save feels
+/// immediate.
+const QUIET: Duration = Duration::from_millis(120);
+
+/// A batch is emitted at the latest this long after its first event, however
+/// much is still arriving. A `git checkout` of a large branch produces events
+/// for several seconds, and holding the screen stale for all of it is worse
+/// than sending two batches.
+const MAX_HOLD: Duration = Duration::from_millis(600);
+
+/// What the frontend is told.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Batch {
+    /// Files that exist and should be re-read, repository-relative.
+    pub changed: Vec<String>,
+    /// Files that are gone, repository-relative.
+    pub removed: Vec<String>,
+    /// HEAD, the index or a ref moved, so every file's diff may have changed
+    /// even if no file was written.
+    #[serde(rename = "headMoved")]
+    pub head_moved: bool,
+}
+
+impl Batch {
+    pub fn is_empty(&self) -> bool {
+        self.changed.is_empty() && self.removed.is_empty() && !self.head_moved
+    }
+}
+
+/// Accumulates paths until a batch is ready. Separated from the thread and the
+/// clock so the timing rules can be tested without sleeping.
+#[derive(Debug, Default)]
+pub struct Debounce {
+    paths: HashSet<PathBuf>,
+    head_moved: bool,
+    first: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl Debounce {
+    pub fn push_path(&mut self, path: PathBuf, now: Instant) {
+        self.paths.insert(path);
+        self.mark(now);
+    }
+
+    pub fn push_head(&mut self, now: Instant) {
+        self.head_moved = true;
+        self.mark(now);
+    }
+
+    fn mark(&mut self, now: Instant) {
+        if self.first.is_none() {
+            self.first = Some(now);
+        }
+        self.last = Some(now);
+    }
+
+    pub fn pending(&self) -> bool {
+        self.first.is_some()
+    }
+
+    /// True when the batch should go out: either nothing has arrived for
+    /// `QUIET`, or it has been filling for `MAX_HOLD`.
+    pub fn ready(&self, now: Instant) -> bool {
+        let (Some(first), Some(last)) = (self.first, self.last) else { return false };
+        now.duration_since(last) >= QUIET || now.duration_since(first) >= MAX_HOLD
+    }
+
+    /// How long to wait before asking again. `None` when nothing is pending.
+    pub fn wait(&self, now: Instant) -> Option<Duration> {
+        let (first, last) = (self.first?, self.last?);
+        let till_quiet = QUIET.saturating_sub(now.duration_since(last));
+        let till_hold = MAX_HOLD.saturating_sub(now.duration_since(first));
+        Some(till_quiet.min(till_hold))
+    }
+
+    /// Take everything accumulated, classifying each path by whether it still
+    /// exists. Existence is checked here rather than read off the event kind:
+    /// a rename arrives as a remove plus a create, an editor that writes
+    /// through a temporary file arrives as a create plus a rename, and in both
+    /// cases the event kind describes an intermediate state that is already
+    /// over by the time the batch flushes.
+    pub fn take(&mut self, root: &Path, keep: &dyn Fn(&str) -> bool) -> Batch {
+        let mut batch = Batch { head_moved: self.head_moved, ..Default::default() };
+        for path in self.paths.drain() {
+            let Some(rel) = relative(root, &path) else { continue };
+            if !keep(&rel) {
+                continue;
+            }
+            if path.is_file() {
+                batch.changed.push(rel);
+            } else if !path.is_dir() {
+                batch.removed.push(rel);
+            }
+            // A directory that appeared carries no content of its own; the
+            // files inside it arrive as their own events.
+        }
+        batch.changed.sort();
+        batch.removed.sort();
+        self.head_moved = false;
+        self.first = None;
+        self.last = None;
+        batch
+    }
+}
+
+/// Repository-relative path with forward slashes, or None if the path is not
+/// inside `root`. Forward slashes because every other path in the wire format
+/// and the layout uses them, including on Windows.
+pub fn relative(root: &Path, path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(root).ok()?;
+    if rel.as_os_str().is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for c in rel.components() {
+        match c {
+            Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+            // A path from the OS should not contain these, and if it does it is
+            // not one we can reason about.
+            _ => return None,
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// Whether a path under `.git` means the diff baseline moved.
+///
+/// Everything else in there is object and log churn that changes nothing on
+/// screen, and there is a great deal of it: a single commit writes dozens of
+/// files under `objects/`.
+pub fn git_move(rel: &str) -> bool {
+    let Some(inner) = rel.strip_prefix(".git/") else {
+        return rel == ".git";
+    };
+    // A lock file is the write in progress, not the result; acting on it reads
+    // the old state back.
+    if inner.ends_with(".lock") {
+        return false;
+    }
+    matches!(inner, "HEAD" | "ORIG_HEAD" | "MERGE_HEAD" | "index")
+        || inner.starts_with("refs/")
+        || inner == "packed-refs"
+}
+
+/// A running watch. Dropping it stops the thread and releases the OS watch.
+pub struct Watch {
+    // Held only to keep the watch alive; notify stops watching on drop.
+    _watcher: notify::RecommendedWatcher,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Start watching `root` recursively, calling `emit` once per batch.
+///
+/// `keep` decides which paths matter; it is the same filter the scan used, so a
+/// gitignored build directory does not wake the canvas.
+pub fn start<K, E>(root: PathBuf, keep: K, emit: E) -> Result<Watch, String>
+where
+    K: Fn(&str) -> bool + Send + 'static,
+    E: Fn(Batch) + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        // A send error means the receiving thread is gone, which happens on
+        // shutdown; there is nothing useful to do about it.
+        let _ = tx.send(res);
+    })
+    .map_err(|e| e.to_string())?;
+
+    watcher.watch(&root, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
+
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let thread_root = root.clone();
+
+    std::thread::Builder::new()
+        .name("sanity-watch".into())
+        .spawn(move || {
+            let mut pending = Debounce::default();
+            loop {
+                if thread_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                let timeout = pending.wait(Instant::now()).unwrap_or(Duration::from_millis(250));
+                match rx.recv_timeout(timeout) {
+                    Ok(Ok(event)) => {
+                        let now = Instant::now();
+                        for path in event.paths {
+                            let Some(rel) = relative(&thread_root, &path) else { continue };
+                            if rel == ".git" || rel.starts_with(".git/") {
+                                if git_move(&rel) {
+                                    pending.push_head(now);
+                                }
+                                continue;
+                            }
+                            pending.push_path(path, now);
+                        }
+                    }
+                    // A failed event still means something happened; the next
+                    // timeout will flush whatever was already collected.
+                    Ok(Err(_)) => {}
+                    Err(RecvTimeoutError::Timeout) => {}
+                    // The watcher was dropped.
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+                if pending.pending() && pending.ready(Instant::now()) {
+                    let batch = pending.take(&thread_root, &keep);
+                    if !batch.is_empty() {
+                        emit(batch);
+                    }
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    Ok(Watch { _watcher: watcher, stop })
+}
+
+/// The app holds at most one watch: opening a folder replaces the previous one.
+#[derive(Default)]
+pub struct WatchSlot(pub Mutex<Option<Watch>>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_relativise_with_forward_slashes() {
+        let root = Path::new("/tmp/repo");
+        assert_eq!(relative(root, Path::new("/tmp/repo/src/a.rs")).as_deref(), Some("src/a.rs"));
+        assert_eq!(relative(root, Path::new("/tmp/repo/a.rs")).as_deref(), Some("a.rs"));
+        // The root itself is not a file in the root.
+        assert_eq!(relative(root, Path::new("/tmp/repo")), None);
+        // Outside the root.
+        assert_eq!(relative(root, Path::new("/tmp/other/a.rs")), None);
+    }
+
+    #[test]
+    fn only_refs_and_head_count_as_a_git_move() {
+        assert!(git_move(".git/HEAD"));
+        assert!(git_move(".git/index"));
+        assert!(git_move(".git/ORIG_HEAD"));
+        assert!(git_move(".git/refs/heads/backend"));
+        assert!(git_move(".git/packed-refs"));
+        // Object churn is not a baseline move.
+        assert!(!git_move(".git/objects/ab/cdef"));
+        assert!(!git_move(".git/logs/HEAD"));
+        assert!(!git_move(".git/COMMIT_EDITMSG"));
+        // A lock is the write in progress; the result arrives separately.
+        assert!(!git_move(".git/index.lock"));
+        assert!(!git_move(".git/refs/heads/main.lock"));
+    }
+
+    #[test]
+    fn a_quiet_gap_releases_the_batch() {
+        let t0 = Instant::now();
+        let mut d = Debounce::default();
+        d.push_path(PathBuf::from("/tmp/repo/a.rs"), t0);
+        // Still arriving.
+        assert!(!d.ready(t0 + Duration::from_millis(50)));
+        d.push_path(PathBuf::from("/tmp/repo/b.rs"), t0 + Duration::from_millis(50));
+        assert!(!d.ready(t0 + Duration::from_millis(100)));
+        // Quiet for long enough after the last event.
+        assert!(d.ready(t0 + Duration::from_millis(50) + QUIET));
+    }
+
+    #[test]
+    fn a_continuous_stream_is_released_by_the_hold() {
+        let t0 = Instant::now();
+        let mut d = Debounce::default();
+        // An event every 10 ms never goes quiet, which is what a checkout of a
+        // large branch looks like.
+        for i in 0..200 {
+            let now = t0 + Duration::from_millis(i * 10);
+            d.push_path(PathBuf::from(format!("/tmp/repo/f{i}.rs")), now);
+            if d.ready(now) {
+                assert!(now.duration_since(t0) >= MAX_HOLD);
+                return;
+            }
+        }
+        panic!("the hold never released the batch");
+    }
+
+    #[test]
+    fn waiting_never_overshoots_either_deadline() {
+        let t0 = Instant::now();
+        let mut d = Debounce::default();
+        assert_eq!(d.wait(t0), None);
+        d.push_path(PathBuf::from("/tmp/repo/a.rs"), t0);
+        // Just after the first event, the quiet gap is the nearer deadline.
+        assert_eq!(d.wait(t0), Some(QUIET));
+        // Late in the hold, the hold is nearer.
+        let late = t0 + MAX_HOLD - Duration::from_millis(20);
+        d.push_path(PathBuf::from("/tmp/repo/b.rs"), late);
+        assert_eq!(d.wait(late), Some(Duration::from_millis(20)));
+    }
+
+    #[test]
+    fn taking_a_batch_classifies_and_resets() {
+        let dir = std::env::temp_dir().join(format!("sanity-watch-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/there.rs"), b"fn main() {}\n").unwrap();
+
+        let mut d = Debounce::default();
+        let now = Instant::now();
+        d.push_path(dir.join("src/there.rs"), now);
+        d.push_path(dir.join("src/gone.rs"), now);
+        d.push_path(dir.join("src/ignored.rs"), now);
+        d.push_head(now);
+
+        let batch = d.take(&dir, &|rel: &str| rel != "src/ignored.rs");
+        assert_eq!(batch.changed, vec!["src/there.rs"]);
+        assert_eq!(batch.removed, vec!["src/gone.rs"]);
+        assert!(batch.head_moved);
+
+        // A taken batch leaves nothing behind, or the next one would repeat it.
+        assert!(!d.pending());
+        assert!(d.take(&dir, &|_| true).is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn duplicate_events_for_one_save_collapse() {
+        let mut d = Debounce::default();
+        let now = Instant::now();
+        // What one save actually looks like on macOS.
+        for _ in 0..5 {
+            d.push_path(PathBuf::from("/tmp/repo-none/src/a.rs"), now);
+        }
+        assert_eq!(d.paths.len(), 1);
+    }
+}

@@ -5,6 +5,7 @@
 //! without a WebView.
 
 pub mod filter;
+pub mod git;
 pub mod lang;
 pub mod scan;
 pub mod tokenize;

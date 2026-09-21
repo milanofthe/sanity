@@ -2,16 +2,20 @@
 //! contains lives in `sanity-core`, and this file only moves bytes between
 //! that crate and the webview.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
-use sanity_core::filter::{Filter, Reason, Verdict};
+mod watch;
+
+use sanity_core::filter::{self as core_filter, Filter, Reason, Verdict};
+use sanity_core::git::{self, Baseline};
 use sanity_core::scan::{self, ScannedFile};
-use sanity_core::wire::{encode, FLAG_BINARY};
+use sanity_core::wire::{encode, FileData, FLAG_BINARY};
 use serde::Serialize;
 use tauri::ipc::Response;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 /// One file in the scan result, as the layout needs it.
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +56,11 @@ pub struct ScanResult {
     pub groups: Vec<GroupInfo>,
     /// Files skipped as binary, reported so the count adds up in the UI.
     pub binary: u32,
+    /// Files with at least one changed line against the baseline.
+    pub changed: u32,
+    /// Which baseline the change state was computed against, echoed back so
+    /// the UI states what it is showing rather than guessing.
+    pub baseline: String,
     #[serde(rename = "elapsedMs")]
     pub elapsed_ms: u32,
 }
@@ -59,14 +68,44 @@ pub struct ScanResult {
 /// The scan is kept in memory so payload requests do not re-read the tree.
 /// A repository's line and span data is around 30 bytes per line, so a 200k
 /// line project is a few megabytes: cheap enough to hold whole.
-#[derive(Default)]
 pub struct Repo {
     root: PathBuf,
     payloads: Vec<(String, Vec<u8>)>,
+    /// Decoded payloads, kept so a git re-query can rewrite `line_state`
+    /// without reading and tokenizing the tree again. Roughly the same size
+    /// as `payloads`, which is a few megabytes for a large project.
+    data: Vec<(String, FileData)>,
+    /// Line count per path, which `git::line_changes` needs to size its
+    /// per-line arrays.
+    line_counts: HashMap<String, u32>,
+    /// The filter the scan used, kept so the watcher classifies new files the
+    /// same way rather than by a second set of rules.
+    filter: Filter,
+    /// Every path the scan produced. A watch event for one of these needs no
+    /// further question; anything else has to be asked about.
+    known: HashSet<String>,
+    /// The baseline in force, so a watch-driven refresh uses the same one the
+    /// scan did without the frontend having to repeat it.
+    baseline: Baseline,
+}
+
+impl Default for Repo {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::new(),
+            payloads: Vec::new(),
+            data: Vec::new(),
+            line_counts: HashMap::new(),
+            filter: Filter::new(),
+            known: HashSet::new(),
+            baseline: Baseline::Head,
+        }
+    }
 }
 
 pub struct AppState {
     repo: Mutex<Repo>,
+    watch: watch::WatchSlot,
 }
 
 /// 90th percentile of non-blank line widths.
@@ -98,7 +137,12 @@ fn reason_text(r: Reason) -> String {
 
 /// Scan a folder: enumerate, read, classify, and encode every payload.
 #[tauri::command]
-async fn scan_repo(path: String, state: State<'_, AppState>) -> Result<ScanResult, String> {
+async fn scan_repo(
+    path: String,
+    baseline: Option<String>,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ScanResult, String> {
     let started = std::time::Instant::now();
     let root = PathBuf::from(&path);
     if !root.is_dir() {
@@ -120,9 +164,12 @@ async fn scan_repo(path: String, state: State<'_, AppState>) -> Result<ScanResul
     let mut groups: Vec<GroupInfo> = Vec::new();
     let mut binary = 0u32;
 
+    let mut data: Vec<(String, FileData)> = Vec::with_capacity(listed.len());
+    let mut line_counts: HashMap<String, u32> = HashMap::with_capacity(listed.len());
+
     for rel in &listed {
-        let Some((data, info)) = scan::read_file(&root, rel) else { continue };
-        if data.flags & FLAG_BINARY != 0 {
+        let Some((data_one, info)) = scan::read_file(&root, rel) else { continue };
+        if data_one.flags & FLAG_BINARY != 0 {
             binary += 1;
             continue;
         }
@@ -135,11 +182,21 @@ async fn scan_repo(path: String, state: State<'_, AppState>) -> Result<ScanResul
         files.push(FileInfo {
             path: rel.clone(),
             line_count: info.line_count,
-            max_cols: width_percentile(&data.line_cols, 0.9),
+            max_cols: width_percentile(&data_one.line_cols, 0.9),
             clip_cols: info.max_cols,
             artefact,
         });
-        payloads.push((rel.clone(), encode(&data)));
+        line_counts.insert(rel.clone(), info.line_count);
+        data.push((rel.clone(), data_one));
+    }
+
+    // Change state is stamped in after reading, not during: it takes two git
+    // invocations for the whole repository rather than one per file, and it
+    // needs the line counts the read produced.
+    let baseline = baseline.as_deref().map(parse_baseline).unwrap_or(Baseline::Head);
+    let changed = apply_changes(&root, baseline, &line_counts, &mut data);
+    for (rel, data_one) in &data {
+        payloads.push((rel.clone(), encode(data_one)));
     }
 
     groups.sort_by(|a, b| b.lines.cmp(&a.lines));
@@ -149,12 +206,35 @@ async fn scan_repo(path: String, state: State<'_, AppState>) -> Result<ScanResul
         files,
         groups,
         binary,
+        changed,
+        baseline: baseline_name(baseline).to_string(),
         elapsed_ms: started.elapsed().as_millis() as u32,
     };
 
-    let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
-    repo.root = root;
-    repo.payloads = payloads;
+    {
+        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+        repo.root = root.clone();
+        repo.payloads = payloads;
+        repo.data = data;
+        repo.known = line_counts.keys().cloned().collect();
+        repo.line_counts = line_counts;
+        repo.filter = filter.clone();
+        repo.baseline = baseline;
+    }
+
+    // Watching is what turns a snapshot into a monitor, so it starts with the
+    // scan rather than on a separate call. A folder that cannot be watched is
+    // still perfectly viewable, so a failure here is reported and not fatal.
+    match start_watch(&app, &root, filter) {
+        Ok(w) => {
+            // Replacing the previous watch drops it, which releases the OS
+            // watch on the folder that is no longer open.
+            *state.watch.0.lock().map_err(|e| e.to_string())? = Some(w);
+        }
+        Err(e) => {
+            let _ = app.emit("sanity://watch-failed", e);
+        }
+    }
 
     Ok(result)
 }
@@ -219,6 +299,243 @@ pub fn pack_payloads(payloads: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> 
         out.extend_from_slice(b);
     }
     Ok(out)
+}
+
+/// Which baseline the frontend asked for. Unknown or absent means HEAD, the
+/// answer to "what am I doing right now", which is what a monitor wants by
+/// default.
+fn parse_baseline(name: &str) -> Baseline {
+    match name {
+        "branch" | "mergeBase" | "merge-base" => Baseline::MergeBase,
+        _ => Baseline::Head,
+    }
+}
+
+fn baseline_name(b: Baseline) -> &'static str {
+    match b {
+        Baseline::Head => "head",
+        Baseline::MergeBase => "branch",
+    }
+}
+
+/// Stamp git's per-line change state into already-read payloads.
+///
+/// Returns the number of files that carry at least one changed line. A folder
+/// that is not a repository leaves every state at `Unchanged`, which is the
+/// correct answer rather than an error: sanity opens folders, and only some of
+/// them have history.
+fn apply_changes(
+    root: &Path,
+    baseline: Baseline,
+    line_counts: &HashMap<String, u32>,
+    data: &mut [(String, FileData)],
+) -> u32 {
+    if !git::is_repo(root) {
+        return 0;
+    }
+    let changes = git::line_changes(root, baseline, line_counts);
+    let mut changed = 0u32;
+    for (rel, file) in data.iter_mut() {
+        let n = file.line_count();
+        match changes.get(rel) {
+            Some(c) if c.lines.iter().any(|&s| s != 0) => {
+                // The diff was computed from the same read, but a file can be
+                // written between the two git calls, so the length is fitted
+                // rather than trusted.
+                file.line_state.clear();
+                file.line_state.extend_from_slice(&c.lines[..c.lines.len().min(n)]);
+                file.line_state.resize(n, 0);
+                changed += 1;
+            }
+            _ => {
+                // Reset rather than leave: on a re-query a file that was
+                // changed and is now committed has to go cold.
+                if file.line_state.iter().any(|&s| s != 0) {
+                    file.line_state.clear();
+                    file.line_state.resize(n, 0);
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// Re-read the given files and hand back their payloads.
+///
+/// This is the path the watcher uses. It re-reads only what changed, but it
+/// re-queries git for the whole repository, because one edit moves the diff of
+/// nothing else while one commit moves the diff of everything, and telling the
+/// two apart costs more than the query.
+#[tauri::command]
+async fn refresh_files(
+    paths: Vec<String>,
+    baseline: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
+    let (root, mut line_counts, held) = {
+        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        (repo.root.clone(), repo.line_counts.clone(), repo.baseline)
+    };
+    // The baseline is remembered from the scan, so the watcher does not have
+    // to carry it through every event.
+    let baseline = baseline.as_deref().map(parse_baseline).unwrap_or(held);
+    if root.as_os_str().is_empty() {
+        return Err("no folder open".into());
+    }
+
+    let mut fresh: Vec<(String, FileData)> = Vec::with_capacity(paths.len());
+    for rel in &paths {
+        // Containment, as everywhere a path arrives from outside.
+        let full = root.join(rel);
+        let Ok(canonical) = full.canonicalize() else { continue };
+        let Ok(root_canonical) = root.canonicalize() else { continue };
+        if !canonical.starts_with(&root_canonical) {
+            continue;
+        }
+        let Some((data_one, info)) = scan::read_file(&root, rel) else { continue };
+        if data_one.flags & FLAG_BINARY != 0 {
+            continue;
+        }
+        line_counts.insert(rel.clone(), info.line_count);
+        fresh.push((rel.clone(), data_one));
+    }
+
+    apply_changes(&root, baseline, &line_counts, &mut fresh);
+
+    let out: Vec<(String, Vec<u8>)> =
+        fresh.iter().map(|(rel, d)| (rel.clone(), encode(d))).collect();
+
+    // Keep the held copy in step, so a later full payload request does not
+    // hand back what was true before the edit.
+    {
+        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+        repo.line_counts = line_counts;
+        for (rel, d) in fresh {
+            match repo.data.iter_mut().find(|(p, _)| *p == rel) {
+                Some(slot) => slot.1 = d,
+                None => repo.data.push((rel.clone(), d)),
+            }
+            let bytes = out.iter().find(|(p, _)| *p == rel).map(|(_, b)| b.clone());
+            if let Some(bytes) = bytes {
+                match repo.payloads.iter_mut().find(|(p, _)| *p == rel) {
+                    Some(slot) => slot.1 = bytes,
+                    None => repo.payloads.push((rel, bytes)),
+                }
+            }
+        }
+    }
+
+    Ok(Response::new(pack_payloads(&out)?))
+}
+
+/// Re-query git for every held file and return the payloads whose change state
+/// moved. Used when HEAD moves: a commit or a checkout changes the baseline for
+/// files that were never written.
+#[tauri::command]
+async fn refresh_changes(
+    baseline: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
+    let (root, line_counts, mut data, held) = {
+        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        (repo.root.clone(), repo.line_counts.clone(), repo.data.clone(), repo.baseline)
+    };
+    let baseline = baseline.as_deref().map(parse_baseline).unwrap_or(held);
+    if root.as_os_str().is_empty() {
+        return Err("no folder open".into());
+    }
+
+    let before: Vec<Vec<u8>> = data.iter().map(|(_, d)| d.line_state.clone()).collect();
+    apply_changes(&root, baseline, &line_counts, &mut data);
+
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    for (i, (rel, d)) in data.iter().enumerate() {
+        if before[i] != d.line_state {
+            out.push((rel.clone(), encode(d)));
+        }
+    }
+
+    {
+        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+        for (rel, bytes) in &out {
+            if let Some(slot) = repo.payloads.iter_mut().find(|(p, _)| p == rel) {
+                slot.1 = bytes.clone();
+            }
+        }
+        repo.data = data;
+        repo.baseline = baseline;
+    }
+
+    Ok(Response::new(pack_payloads(&out)?))
+}
+
+/// Start watching the open folder and forward each batch to the webview.
+fn start_watch(app: &tauri::AppHandle, root: &Path, filter: Filter) -> Result<watch::Watch, String> {
+    let handle = app.clone();
+    // The watch thread only gets the cheap, pure part of the decision. Whether
+    // an unseen path is gitignored needs git, and asking per event would mean a
+    // process per keystroke; it is asked once per batch instead, below.
+    let keep = move |rel: &str| filter.keep(Path::new(""), rel);
+
+    watch::start(root.to_path_buf(), keep, move |batch| {
+        let batch = settle_batch(&handle, batch);
+        if batch.is_empty() {
+            return;
+        }
+        // An emit failure means the window is gone, which is not something to
+        // recover from in a watch callback.
+        let _ = handle.emit("sanity://changed", batch);
+    })
+}
+
+/// Drop the paths in a batch that the open folder does not contain.
+///
+/// Paths the scan already produced pass straight through. The rest go to git in
+/// one call, because a build writing into an ignored directory produces
+/// thousands of events and the only correct answer to whether they matter is
+/// git's own.
+fn settle_batch(app: &tauri::AppHandle, mut batch: watch::Batch) -> watch::Batch {
+    let state: State<'_, AppState> = app.state();
+    let (root, known) = match state.repo.lock() {
+        Ok(repo) => (repo.root.clone(), repo.known.clone()),
+        Err(_) => return watch::Batch::default(),
+    };
+
+    let unknown: Vec<String> = batch
+        .changed
+        .iter()
+        .chain(batch.removed.iter())
+        .filter(|p| !known.contains(*p))
+        .cloned()
+        .collect();
+    let ignored = core_filter::ignored_paths(&root, &unknown);
+
+    batch.changed.retain(|p| !ignored.contains(p));
+    // A removed path that was never known is nothing to report either way.
+    batch.removed.retain(|p| known.contains(p));
+    batch
+}
+
+/// Stop watching. Used when the window closes or a folder is closed without
+/// another being opened.
+#[tauri::command]
+async fn stop_watch(state: State<'_, AppState>) -> Result<(), String> {
+    *state.watch.0.lock().map_err(|e| e.to_string())? = None;
+    Ok(())
+}
+
+/// Forget a file that is gone, so a later full payload request does not hand
+/// back something that no longer exists.
+#[tauri::command]
+async fn drop_files(paths: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+    for path in &paths {
+        repo.payloads.retain(|(p, _)| p != path);
+        repo.data.retain(|(p, _)| p != path);
+        repo.line_counts.remove(path);
+        repo.known.remove(path);
+    }
+    Ok(())
 }
 
 /// Open a file in an external editor.
@@ -358,7 +675,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            app.manage(AppState { repo: Mutex::new(Repo::default()) });
+            app.manage(AppState {
+                repo: Mutex::new(Repo::default()),
+                watch: watch::WatchSlot::default(),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -366,7 +686,11 @@ pub fn run() {
             repo_payloads,
             file_text,
             startup,
-            open_in_editor
+            open_in_editor,
+            refresh_files,
+            refresh_changes,
+            stop_watch,
+            drop_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running sanity");
