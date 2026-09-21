@@ -59,6 +59,18 @@ const OVERVIEW_STRIDE = 10;
 const SPAN_STRIDE = 6;
 const GLYPH_STRIDE = 6;
 
+/**
+ * The single hairline used for every separation inside a panel: its border,
+ * the rule under its header, and the rules between its code columns.
+ *
+ * One device pixel at full strength, whatever the zoom. Defined once because
+ * these three were drawn from three places with three different weights, and a
+ * border at full opacity next to a separator at 0.85 reads as two kinds of
+ * line for no reason: a panel's edge and the divisions inside it are the same
+ * kind of statement and should look it.
+ */
+const HAIRLINE_PX = 1;
+
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
 
@@ -478,6 +490,14 @@ export class Scene {
       hovered ? this.pal.surface.accent : this.pal.surface.panelBgAlt,
       hovered ? 0.3 : 1, 0, 0,
     );
+    // Rule along the header's bottom edge, in the foreground pass so the code
+    // below cannot paint over it. Same hairline as the border and the column
+    // rules, so the header reads as part of the same frame.
+    const rule = HAIRLINE_PX / Math.max(zoom, 1e-6);
+    this.pushRect(
+      this.fgRects, n.x, n.y + metrics.titleHeight - rule, n.w, rule,
+      this.pal.surface.border, 1, 0, 0,
+    );
     if (fade <= 0.004) return;
 
     const room = Math.floor((n.w - 2 * metrics.panelPadX) / metrics.charWidth);
@@ -579,15 +599,12 @@ export class Scene {
     if (height <= 0) return;
     // One device pixel whatever the zoom: a rule in world units would vanish
     // zoomed out and turn heavy zoomed in.
-    const w = 1 / zoom;
+    const w = HAIRLINE_PX / Math.max(zoom, 1e-6);
 
     for (let c = 1; c < g.columns; c++) {
       // Centre of the gutter between column c-1 and column c.
       const x = n.x + textOriginX + c * g.pitch - COLUMN_GUTTER / 2 - w / 2;
-      this.pushRect(
-        this.bgRects, x, top, w, height,
-        this.pal.surface.border, 0.85, 0, 0,
-      );
+      this.pushRect(this.bgRects, x, top, w, height, this.pal.surface.border, 1, 0, 0);
     }
   }
 
@@ -614,7 +631,9 @@ export class Scene {
     // belongs in the gutter; how recent it is belongs on the border.
     const hot = f.heat > 0.02;
     const border = hot ? this.pal.surface.heat : this.pal.surface.border;
-    const borderPx = hot ? 1 + 2 * f.heat : 1;
+    // A recently changed file thickens and warms its border; otherwise this is
+    // the same hairline as everything else in the panel.
+    const borderPx = hot ? HAIRLINE_PX + 2 * f.heat : HAIRLINE_PX;
     // Transparent fill, so this draws only the outline over what is there.
     this.pushRect(this.fgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 0, border, borderPx);
   }

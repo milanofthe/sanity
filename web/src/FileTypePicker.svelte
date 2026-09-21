@@ -125,6 +125,16 @@
 		   the same column. */
 		--mode-w: 116px;
 	}
+	/* The column headings are one label each, so they share one style. The
+	   `.col-num` rule below also matched them, which put FILES and LINES in
+	   monospace at a larger size than TYPE beside them. */
+	.head > span {
+		font-family: inherit;
+		font-size: inherit;
+		font-weight: inherit;
+		letter-spacing: inherit;
+		color: inherit;
+	}
 	.head {
 		font-family: var(--font-ui);
 		font-size: var(--fs-xxs);

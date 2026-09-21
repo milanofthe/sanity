@@ -35,8 +35,14 @@ export interface LodBands {
 const DEFAULT_BANDS: LodBands = {
   tokensFrom: 1.8,
   tokensTo: 3.2,
-  textFrom: 12,
-  textTo: 17,
+  // Text is fully up at twelve pixels per line, which is where the em box is
+  // about ten pixels and the code plainly readable. The band used to run from
+  // twelve to seventeen, so at zoom 1 the glyphs were only forty percent in
+  // and the bars still dominated text you could already read. The question is
+  // not when glyphs become legible but when they become more useful than
+  // bars, and that is as soon as they are legible at all.
+  textFrom: 8,
+  textTo: 12,
 };
 
 /**
