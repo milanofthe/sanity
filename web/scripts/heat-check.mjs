@@ -43,8 +43,21 @@ await page.waitForFunction(
   null,
   { timeout: 180000 },
 );
-await page.evaluate(() => window.__sanity.zoomTo(3 / 14));
+// A zoom where a good number of panels are on screen with visible borders.
+// Picking a fixed zoom made this brittle: panels grew when wrapping landed,
+// so the same zoom showed a handful of them and touching them moved almost no
+// pixels. Search for a zoom that puts enough panels in view instead.
+const visible = await page.evaluate(async () => {
+  const app = window.__sanity.app;
+  for (const ppl of [6, 4.5, 3, 2, 1.4, 1]) {
+    window.__sanity.zoomTo(ppl / 14);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    if (app.stats.visibleFiles >= 20) return app.stats.visibleFiles;
+  }
+  return app.stats.visibleFiles;
+});
 await page.waitForTimeout(700);
+console.log(`${visible} panels in view`);
 
 const pixelDiff = (a, b) => {
   const A = decodePng(a);
@@ -61,9 +74,17 @@ const pixelDiff = (a, b) => {
 };
 
 const before = await page.screenshot({ type: 'png' });
+// Only the panels actually on screen: touching one off screen cannot change a
+// pixel, and counting it would let the check pass on nothing.
 const touched = await page.evaluate(() => {
   const app = window.__sanity.app;
-  const paths = [...app.scene.files.keys()].filter((_, i) => i % 4 === 0);
+  const [vx0, vy0, vx1, vy1] = app.cam.visibleRect(0);
+  const paths = [];
+  for (const f of app.scene.files.values()) {
+    const n = f.node;
+    if (n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0) continue;
+    paths.push(n.path);
+  }
   for (const path of paths) app.touch(path);
   return paths.length;
 });
@@ -74,27 +95,51 @@ const changed = pixelDiff(before, after);
 console.log(`touched ${touched} files, ${changed} pixels changed`);
 
 let failures = 0;
-if (changed < 500) {
+// Roughly a border's worth of pixels per touched panel; well under what a
+// real change produces, well over noise.
+if (changed < touched * 4) {
   console.log('FAIL  marking files as changed produced no visible difference');
   failures++;
 } else {
   console.log('ok    recency glow reacts to a change');
 }
 
-// And it has to fade: a glow that never decays is a permanent highlight.
-const decayed = await page.evaluate(() => {
+// The heat itself, on the panels that were touched rather than on whichever
+// file happens to be first in the map: only the visible ones were touched.
+const heat = await page.evaluate(() => {
   const app = window.__sanity.app;
-  const first = [...app.scene.files.values()][0];
-  const was = first.heat;
-  // Heat decays over timing.heatDecay seconds of frames; step it directly.
-  for (const f of app.scene.files.values()) f.heat = 0.5;
-  return was;
+  const [vx0, vy0, vx1, vy1] = app.cam.visibleRect(0);
+  let hot = 0;
+  let max = 0;
+  for (const f of app.scene.files.values()) {
+    const n = f.node;
+    if (n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0) continue;
+    if (f.heat > 0) hot++;
+    max = Math.max(max, f.heat);
+  }
+  return { hot, max };
 });
-if (decayed <= 0) {
-  console.log('FAIL  touch did not set any heat');
+if (heat.hot === 0) {
+  console.log('FAIL  touch set no heat on any visible panel');
   failures++;
 } else {
-  console.log(`ok    touch set heat (${decayed})`);
+  console.log(`ok    ${heat.hot} visible panels are hot (max ${heat.max.toFixed(2)})`);
+}
+
+// And it has to fade, or the glow is a permanent highlight rather than a
+// recency signal. Heat decays per frame over timing.heatDecay seconds.
+const faded = await page.evaluate(async () => {
+  const app = window.__sanity.app;
+  const before = Math.max(...[...app.scene.files.values()].map((f) => f.heat));
+  await new Promise((r) => setTimeout(r, 900));
+  const after = Math.max(...[...app.scene.files.values()].map((f) => f.heat));
+  return { before, after };
+});
+if (faded.after >= faded.before) {
+  console.log(`FAIL  heat did not decay (${faded.before} -> ${faded.after})`);
+  failures++;
+} else {
+  console.log(`ok    heat decays (${faded.before.toFixed(3)} -> ${faded.after.toFixed(3)})`);
 }
 
 await browser.close();

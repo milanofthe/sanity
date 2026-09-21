@@ -46,6 +46,9 @@ export interface FileEntry {
   /** Longest line, where text may be clipped. Defaults to `maxCols` when a
    *  source does not distinguish them. */
   clipCols?: number;
+  /** Width of every line, for working out how tall the file is once its long
+   *  lines wrap. Without it the layout falls back to one row per line. */
+  lineCols?: ArrayLike<number>;
   /** When set, the file is laid out as a fixed-size stub: present in the
    *  structure, not drawn. Files that should not appear at all are filtered
    *  out before they get here. */
@@ -59,6 +62,7 @@ export interface FileNode {
   lineCount: number;
   maxCols: number;
   clipCols: number;
+  lineCols: ArrayLike<number>;
   geom: PanelGeometry;
   /** Laid out as a fixed-size placeholder rather than drawn. */
   stub: boolean;
@@ -68,6 +72,9 @@ export interface FileNode {
   /** False when the panel is too narrow to draw at all. The layout check
    *  asserts this is never false. */
   usable: boolean;
+  /** False when the panel is too short for its own wrapped rows, so some of
+   *  its lines have nowhere to go. Also asserted. */
+  holdsAll: boolean;
   /** Treemap weight: the area this file needs. Corrected by the fitting
    *  passes when the shape it was given turns out to need more. */
   area: number;
@@ -129,6 +136,9 @@ function buildTree(entries: FileEntry[]): DirNode {
       }
       parent = d;
     }
+    // A source without widths gets a flat profile, which reduces to the old
+    // one-row-per-line behaviour rather than breaking.
+    const lineCols = e.lineCols ?? new Uint16Array(e.lineCount).fill(e.maxCols);
     parent.children.push({
       kind: 'file',
       name: fileName,
@@ -136,11 +146,15 @@ function buildTree(entries: FileEntry[]): DirNode {
       lineCount: e.lineCount,
       maxCols: e.maxCols,
       clipCols: Math.max(e.clipCols ?? e.maxCols, e.maxCols),
-      geom: e.stub ? stubGeometry() : panelGeometry(e.lineCount, e.maxCols),
+      lineCols,
+      geom: e.stub ? stubGeometry() : panelGeometry(lineCols, e.maxCols),
       stub: Boolean(e.stub),
       fits: true,
       usable: true,
-      area: e.stub ? stubArea() : panelArea(e.lineCount, e.maxCols),
+      holdsAll: true,
+      // The treemap weight: a stub's fixed box, or the area the file needs
+      // once its long lines have wrapped.
+      area: e.stub ? stubArea() : panelArea(lineCols, e.maxCols),
       slotW: 0,
       slotH: 0,
       x: 0,
@@ -222,17 +236,19 @@ function placeFile(f: FileNode, slot: IntRect): void {
     f.h = Math.min(h, f.geom.h);
     f.fits = true;
     f.usable = true;
+    f.holdsAll = true;
     return;
   }
 
   // The panel is the slot. Everything about its text layout is derived from
   // the rectangle it was given, which is what makes the edges align.
-  const fit = fillSlot(f.lineCount, f.clipCols, w, h);
+  const fit = fillSlot(f.lineCols, f.clipCols, w, h);
   f.geom = fit;
   f.w = w;
   f.h = h;
   f.fits = fit.ok;
   f.usable = fit.usable;
+  f.holdsAll = fit.holdsAll;
 }
 
 function placeDir(dir: DirNode, slot: IntRect): void {
@@ -279,7 +295,10 @@ function collect(dir: DirNode, files: FileNode[], dirs: DirNode[]): void {
 }
 
 /** How many times to re-run the subdivision with corrected areas. */
-const FIT_PASSES = 14;
+// Raised from 14 when wrapping arrived: a wrapped panel is taller than its
+// line count suggests, so the first area estimate is further off and the loop
+// needs a few more turns to settle. It still stops as soon as nothing misfits.
+const FIT_PASSES = 22;
 
 /**
  * Lay out once, then correct.
@@ -308,7 +327,7 @@ function fitPasses(root: DirNode, files: FileNode[]): number {
       // what made an earlier version of this loop fail to converge: a panel
       // that cannot use a flat slot usually has the same area as the slot, so
       // the correction was a few percent when a factor of three was needed.
-      const natural = panelGeometry(f.lineCount, f.maxCols);
+      const natural = panelGeometry(f.lineCols, f.maxCols);
       const aspect = f.slotW / Math.max(1, f.slotH);
       const need =
         Math.max(natural.w, natural.h * aspect) * Math.max(natural.h, natural.w / aspect);
@@ -361,6 +380,8 @@ export interface LayoutStats {
   misfits: number;
   /** Panels too narrow to draw. This one has to be zero. */
   unusable: number;
+  /** Panels too short for their own wrapped content. Also has to be zero. */
+  overflowing: number;
   /** Sibling pairs that overlap. Must be zero: the treemap tiles exactly, so
    *  anything here means the integer split lost or double-counted a cell. */
   overlaps: number;
@@ -385,12 +406,14 @@ export function layoutStats(l: Layout): LayoutStats {
   let colsSum = 0;
   let misfits = 0;
   let unusable = 0;
+  let overflowing = 0;
   for (const f of l.files) {
     panelArea += f.w * f.h;
     aspectSum += f.w / Math.max(1, f.h);
     colsSum += f.geom.cols;
     if (!f.fits) misfits++;
     if (!f.usable) unusable++;
+    if (!f.holdsAll) overflowing++;
   }
 
   let overlaps = 0;
@@ -425,6 +448,7 @@ export function layoutStats(l: Layout): LayoutStats {
     aspect: l.root.w / Math.max(1, l.root.h),
     misfits,
     unusable,
+    overflowing,
     overlaps,
     offGrid,
     dirCount: l.dirs.length,

@@ -76,6 +76,9 @@ for (const cfg of CASES) {
   if (num('offgrid') !== 0) problems.push(`offgrid=${num('offgrid')}`);
   // misfits are cosmetic (a panel narrower than preferred); unusable is not.
   if (num('unusable') !== 0) problems.push(`unusable=${num('unusable')}`);
+  // Lines with nowhere to go: the wrapping equivalent of clipping, and just
+  // as much a loss of content.
+  if (num('overflowing') !== 0) problems.push(`overflowing=${num('overflowing')}`);
   if (fill < MIN_FILL) problems.push(`fill=${(fill * 100).toFixed(1)}% < ${MIN_FILL * 100}%`);
   // The pass count is reported, not asserted: the pathological case converges
   // on its last allowed pass, and the layout it produces is still valid. What

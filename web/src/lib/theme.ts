@@ -73,6 +73,9 @@ const OVERVIEW_OVERRIDES: Partial<Record<number, string>> = {
   9: '--ov-punctuation',
 };
 
+/** The theme's six data hues, which everything coloured derives from. */
+const DATA_VARS = ['--data-1', '--data-2', '--data-3', '--data-4', '--data-5', '--data-6'];
+
 const SURFACE_VARS = {
   bg: '--canvas-bg',
   panelBg: '--panel-bg',
@@ -112,6 +115,16 @@ export interface Palette {
   /** Same, damped, for the overview textures. */
   overview: number[];
   surface: Record<SurfaceKey, number>;
+  /**
+   * The theme's data hues, for anything that needs a colour per category:
+   * directory frames pick one by path hash.
+   *
+   * Picking from the palette rather than rotating a hue by hash is what keeps
+   * those frames inside the theme. Rotation produced colours the palette never
+   * contained, so a scheme built from six chosen hues grew frames in six
+   * arbitrary others, and a monochrome scheme grew a rainbow.
+   */
+  data: number[];
 }
 
 /**
@@ -173,6 +186,7 @@ export function readPalette(): Palette {
     token,
     overview,
     surface,
+    data: DATA_VARS.map(resolve),
     dirTint: readNumber('--dir-tint', 0.55),
     dirWash: readNumber('--dir-wash', 0.1),
   };

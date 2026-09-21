@@ -13,6 +13,7 @@
 // layout from it, so the panel ends up exactly the size of its slot.
 
 import { columns as colBounds, metrics } from '$lib/metrics';
+import { visualRowsCached } from './wrap';
 
 /** Width divided by height a panel aims for when nothing constrains it.
  *  Treemap slots come out close to square, so that is what to aim at. */
@@ -106,8 +107,8 @@ export function panelCols(maxCols: number): number {
 /** Treemap weight for a file: the exact outer area of the panel in its
  *  preferred shape, padding, title bar and line quantization included. A
  *  fudge factor here shows up directly as panels overflowing their slots. */
-export function panelArea(lineCount: number, maxCols: number): number {
-  const g = panelGeometry(lineCount, maxCols);
+export function panelArea(lineCols: ArrayLike<number>, maxCols: number): number {
+  const g = panelGeometry(lineCols, maxCols);
   return g.w * g.h;
 }
 
@@ -138,10 +139,20 @@ export function panelArea(lineCount: number, maxCols: number): number {
  * chasing a few pathological files forever.
  */
 export interface SlotFit extends PanelGeometry {
-  /** Reached the preferred column width; false asks for another fitting pass. */
+  /** Reached the preferred column width *and* has room for every wrapped row;
+   *  false asks the layout for another fitting pass with more area. */
   ok: boolean;
   /** Wide enough to be worth drawing at all. This is the invariant. */
   usable: boolean;
+  /**
+   * Every wrapped row fits in `columns * linesPerColumn`.
+   *
+   * Separate from `usable` because they fail for opposite reasons: a panel can
+   * be perfectly readable and still too short for its own content, which is
+   * what happened when wrapping first landed. A fifth of the lines wrapped,
+   * the panels did not grow to match, and 3557 lines fell off the bottom.
+   */
+  holdsAll: boolean;
 }
 
 /** Characters of code a column keeps before a line-number margin is worth
@@ -155,11 +166,11 @@ export function numberColsFor(lineCount: number, availableCols: number): number 
 }
 
 export function fillSlot(
-  lineCount: number, clipCols: number, slotW: number, slotH: number,
+  lineCols: ArrayLike<number>, clipCols: number, slotW: number, slotH: number,
 ): SlotFit {
   const innerW = slotW - 2 * metrics.panelPadX;
   const innerH = slotH - metrics.titleHeight - 2 * metrics.panelPadY;
-  const lines = Math.max(1, lineCount);
+  const lineCount = Math.max(1, lineCols.length);
 
   if (innerW < metrics.charWidth * HARD_MIN_COLS || innerH < metrics.lineHeight) {
     return {
@@ -172,13 +183,44 @@ export function fillSlot(
       h: slotH,
       ok: false,
       usable: false,
+      holdsAll: false,
     };
   }
 
   // Exact, not rounded: the slot is a whole number of cells and a cell is one
   // line tall, so the division comes out even.
   const linesPerColumn = Math.max(1, Math.floor(innerH / metrics.lineHeight));
-  const columns = Math.max(1, Math.ceil(lines / linesPerColumn));
+
+  // How many columns the file needs depends on how many rows it takes, which
+  // depends on how wide a column is, which depends on how many columns there
+  // are. Iterate to a fixed point, starting from the unwrapped count.
+  //
+  // `textWidthAt` has to apply exactly the caps the final width does, or the
+  // loop reasons about a column that will not exist. It did not at first: it
+  // used the raw available width while the result was capped at the file's
+  // longest line, so a file of 120 character lines was counted as if its
+  // columns were wider than they are, came out at two columns where it needed
+  // four, and lost a third of itself off the bottom.
+  const widthFor = (n: number) =>
+    Math.floor((innerW + COLUMN_GUTTER) / n / metrics.charWidth) * metrics.charWidth;
+  const capWidth = Math.max(PREFERRED_MIN_COLS, Math.min(MAX_PANEL_COLS, clipCols));
+  const textWidthAt = (n: number) => {
+    const avail = Math.floor((widthFor(n) - COLUMN_GUTTER) / metrics.charWidth);
+    const margin = numberColsFor(lineCount, avail);
+    return Math.max(colBounds.hardMin, Math.min(avail - margin, capWidth));
+  };
+
+  let columns = Math.max(1, Math.ceil(lineCount / linesPerColumn));
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const rows = visualRowsCached(lineCols, textWidthAt(columns));
+    const next = Math.min(MAX_COLUMNS, Math.max(1, Math.ceil(rows / linesPerColumn)));
+    if (next === columns) break;
+    // Only ever widen: alternating between two counts would never settle, and
+    // the row count only grows as columns get narrower.
+    if (next < columns) break;
+    columns = next;
+  }
+
   if (columns > MAX_COLUMNS) {
     return {
       cols: PREFERRED_MIN_COLS,
@@ -190,14 +232,14 @@ export function fillSlot(
       h: slotH,
       ok: false,
       usable: false,
+      holdsAll: false,
     };
   }
 
   // Snap the column pitch to whole characters, so every code column of every
   // panel starts on the same lattice. Whatever does not divide evenly is left
   // at the right edge rather than spread into fractional offsets.
-  const pitch = Math.floor((innerW + COLUMN_GUTTER) / columns / metrics.charWidth)
-    * metrics.charWidth;
+  const pitch = widthFor(columns);
   const available = Math.floor((pitch - COLUMN_GUTTER) / metrics.charWidth);
 
   // Cap the text width at the file's longest line, so surplus slot width
@@ -211,8 +253,17 @@ export function fillSlot(
   // because the alternative is a column too narrow to read.
   const numberCols = numberColsFor(lineCount, available);
   const forText = available - numberCols;
+  // No clipping cap any more: a line longer than the column wraps into the
+  // next row rather than losing its tail. The width is still bounded by the
+  // file's own longest line, so surplus slot width becomes gutter instead of
+  // columns with room for two hundred characters holding lines of sixty.
   const wanted = Math.max(PREFERRED_MIN_COLS, Math.min(MAX_PANEL_COLS, clipCols));
-  const cols = Math.min(forText, wanted);
+  const cols = Math.max(colBounds.hardMin, Math.min(forText, wanted));
+
+  // Rows the file actually needs at the width it ended up with, against the
+  // rows the panel has room for.
+  const neededRows = visualRowsCached(lineCols, cols);
+  const holdsAll = columns * linesPerColumn >= neededRows;
 
   return {
     cols,
@@ -222,17 +273,23 @@ export function fillSlot(
     pitch,
     w: slotW,
     h: slotH,
-    ok: available >= PREFERRED_MIN_COLS,
+    ok: available >= PREFERRED_MIN_COLS && holdsAll,
     usable: available >= HARD_MIN_COLS,
+    holdsAll,
   };
 }
 
-export function panelGeometry(lineCount: number, maxCols: number): PanelGeometry {
+export function panelGeometry(
+  lineCols: ArrayLike<number>, maxCols: number,
+): PanelGeometry {
   const cols = Math.min(
     MAX_PANEL_COLS,
     Math.max(MIN_PANEL_COLS, quantize(Math.max(1, maxCols), 8)),
   );
-  const lines = Math.max(1, lineCount);
+  // Rows once wrapped at that width, not the raw line count: a file of long
+  // lines is taller than its line count suggests, and sizing it by the count
+  // is what made the treemap hand out slots its panel could not fill.
+  const lines = Math.max(1, visualRowsCached(lineCols, cols));
 
   // n^2 = aspect * lines * lineHeight / (cols * charWidth), from solving
   // (n * colWidth) / (lines / n * lineHeight) = aspect for n.

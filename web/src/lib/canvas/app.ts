@@ -125,8 +125,18 @@ export class CanvasApp {
     this.hovered = null;
     this.decoded.clear();
 
+    // Decode first: the layout needs each file's line widths to work out how
+    // many screen rows it takes once its long lines wrap, and wrapping is what
+    // decides a panel's height.
+    for (const e of source.entries) {
+      const buf = source.payload(e.path);
+      if (buf) this.decoded.set(e.path, decodeFile(buf));
+    }
+
     const t0 = performance.now();
-    this.layout = computeLayout(source.entries);
+    this.layout = computeLayout(
+      source.entries.map((e) => ({ ...e, lineCols: this.decoded.get(e.path)?.lineCols })),
+    );
     const st = layoutStats(this.layout);
     this.fill = st.fill;
     // Logged rather than hidden: fill, overlaps and off-grid edges are the
@@ -135,6 +145,7 @@ export class CanvasApp {
     console.log(
       `layout: fill ${(st.fill * 100).toFixed(1)}% · aspect ${st.aspect.toFixed(2)} · ` +
       `${st.dirCount} dirs · misfits ${st.misfits} · unusable ${st.unusable} · ` +
+      `overflowing ${st.overflowing} · ` +
       `overlaps ${st.overlaps} · ` +
       `offgrid ${st.offGrid} · mean aspect ${st.meanAspect.toFixed(2)} · ` +
       `mean cols ${st.meanCols.toFixed(1)} · passes ${passesUsed} · ${(performance.now() - t0).toFixed(0)} ms` +
@@ -143,11 +154,6 @@ export class CanvasApp {
           `${st.worstOverlap.cellsW}x${st.worstOverlap.cellsH} cells`
         : ''),
     );
-
-    for (const e of source.entries) {
-      const buf = source.payload(e.path);
-      if (buf) this.decoded.set(e.path, decodeFile(buf));
-    }
 
     this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
     this.pending = this.layout.files.map((f) => f.path);

@@ -16,6 +16,7 @@ import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canva
 import {
   columnPitch, columnWidth, COLUMN_GUTTER, textIndent, textOriginX, textOriginY,
 } from '$lib/canvas/layout/panel';
+import { lineAtRow, wrapOffsets } from '$lib/canvas/layout/wrap';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { GlyphAtlas } from './glyphatlas';
 import { OverviewTextures, type Slot } from './codetex';
@@ -38,6 +39,15 @@ export interface SceneFile {
   node: FileNode;
   data: FileData;
   slot: Slot;
+  /**
+   * Screen row each source line starts on, at this panel's column width.
+   *
+   * Cached per file because every drawing pass walks screen rows and has to
+   * map back to source lines, and recomputing a prefix sum over a 20,000 line
+   * file per frame would undo the point of the level-of-detail system. Rebuilt
+   * whenever the layout changes the width.
+   */
+  rows: Uint32Array;
   /** Recency of the last change, 1 right after an edit, decaying to 0. */
   heat: number;
   /** Aggregate git state of the file, drives the panel border. */
@@ -101,73 +111,62 @@ function compactCount(n: number): string {
 }
 
 /**
- * A stable hue per directory path, in turns.
+ * A stable palette index per directory path.
  *
- * Hashed rather than assigned in tree order so that a directory keeps its
- * colour when siblings are added or removed. The golden-ratio step spreads
- * adjacent hash values far apart, which matters because sibling directories
- * often share a prefix.
+ * Hashed rather than assigned in tree order so a directory keeps its colour
+ * when siblings are added or removed. The golden-ratio step spreads adjacent
+ * hash values apart, which matters because sibling directories often share a
+ * long prefix.
  */
-function dirHue(path: string): number {
+function dirColourIndex(path: string, count: number): number {
   let h = 2166136261;
   for (let i = 0; i < path.length; i++) {
     h ^= path.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  return (((h >>> 0) / 4294967296) * 0.6180339887) % 1;
+  const t = (((h >>> 0) / 4294967296) * 0.6180339887) % 1;
+  return Math.min(count - 1, Math.floor(t * count));
 }
 
 /**
- * Rotate a colour towards a hue, keeping its luminance.
+ * Blend `base` towards `target` by `amount`, keeping base's luminance.
  *
- * The base colour comes from the theme, so a tint stays inside the theme's
- * range instead of introducing saturation the palette never asked for: at
- * `amount` 0 it is the theme colour exactly.
- *
- * Matching the luminance by scaling the hue's channels, which is what this did
- * first, works only when the target is darker than the hue. On a light theme
- * the border colour is far brighter than a saturated blue, so the scale factor
- * ran past one, the channels clipped, and the result came out as a band of
- * fluorescent magenta. Lightening towards white instead of scaling keeps the
- * luminance and cannot clip.
+ * Both colours come from the theme, so the result cannot leave the theme's
+ * range. Matching the luminance by scaling the target's channels only works
+ * when the target is brighter; where it is darker the blend is lifted towards
+ * white instead, because scaling up clips and a clipped channel is how the
+ * light themes grew a band of fluorescent magenta.
  */
-function tintFor(base: number, hue: number, amount: number): number {
+function mixToward(base: number, target: number, amount: number): number {
+  if (amount <= 0) return base;
   const [br, bg, bb] = rgb(base);
+  const [tr0, tg0, tb0] = rgb(target);
   const lum = 0.2126 * br + 0.7152 * bg + 0.0722 * bb;
+  const tlum = 0.2126 * tr0 + 0.7152 * tg0 + 0.0722 * tb0;
 
-  // Hue to RGB at full saturation.
-  const k = (n: number) => (n + hue * 6) % 6;
-  const f = (n: number) => {
-    const t = k(n);
-    return Math.max(0, Math.min(1, Math.min(t, 4 - t, 1)));
-  };
-  let hr = f(5);
-  let hg = f(3);
-  let hb = f(1);
-
-  const hlum = 0.2126 * hr + 0.7152 * hg + 0.0722 * hb;
-  if (hlum <= 0) {
+  let tr = tr0;
+  let tg = tg0;
+  let tb = tb0;
+  if (tlum <= 0) {
     return base;
   }
-  if (hlum < lum) {
-    // Too dark for the target: lift towards white, which raises luminance
-    // without any channel leaving the unit range.
-    const t = Math.min(1, (lum - hlum) / (1 - hlum));
-    hr += (1 - hr) * t;
-    hg += (1 - hg) * t;
-    hb += (1 - hb) * t;
+  if (tlum < lum) {
+    const k = Math.min(1, (lum - tlum) / (1 - tlum));
+    tr += (1 - tr) * k;
+    tg += (1 - tg) * k;
+    tb += (1 - tb) * k;
   } else {
-    // Too bright: scaling down is safe, nothing can exceed one.
-    const scale = lum / hlum;
-    hr *= scale;
-    hg *= scale;
-    hb *= scale;
+    const scale = lum / tlum;
+    tr *= scale;
+    tg *= scale;
+    tb *= scale;
   }
 
-  const mix = (b: number, h: number) =>
-    Math.max(0, Math.min(255, Math.round(255 * (b * (1 - amount) + h * amount))));
-  return (mix(br, hr) << 16) | (mix(bg, hg) << 8) | mix(bb, hb);
+  const mix = (b: number, t: number) =>
+    Math.max(0, Math.min(255, Math.round(255 * (b * (1 - amount) + t * amount))));
+  return (mix(br, tr) << 16) | (mix(bg, tg) << 8) | mix(bb, tb);
 }
+
 
 export class Scene {
   private gl: GL;
@@ -254,7 +253,7 @@ export class Scene {
     this.textures.setColors(pal.overview);
     for (const f of this.files.values()) {
       if (f.node.stub) continue;
-      this.textures.write(f.slot, f.data, f.node.geom.cols);
+      this.textures.write(f.slot, f.data, f.node.geom.cols, f.rows);
     }
     this.textures.finalize();
   }
@@ -266,11 +265,15 @@ export class Scene {
       this.files.set(node.path, {
         node, data,
         slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0 },
+        rows: new Uint32Array(1),
         heat: 0, state: LineState.Unchanged,
       });
       return;
     }
-    const slot = this.textures.allocate(data.lineCount);
+    const rows = wrapOffsets(data.lineCols, node.geom.cols);
+    // The texture is as tall as the file is on screen, wrapped rows included,
+    // so a row of the texture is a row of the panel either way.
+    const slot = this.textures.allocate(rows[data.lineCount]);
     node.layer = slot.layer;
     let state: LineState = LineState.Unchanged;
     for (let i = 0; i < data.lineState.length; i++) {
@@ -279,8 +282,8 @@ export class Scene {
         break;
       }
     }
-    this.textures.write(slot, data, node.geom.cols);
-    this.files.set(node.path, { node, data, slot, heat: 0, state });
+    this.textures.write(slot, data, node.geom.cols, rows);
+    this.files.set(node.path, { node, data, slot, rows, heat: 0, state });
   }
 
   /** Called when the watcher reports a file changed on disk. */
@@ -289,7 +292,10 @@ export class Scene {
     if (!f) return;
     if (data) {
       f.data = data;
-      if (!f.node.stub) this.textures.write(f.slot, data, f.node.geom.cols);
+      if (!f.node.stub) {
+        f.rows = wrapOffsets(data.lineCols, f.node.geom.cols);
+        this.textures.write(f.slot, data, f.node.geom.cols, f.rows);
+      }
     }
     f.heat = 1;
   }
@@ -419,12 +425,14 @@ export class Scene {
    * saturated thing on screen.
    */
   private pushDir(d: DirNode, zoom: number): void {
-    const hue = dirHue(d.path);
+    // One of the theme's own hues, chosen by path hash, so a directory's
+    // frame is a colour the scheme actually contains.
+    const hue = this.pal.data[dirColourIndex(d.path, this.pal.data.length)];
     // Tint strength is a theme token: a monochrome palette sets it to zero and
     // gets depth from the wash alone, which is what it wants.
     const wash = this.pal.dirWash + 0.04 * (d.depth % 3);
-    const tint = tintFor(this.pal.surface.dirBg, hue, wash);
-    const edge = tintFor(this.pal.surface.borderStrong, hue, this.pal.dirTint);
+    const tint = mixToward(this.pal.surface.dirBg, hue, wash);
+    const edge = mixToward(this.pal.surface.borderStrong, hue, this.pal.dirTint);
 
     // Thicker the further out, so the nesting is readable at a glance. A
     // uniform hairline made a four-level tree look flat, and a border in world
@@ -666,15 +674,18 @@ export class Scene {
     const pitch = columnPitch(g);
     const colW = columnWidth(g);
     const colHeight = g.linesPerColumn * metrics.lineHeight;
+    // Screen rows, wrapped lines included, which is what the texture holds
+    // and what the columns are filled with.
+    const totalRows = f.rows[n.lineCount];
 
     for (let c = 0; c < g.columns; c++) {
       const first = c * g.linesPerColumn;
-      if (first >= n.lineCount) break;
-      const last = Math.min(n.lineCount, first + g.linesPerColumn);
+      if (first >= totalRows) break;
+      const last = Math.min(totalRows, first + g.linesPerColumn);
       // The texture holds the file as a single column, so each code column
       // samples its own slice of the v range.
-      const v0 = (first / n.lineCount) * vTotal;
-      const v1 = (last / n.lineCount) * vTotal;
+      const v0 = (first / totalRows) * vTotal;
+      const v1 = (last / totalRows) * vTotal;
       const h = ((last - first) / g.linesPerColumn) * colHeight;
 
       const o = b.alloc();
@@ -723,14 +734,23 @@ export class Scene {
    * has to skip it, and having `visibleRuns` return the text origin rather
    * than the column origin means none of them can forget.
    */
+  /**
+   * Which screen rows of which code columns of this file are on screen.
+   *
+   * Rows rather than source lines, because a wrapped line occupies several
+   * rows and the passes lay out by row. `colX` is where the column's text
+   * begins, past the line-number margin, so no pass can forget the margin.
+   */
   private *visibleRuns(
     f: SceneFile, vx0: number, vy0: number, vx1: number, vy1: number,
-  ): Generator<[column: number, colX: number, first: number, last: number]> {
+  ): Generator<[column: number, colX: number, firstRow: number, lastRow: number]> {
     const g = f.node.geom;
     const pitch = columnPitch(g);
     const colW = columnWidth(g);
     const yBase = f.node.y + textOriginY;
     const indent = textIndent(g);
+    const totalRows = f.rows[f.data.lineCount];
+
     for (let c = 0; c < g.columns; c++) {
       const colX = f.node.x + textOriginX + c * pitch + indent;
       if (colX > vx1 || colX + colW < vx0) continue;
@@ -741,10 +761,27 @@ export class Scene {
       );
       if (rowTo < rowFrom) continue;
       const first = c * g.linesPerColumn + rowFrom;
-      const last = Math.min(f.data.lineCount - 1, c * g.linesPerColumn + rowTo);
+      const last = Math.min(totalRows - 1, c * g.linesPerColumn + rowTo);
       if (last < first) continue;
       yield [c, colX, first, last];
     }
+  }
+
+  /**
+   * The source line and wrap index at a screen row, and the row's y offset
+   * within its column.
+   */
+  private rowInfo(f: SceneFile, row: number, column: number) {
+    const line = lineAtRow(f.rows, row);
+    return {
+      line,
+      /** Which wrapped row of that line this is, 0 for the first. */
+      wrap: row - f.rows[line],
+      y:
+        f.node.y +
+        textOriginY +
+        (row - column * f.node.geom.linesPerColumn) * metrics.lineHeight,
+    };
   }
 
   private pushSpans(
@@ -753,29 +790,32 @@ export class Scene {
   ): void {
     const b = this.spans;
     const d0 = f.data;
-    const yBase = f.node.y + textOriginY;
     const g = f.node.geom;
     const h = metrics.lineHeight * spanBarHeight(pxPerLine);
     const yOff = (metrics.lineHeight - h) * 0.5;
 
-    for (const [c, colX, first, last] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
-      for (let i = first; i <= last; i++) {
-        const y = yBase + (i - c * g.linesPerColumn) * metrics.lineHeight + yOff;
-        const s0 = d0.spanStart[i];
-        const s1 = d0.spanStart[i + 1];
+    for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      for (let row = firstRow; row <= lastRow; row++) {
+        const { line, wrap, y } = this.rowInfo(f, row, c);
+        // The character range of the source line that lands on this row.
+        const from = wrap * g.cols;
+        const to = from + g.cols;
+        const s0 = d0.spanStart[line];
+        const s1 = d0.spanStart[line + 1];
         for (let s = s0; s < s1; s++) {
           const p = d0.spans[s];
           const col = spanCol(p);
-          if (col >= g.cols) break;
-          // Clip to the column: the panel is the size of its slot, so a line
-          // longer than the columns available has to stop at the edge rather
-          // than bleed into the neighbouring panel.
-          const len = Math.min(spanLen(p), g.cols - col);
+          const end = col + spanLen(p);
+          // Clip the span to this row's slice rather than to the column: a
+          // span that starts before the slice continues into it.
+          if (end <= from || col >= to) continue;
+          const lo = Math.max(col, from);
+          const hi = Math.min(end, to);
           const o = b.alloc();
           const dd = b.data;
-          dd[o] = colX + col * metrics.charWidth;
-          dd[o + 1] = y;
-          dd[o + 2] = len * metrics.charWidth;
+          dd[o] = colX + (lo - from) * metrics.charWidth;
+          dd[o + 1] = y + yOff;
+          dd[o + 2] = (hi - lo) * metrics.charWidth;
           dd[o + 3] = h;
           dd[o + 4] = spanKind(p);
           dd[o + 5] = fade;
@@ -817,11 +857,14 @@ export class Scene {
     // The layout decides whether there is a margin at all; see numberColsFor.
     if (g.numberCols === 0) return;
 
-    const yBase = f.node.y + textOriginY;
-    for (const [c, colX, first, last] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
-      for (let i = first; i <= last; i++) {
-        const y = yBase + (i - c * g.linesPerColumn) * metrics.lineHeight;
-        const label = String(i + 1);
+    for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      for (let row = firstRow; row <= lastRow; row++) {
+        const { line, wrap, y } = this.rowInfo(f, row, c);
+        // Continuation rows carry no number: the number belongs to the source
+        // line, and repeating it would claim there are more lines than there
+        // are.
+        if (wrap !== 0) continue;
+        const label = String(line + 1);
         // Right-aligned against the text, inside the reserved margin.
         const x = colX - (label.length + 1) * metrics.charWidth;
         this.pushText(label, x, y, UiInk.Path, fade * 0.7, label.length);
@@ -834,29 +877,32 @@ export class Scene {
   ): void {
     const b = this.glyphs;
     const g = f.node.geom;
-    const yBase = f.node.y + textOriginY;
     const em = metrics.charWidth / this.atlas.advanceRatio;
     const d0 = f.data;
 
-    for (const [c, colX, first, last] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
-      for (let i = first; i <= last; i++) {
-        const text = this.text.lineText(f.node.path, i);
+    for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      for (let row = firstRow; row <= lastRow; row++) {
+        const { line, wrap, y } = this.rowInfo(f, row, c);
+        const text = this.text.lineText(f.node.path, line);
         if (!text) continue;
-        const y = yBase + (i - c * g.linesPerColumn) * metrics.lineHeight;
-        const s0 = d0.spanStart[i];
-        const s1 = d0.spanStart[i + 1];
+        const from = wrap * g.cols;
+        const to = from + g.cols;
+        const s0 = d0.spanStart[line];
+        const s1 = d0.spanStart[line + 1];
         for (let s = s0; s < s1; s++) {
           const p = d0.spans[s];
           const col = spanCol(p);
-          if (col >= g.cols) break;
-          const len = Math.min(spanLen(p), g.cols - col);
+          const end = col + spanLen(p);
+          if (end <= from || col >= to) continue;
           const kind = spanKind(p);
-          for (let k = 0; k < len; k++) {
-            const idx = GlyphAtlas.index(text.charCodeAt(col + k));
+          const lo = Math.max(col, from);
+          const hi = Math.min(end, to);
+          for (let k = lo; k < hi; k++) {
+            const idx = GlyphAtlas.index(text.charCodeAt(k));
             if (idx < 0) continue;
             const o = b.alloc();
             const dd = b.data;
-            dd[o] = colX + (col + k) * metrics.charWidth;
+            dd[o] = colX + (k - from) * metrics.charWidth;
             dd[o + 1] = y;
             dd[o + 2] = idx;
             dd[o + 3] = kind;
@@ -906,28 +952,23 @@ export class Scene {
    *  the moment lines are resolvable at all, which is the point: you should be
    *  able to see where the repo is moving without zooming in. */
   private pushGutter(f: SceneFile, vy0: number, vy1: number): void {
-    const g = f.node.geom;
-    const yBase = f.node.y + textOriginY;
-    const pitch = columnPitch(g);
-    const indent = textIndent(g);
     const w = Math.max(2, metrics.charWidth * 0.4);
+    const [vx0, vx1] = [-Infinity, Infinity];
 
-    for (let c = 0; c < g.columns; c++) {
-      const colX = f.node.x + textOriginX + c * pitch + indent;
-      const rowFrom = Math.max(0, Math.floor((vy0 - yBase) / metrics.lineHeight));
-      const rowTo = Math.min(g.linesPerColumn - 1, Math.ceil((vy1 - yBase) / metrics.lineHeight));
-      for (let r = rowFrom; r <= rowTo; r++) {
-        const i = c * g.linesPerColumn + r;
-        if (i >= f.data.lineCount) break;
-        const st = f.data.lineState[i];
+    for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      for (let row = firstRow; row <= lastRow; row++) {
+        const { line, wrap, y } = this.rowInfo(f, row, c);
+        // One marker per source line, on its first row: a wrapped line is one
+        // change, not three.
+        if (wrap !== 0) continue;
+        const st = f.data.lineState[line];
         if (st === LineState.Unchanged) continue;
         const color =
           st === LineState.Added ? this.pal.surface.added
             : st === LineState.Modified ? this.pal.surface.modified
               : this.pal.surface.deleted;
         this.pushRect(
-          this.fgRects, colX - w - 1, yBase + r * metrics.lineHeight,
-          w, metrics.lineHeight, color, 0.85, 0, 0,
+          this.fgRects, colX - w - 1, y, w, metrics.lineHeight, color, 0.85, 0, 0,
         );
       }
     }

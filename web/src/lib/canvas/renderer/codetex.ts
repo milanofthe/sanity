@@ -151,13 +151,13 @@ export class OverviewTextures {
    * rather than snapping on or off, which is the difference between a stable
    * image and one that crawls while zooming.
    */
-  write(slot: Slot, f: FileData, panelCols: number): void {
+  write(slot: Slot, f: FileData, panelCols: number, rows: Uint32Array): void {
     const { gl } = this;
     const cls = this.classes[slot.classIdx];
     const tw = overview.texCols;
     const th = cls.texRows;
-    const rows = slot.texRows;
-    const texels = tw * rows;
+    const texelRows = slot.texRows;
+    const texels = tw * texelRows;
 
     const acc = this.acc;
     const cov = this.cov;
@@ -165,21 +165,29 @@ export class OverviewTextures {
     cov.fill(0, 0, texels);
 
     const scaleX = tw / Math.max(1, panelCols);
-    const lineCount = Math.max(1, f.lineCount);
-    const rowsPerLine = rows / lineCount;
-    // How many source lines share one texel row, at least one.
-    const linesPerRow = Math.max(1, lineCount / rows);
+    // Screen rows, not source lines: a wrapped line occupies several rows on
+    // the panel, and the texture has to agree with the panel about which row
+    // holds what, or the overview would not line up with the token geometry it
+    // fades into.
+    const screenRows = Math.max(1, rows[f.lineCount]);
+    const texelsPerRow = texelRows / screenRows;
+    // How many screen rows share one texel row, at least one.
+    const perTexel = Math.max(1, screenRows / texelRows);
 
     for (let i = 0; i < f.lineCount; i++) {
-      const ty = Math.min(rows - 1, (i * rowsPerLine) | 0);
-      const rowBase = ty * tw;
+      const lineRow = rows[i];
       const s0 = f.spanStart[i];
       const s1 = f.spanStart[i + 1];
       for (let s = s0; s < s1; s++) {
         const packed = f.spans[s];
         const kind = spanKind(packed);
         const c = this.kindRgb[kind] ?? this.kindRgb[0];
-        const x0 = spanCol(packed) * scaleX;
+        const col = spanCol(packed);
+        // Which wrapped row this span sits on, and where within it.
+        const wrapRow = panelCols > 0 ? Math.floor(col / panelCols) : 0;
+        const ty = Math.min(texelRows - 1, ((lineRow + wrapRow) * texelsPerRow) | 0);
+        const rowBase = ty * tw;
+        const x0 = (panelCols > 0 ? col % panelCols : col) * scaleX;
         const x1 = Math.min(tw, x0 + spanLen(packed) * scaleX);
         if (x1 <= x0) continue;
         const tx0 = x0 | 0;
@@ -212,7 +220,7 @@ export class OverviewTextures {
       out[o] = Math.min(255, (acc[a] / k) * 255) | 0;
       out[o + 1] = Math.min(255, (acc[a + 1] / k) * 255) | 0;
       out[o + 2] = Math.min(255, (acc[a + 2] / k) * 255) | 0;
-      out[o + 3] = Math.min(255, (k / linesPerRow) * 255) | 0;
+      out[o + 3] = Math.min(255, (k / perTexel) * 255) | 0;
     }
 
     const chunk = cls.chunks[slot.chunkIdx];
@@ -221,7 +229,7 @@ export class OverviewTextures {
     // end of a short file included, so reducing cannot pull in whatever a
     // previous occupant of the layer left behind.
     const full = new Uint8Array(tw * th * 4);
-    full.set(out.subarray(0, tw * rows * 4));
+    full.set(out.subarray(0, tw * texelRows * 4));
 
     gl.texSubImage3D(
       gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot.layer,
