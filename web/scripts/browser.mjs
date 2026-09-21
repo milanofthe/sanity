@@ -155,16 +155,44 @@ export async function frameOnScreen(page) {
 }
 
 /** Number of pixels that differ between two PNG screenshots. */
-export function pixelDiff(decodePng, a, b, threshold = 20) {
+/**
+ * Where the canvas sits in the window, in CSS pixels.
+ *
+ * Needed by anything that turns a world position into a screenshot position.
+ * The camera works in canvas coordinates and a screenshot is of the whole
+ * window, so the two differ by the toolbar above the canvas and nothing warns
+ * you: a rect built without this lands 34 pixels up, and at the outermost zoom
+ * a panel is 14 pixels tall, so the sample window ends up on a different file
+ * altogether. Two checks got this wrong before it lived here.
+ */
+export async function canvasBox(page) {
+  return page.evaluate(() => {
+    const b = document.querySelector('canvas').getBoundingClientRect();
+    return { x: b.x, y: b.y, w: b.width, h: b.height };
+  });
+}
+
+export function pixelDiff(decodePng, a, b, threshold = 20, rect = null) {
   const A = decodePng(a);
   const B = decodePng(b);
+  // `rect` in device pixels, clamped to the image. Without it a check that
+  // means "this panel changed" passes on anything anywhere on screen, and a
+  // relayout moves everything, so the count is large whatever happened to the
+  // panel. With it the count is about the panel it named.
+  const x0 = rect ? Math.max(0, Math.floor(rect.x)) : 0;
+  const y0 = rect ? Math.max(0, Math.floor(rect.y)) : 0;
+  const x1 = rect ? Math.min(A.width, Math.ceil(rect.x + rect.w)) : A.width;
+  const y1 = rect ? Math.min(A.height, Math.ceil(rect.y + rect.h)) : A.height;
   let changed = 0;
-  for (let i = 0; i < A.data.length; i += 4) {
-    const d =
-      Math.abs(A.data[i] - B.data[i]) +
-      Math.abs(A.data[i + 1] - B.data[i + 1]) +
-      Math.abs(A.data[i + 2] - B.data[i + 2]);
-    if (d > threshold) changed++;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * A.width + x) * 4;
+      const d =
+        Math.abs(A.data[i] - B.data[i]) +
+        Math.abs(A.data[i + 1] - B.data[i + 1]) +
+        Math.abs(A.data[i + 2] - B.data[i + 2]);
+      if (d > threshold) changed++;
+    }
   }
   return changed;
 }

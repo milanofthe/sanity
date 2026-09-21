@@ -39,18 +39,32 @@ const fail = (msg) => {
 };
 
 // A zoom where the bands are drawn at all: they come up with the token bars.
-await page.evaluate(() => {
-  const app = window.__sanity.app;
-  for (const f of app.scene.files.values()) {
-    if (f.node.stub) continue;
-    if (f.data.lineCount < 120) continue;
-    app.cam.x = f.node.x + f.node.w / 2;
-    app.cam.y = f.node.y + f.node.h / 2;
-    app.cam.zoom = 5 / 14;
-    window.__sanity.target = f.node.path;
-    return;
-  }
-});
+//
+// Set here and again before the measurement at the end. A change relayouts the
+// project and the app refits the camera when the new layout no longer fits the
+// old view, so the zoom set at the start does not necessarily survive the
+// edit: about one run in three came back at the fit zoom, where the panel is
+// fourteen pixels wide, and the check reported a missing band rather than a
+// camera that had moved.
+const ZOOM = 5 / 14;
+
+/** Put the camera on the target panel, and pick the target on the first call. */
+const place = async () =>
+  page.evaluate((zoom) => {
+    const app = window.__sanity.app;
+    for (const f of app.scene.files.values()) {
+      if (f.node.stub) continue;
+      if (f.data.lineCount < 120) continue;
+      if (window.__sanity.target && f.node.path !== window.__sanity.target) continue;
+      app.cam.x = f.node.x + f.node.w / 2;
+      app.cam.y = f.node.y + f.node.h / 2;
+      app.cam.zoom = zoom;
+      window.__sanity.target = f.node.path;
+      return;
+    }
+  }, ZOOM);
+
+await place();
 await settled(page);
 await frameOnScreen(page);
 
@@ -93,14 +107,44 @@ await page.evaluate((path) => {
   };
 }, target);
 
+// Placed again: between the first call and here the fixture finishes loading
+// its text, which reopens the scene and refits the camera.
+await place();
+await settled(page);
+await frameOnScreen(page);
 const before = await page.screenshot({ type: 'png' });
 
 // Cut eight lines out of the middle and watch what happens.
-const started = await page.evaluate((path) => {
+//
+// Not out of the exact middle. A pure deletion leaves its mark on the one line
+// the removed run used to sit above, and the band is drawn across that line's
+// text, so how many pixels it covers is how long that line is. Cutting at the
+// centre of this file landed the seam on a closing brace, five columns wide,
+// and the check failed on sixteen pixels while the band was drawn exactly as
+// intended. It was measuring the length of an arbitrary line of vendored code.
+// So the cut moves to the nearest position whose seam line has something on
+// it, and the width it asserts on is a width it chose.
+const CUT = 8;
+const seam = await page.evaluate(
+  ([path, count]) => {
+    const cols = window.__sanity.app.scene.files.get(path).data.lineCols;
+    const mid = Math.floor(cols.length / 2);
+    for (let d = 0; d < mid - count - 1; d++) {
+      for (const from of [mid + d, mid - d]) {
+        if (from < 1 || from + count >= cols.length) continue;
+        if (cols[from + count] >= 30) return { from, cols: cols[from + count] };
+      }
+    }
+    return { from: mid, cols: cols[mid + count] };
+  },
+  [target, CUT],
+);
+console.log(`cutting ${CUT} lines at ${seam.from}, seam lands on a line of ${seam.cols} columns`);
+
+const started = await page.evaluate(([path, mid, count]) => {
   const app = window.__sanity.app;
   const f = app.scene.files.get(path);
-  const mid = Math.floor(f.data.lineCount / 2);
-  const next = window.__sanity.spliced(mid, 8);
+  const next = window.__sanity.spliced(mid, count);
   const linesBefore = f.data.lineCount;
   app.touch(path, next);
   return {
@@ -113,7 +157,7 @@ const started = await page.evaluate((path) => {
     removed: f.change?.removedRows.length ?? 0,
     added: f.change?.addedRows.length ?? 0,
   };
-}, target);
+}, [target, seam.from, CUT]);
 console.log(
   `${started.linesBefore} lines -> ${started.linesAfter}, phase ${started.phase}, ` +
     `${started.removed} removed and ${started.added} added, showing ${started.showing}`,
@@ -122,7 +166,7 @@ console.log(
 if (started.phase !== 'remove') fail(`the change started in phase ${started.phase}, not remove`);
 else console.log('ok    a change starts by taking the old lines away');
 
-if (started.removed !== 8) fail(`${started.removed} lines reported removed, expected 8`);
+if (started.removed !== CUT) fail(`${started.removed} lines reported removed, expected ${CUT}`);
 else console.log('ok    the diff found exactly the lines that were cut');
 
 if (started.showing !== started.linesBefore) {
@@ -187,7 +231,68 @@ if (marked.lines === 0) {
 }
 
 // And it has to be on screen, not only in the data.
+//
+// The camera goes to the marked row, and the diff is restricted to it. Two
+// things were wrong with comparing whole screenshots from where the camera
+// happened to be. A change relayouts the project, so the panel does not stay
+// put; and a panel taller than the viewport shows only a band of its rows,
+// while a pure deletion marks the single line the removed run sat above, which
+// is wherever it is. Centred on the panel, that line was off screen: the
+// check read 57 pixels of frame-to-frame noise against a bar of 200 and
+// reported a band that was drawn exactly as intended. The row's world
+// position comes from the renderer's own row mapping rather than from
+// arithmetic repeated here, which would drift the moment the layout changes.
+const rect = await page.evaluate(([path, zoom]) => {
+  const app = window.__sanity.app;
+  const sc = app.scene;
+  const f = sc.files.get(path);
+  app.cam.zoom = zoom;
+  let line = -1;
+  for (let i = 0; i < f.data.lineState.length; i++) {
+    if (f.data.lineState[i] !== 0) {
+      line = i;
+      break;
+    }
+  }
+  const row = f.rows[line];
+  const col = Math.floor(row / f.node.geom.linesPerColumn);
+  sc.rowInfo(f, row, col);
+  app.cam.x = f.node.x + f.node.w / 2;
+  app.cam.y = sc.riY;
+  app.invalidate();
+  const dpr = app.cam.dpr;
+  const [px] = app.cam.worldToScreen(f.node.x, f.node.y);
+  const [, ry] = app.cam.worldToScreen(f.node.x, sc.riY);
+  // The camera works in canvas coordinates and a screenshot is of the whole
+  // window, so the canvas origin has to be added. Without it the rect sat 34
+  // pixels too high, the height of the toolbar, and the check read zero while
+  // the band was on screen one row below the window it was looking at.
+  const box = document.querySelector('canvas').getBoundingClientRect();
+  // The marked line and the row below it, since a wrapped line keeps its band
+  // on every row it occupies.
+  return {
+    line,
+    row,
+    col,
+    x: (box.x + px) * dpr,
+    y: (box.y + ry - 2) * dpr,
+    w: f.node.w * app.cam.zoom * dpr,
+    // Two rows tall. From the zoom just set rather than from the renderer's
+    // stats, which describe the frame before it.
+    h: (2 * 14 * zoom + 4) * dpr,
+  };
+}, [target, ZOOM]);
+await settled(page);
 await frameOnScreen(page);
+console.log(
+  `marked line ${rect.line} is row ${rect.row} of column ${rect.col}, ` +
+    `${Math.round(rect.w)} by ${Math.round(rect.h)} pixels on screen`,
+);
+if (rect.w < 100) {
+  // Says which of the two failures this is: a band that is not drawn, or a
+  // camera that is not where the measurement thinks it is.
+  fail(`the panel is only ${Math.round(rect.w)} pixels wide, so the camera did not stay put`);
+}
 const withMarks = await page.screenshot({ type: 'png' });
 const withoutMarks = await page.evaluate((path) => {
   const f = window.__sanity.app.scene.files.get(path);
@@ -204,9 +309,9 @@ await page.evaluate(([path, saved]) => {
   f.data.lineState.set(saved.kept);
   f.state = saved.wasState;
 }, [target, withoutMarks]);
-const markPixels = pixelDiff(decodePng, withMarks, bare);
-if (markPixels < 200) fail(`the marks moved only ${markPixels} pixels`);
-else console.log(`ok    the marks are on screen (${markPixels} pixels)`);
+const markPixels = pixelDiff(decodePng, withMarks, bare, 20, rect);
+if (markPixels < 200) fail(`the marks moved only ${markPixels} pixels inside the panel`);
+else console.log(`ok    the marks are on screen (${markPixels} pixels inside the panel)`);
 
 // They fade with the heat, and go when it runs out.
 const faded = await page.evaluate(async (path) => {

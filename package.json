@@ -15,7 +15,7 @@
     "ui-shots": "node web/scripts/ui-shots.mjs",
     "layout-check": "node web/scripts/layout-check.mjs",
     "menu-check": "node web/scripts/menu-check.mjs",
-    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check && npm run shimmer-check && npm run heat-check && npm run wrap-check && npm run stability-check && npm run anim-check && npm run idle-check && npm run sharp-check && npm run linechange-check && npm run coverage",
+    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check && npm run shimmer-check && npm run heat-check && npm run wrap-check && npm run stability-check && npm run anim-check && npm run idle-check && npm run sharp-check && npm run linechange-check && npm run lang-check && npm run coverage",
     "shimmer-check": "node web/scripts/shimmer-check.mjs",
     "heat-check": "node web/scripts/heat-check.mjs",
     "wrap-check": "node web/scripts/wrap-check.mjs",
@@ -25,6 +25,7 @@
     "sharp-check": "node web/scripts/sharp-check.mjs",
     "linechange-check": "node web/scripts/linechange-check.mjs",
     "idle-check": "node web/scripts/idle-check.mjs",
+    "lang-check": "node web/scripts/lang-check.mjs",
     "icons": "node web/scripts/make-icon.mjs && node web/scripts/render-svg.mjs web/public/favicon.svg web/public/favicon 32 && node web/scripts/render-svg.mjs assets/sanity-icon.svg /tmp/sanity-app-icon 1024 && npx tauri icon /tmp/sanity-app-icon.png -o src-tauri/icons && rm -rf src-tauri/icons/android src-tauri/icons/ios src-tauri/icons/Square*.png src-tauri/icons/StoreLogo.png"
   },
   "devDependencies": {
