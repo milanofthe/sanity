@@ -29,6 +29,10 @@
 			<span class="dot">·</span>
 			{stats.pxPerLine.toFixed(2)} px/line
 			<span class="dot">·</span>
+			<span class="dim" title="Hand-over bands in px/line: tokens, then text">
+				{stats.bands}
+			</span>
+			<span class="dot">·</span>
 			{n(stats.visibleFiles)} visible
 		</span>
 		<span class="spacer"></span>

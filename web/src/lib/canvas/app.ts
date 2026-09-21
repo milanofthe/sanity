@@ -11,10 +11,11 @@ import {
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
 import { Scene, type TextSource } from '$lib/canvas/renderer/scene';
-import { lodThresholds, metrics } from '$lib/metrics';
+import { metrics } from '$lib/metrics';
+import { bandsFromQuery, lodBands, lodName, setBands, type LodName } from '$lib/canvas/lod';
 import { readPalette, type Palette } from '$lib/theme';
 
-export type LodName = 'structure' | 'overview' | 'tokens' | 'text';
+export type { LodName };
 
 export interface CanvasStats {
   files: number;
@@ -29,6 +30,8 @@ export interface CanvasStats {
   /** Fraction of the canvas covered by panels, from the layout pass. */
   fill: number;
   indexing: number;
+  /** Active hand-over points, so the status bar can show what is in effect. */
+  bands: string;
 }
 
 /** What the chrome has to supply to open a repository. */
@@ -70,7 +73,7 @@ export class CanvasApp {
   private frameMs = 16.7;
   stats: CanvasStats = {
     files: 0, totalLines: 0, visibleFiles: 0, lod: 'structure', pxPerLine: 0,
-    quads: 0, cpuMs: 0, frameMs: 0, vramMb: 0, fill: 0, indexing: 0,
+    quads: 0, cpuMs: 0, frameMs: 0, vramMb: 0, fill: 0, indexing: 0, bands: '',
   };
 
   /** Called after each frame so the chrome can render the status bar. */
@@ -79,6 +82,8 @@ export class CanvasApp {
   constructor(private canvas: HTMLCanvasElement) {
     this.gl = createContext(canvas);
     this.pal = readPalette();
+    const override = bandsFromQuery(location.search);
+    if (override) setBands(override);
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(canvas);
     this.resize();
@@ -301,13 +306,6 @@ export class CanvasApp {
     this.scene.finalizeTextures();
   }
 
-  private lodName(pxPerLine: number): LodName {
-    if (pxPerLine >= lodThresholds.glyphs) return 'text';
-    if (pxPerLine >= lodThresholds.texture) return 'tokens';
-    if (pxPerLine >= lodThresholds.block) return 'overview';
-    return 'structure';
-  }
-
   private frame = (now: number): void => {
     this.cam.update(now);
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
@@ -325,7 +323,7 @@ export class CanvasApp {
         files: this.layout.files.length,
         totalLines: this.layout.totalLines,
         visibleFiles: s.visibleFiles,
-        lod: this.lodName(s.pxPerLine),
+        lod: lodName(s.pxPerLine),
         pxPerLine: s.pxPerLine,
         quads: s.overviewQuads + s.spanQuads + s.glyphQuads + s.rectQuads,
         cpuMs: performance.now() - t0,
@@ -333,6 +331,9 @@ export class CanvasApp {
         vramMb: tex.bytes / 1048576,
         fill: this.fill,
         indexing: this.pending.length ? this.uploaded / this.layout.files.length : 0,
+        bands:
+          `${lodBands.tokensFrom}-${lodBands.tokensTo}/` +
+          `${lodBands.textFrom}-${lodBands.textTo}`,
       };
       this.onStats?.(this.stats);
     }

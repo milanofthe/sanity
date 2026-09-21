@@ -9,7 +9,8 @@
 // stays in the tens of thousands no matter how large the repository is.
 
 import { Camera } from '$lib/canvas/camera';
-import { lodThresholds, metrics, timing } from '$lib/metrics';
+import { metrics, timing } from '$lib/metrics';
+import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
 import { rgb, UiInk, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
 import { columnPitch, columnWidth, textOriginX, textOriginY } from '$lib/canvas/layout/panel';
@@ -105,11 +106,6 @@ function tintFor(base: number, hue: number, amount: number): number {
     Math.max(0, Math.min(255, Math.round(255 * (b * (1 - amount) + h * scale * amount))));
   return (mix(br, hr) << 16) | (mix(bg, hg) << 8) | mix(bb, hb);
 }
-
-const smoothstep = (a: number, b: number, x: number): number => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-};
 
 export class Scene {
   private gl: GL;
@@ -273,13 +269,12 @@ export class Scene {
     const { gl } = this;
     const pxPerLine = metrics.lineHeight * cam.zoom;
 
-    // Two crossfades, not four: the overview texture covers everything from a
-    // single averaged pixel up to the point where token geometry takes over.
-    const spanFade =
-      smoothstep(lodThresholds.texture, lodThresholds.texture * 1.5, pxPerLine) *
-      (1 - smoothstep(lodThresholds.spans, lodThresholds.spans * 1.3, pxPerLine));
-    const glyphFade = smoothstep(lodThresholds.glyphs, lodThresholds.glyphs * 1.3, pxPerLine);
-    const overviewFade = 1 - Math.max(spanFade, glyphFade);
+    // A partition of one across the three representations; see lod.ts for why
+    // that property is worth having a module and a test for.
+    const w = lodWeights(pxPerLine);
+    const overviewFade = w.overview;
+    const spanFade = w.spans;
+    const glyphFade = w.glyphs;
 
     cam.writeMatrix(this.view);
     const [vx0, vy0, vx1, vy1] = cam.visibleRect(64);
@@ -316,9 +311,9 @@ export class Scene {
       this.pushPanel(f);
       this.pushHeader(f, cam.zoom, f.node.path === this.hoveredPath);
       if (overviewFade > 0.004) this.pushOverview(f, overviewFade);
-      if (spanFade > 0.004) this.pushSpans(f, spanFade, vx0, vy0, vx1, vy1);
+      if (spanFade > 0.004) this.pushSpans(f, spanFade, pxPerLine, vx0, vy0, vx1, vy1);
       if (glyphFade > 0.004) this.pushGlyphs(f, glyphFade, vx0, vy0, vx1, vy1);
-      if (pxPerLine >= lodThresholds.texture) this.pushGutter(f, vy0, vy1);
+      if (spanFade > 0.004 || glyphFade > 0.004) this.pushGutter(f, vy0, vy1);
     }
 
     // Draw.
@@ -604,13 +599,14 @@ export class Scene {
   }
 
   private pushSpans(
-    f: SceneFile, fade: number, vx0: number, vy0: number, vx1: number, vy1: number,
+    f: SceneFile, fade: number, pxPerLine: number,
+    vx0: number, vy0: number, vx1: number, vy1: number,
   ): void {
     const b = this.spans;
     const d0 = f.data;
     const yBase = f.node.y + textOriginY;
     const g = f.node.geom;
-    const h = metrics.lineHeight * 0.68;
+    const h = metrics.lineHeight * spanBarHeight(pxPerLine);
     const yOff = (metrics.lineHeight - h) * 0.5;
 
     for (const [c, colX, first, last] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {

@@ -74,13 +74,18 @@ export async function openInEditor(path: string): Promise<string> {
   return invoke<string>('open_in_editor', { path });
 }
 
-/** A folder passed on the command line or in SANITY_OPEN, if any. */
-export async function initialRepo(): Promise<string | null> {
-  if (!inTauri()) return null;
+export interface Startup {
+  repo?: string;
+  lod?: string;
+}
+
+/** Startup wishes from the command line and the environment. */
+export async function startup(): Promise<Startup> {
+  if (!inTauri()) return {};
   try {
-    return (await invoke<string | null>('initial_repo')) ?? null;
+    return await invoke<Startup>('startup');
   } catch {
-    return null;
+    return {};
   }
 }
 

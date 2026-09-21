@@ -84,14 +84,6 @@ export const columns = {
   minLines: 4,
 } as const;
 
-/** Pixels per line at which each level of detail takes over. Below the first
- *  entry a file is a flat block; above the last it is real text. */
-export const lodThresholds = {
-  block: 0.5,
-  texture: 3.0,
-  spans: 10.0,
-  glyphs: 10.0,
-} as const;
 
 
 export const timing = {

@@ -297,22 +297,30 @@ fn platform_open(path: &Path) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// A folder to open at startup, from the first command line argument or from
-/// `SANITY_OPEN`.
-///
-/// Makes `sanity <path>` behave the way a CLI is expected to, and is how the
-/// screenshot script gets a real repository on screen without driving the
-/// folder dialog.
+/// What the window should do on startup.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Startup {
+    /// Folder to open, from the first command line argument or `SANITY_OPEN`.
+    /// Makes `sanity <path>` behave the way a CLI is expected to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// Level-of-detail hand-over points from `SANITY_LOD`, as the frontend's
+    /// `?lod=` takes them. A window has no query string, and where a hand-over
+    /// belongs is settled by moving the numbers while watching.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lod: Option<String>,
+}
+
 #[tauri::command]
-fn initial_repo() -> Option<String> {
+fn startup() -> Startup {
     let from_arg = std::env::args().skip(1).find(|a| !a.starts_with('-'));
-    let candidate = from_arg.or_else(|| std::env::var("SANITY_OPEN").ok())?;
-    let path = PathBuf::from(&candidate);
-    if path.is_dir() {
-        Some(path.canonicalize().unwrap_or(path).to_string_lossy().into_owned())
-    } else {
-        None
-    }
+    let repo = from_arg
+        .or_else(|| std::env::var("SANITY_OPEN").ok())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .map(|p| p.canonicalize().unwrap_or(p).to_string_lossy().into_owned());
+    let lod = std::env::var("SANITY_LOD").ok().filter(|v| !v.trim().is_empty());
+    Startup { repo, lod }
 }
 
 /// The text of one file, for the readable zoom level. Read on demand rather
@@ -350,7 +358,7 @@ pub fn run() {
             scan_repo,
             repo_payloads,
             file_text,
-            initial_repo,
+            startup,
             open_in_editor
         ])
         .run(tauri::generate_context!())

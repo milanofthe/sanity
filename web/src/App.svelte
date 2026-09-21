@@ -15,8 +15,9 @@
 		fixtureLoaded, fixtureName, loadFixture, openFixture,
 	} from '$lib/sources/fixture';
 	import {
-		inTauri, initialRepo, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
+		inTauri, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder, startup,
 	} from '$lib/sources/tauri';
+	import { bandsFromQuery, setBands } from '$lib/canvas/lod';
 
 	let app = $state<CanvasApp | undefined>();
 	let stats = $state<CanvasStats | null>(null);
@@ -99,8 +100,11 @@
 				.finally(() => (busy = false));
 			return;
 		}
-		initialRepo().then((path) => {
-			if (path) openFolder(path);
+		startup().then((s) => {
+			// SANITY_LOD uses the same form as ?lod=, so one parser serves both.
+			const bands = s.lod ? bandsFromQuery(`?lod=${s.lod}`) : null;
+			if (bands) setBands(bands);
+			if (s.repo) openFolder(s.repo);
 			else if (app && project.groups.length === 0) openSynthetic(app, true);
 		});
 	});
