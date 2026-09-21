@@ -420,15 +420,42 @@ function placeStubs(block: StubBlock, slot: IntRect): void {
 
   const chip = chipCells();
   const n = block.children.length;
-  const fit = Math.max(1, Math.floor(slot.w / chip.w));
-  const rows = Math.max(1, Math.floor(slot.h / chip.h));
-  // As few columns as the height allows, so the chips stay wide and their
-  // names readable, and never more than the width can hold.
-  const cols = Math.max(1, Math.min(fit, Math.ceil(n / rows)));
-  const colW = Math.max(chip.w, Math.floor(slot.w / cols));
-
+  // Whole chips only, in both directions. Nothing here may leave the slot: a
+  // block is placed by the treemap like any other child, so a chip past its
+  // right edge is a chip in a sibling directory, and one past the bottom is a
+  // chip over whatever is below. Both happened, from forcing the last column
+  // to a full chip width when the slot had less than that left: 70 chips stood
+  // 28 units outside their directory and one of them landed on a panel two
+  // boxes away.
+  const fitCols = Math.floor(slot.w / chip.w);
+  const fitRows = Math.floor(slot.h / chip.h);
   const geom = stubGeometry();
   block.hidden = 0;
+
+  if (fitCols < 1 || fitRows < 1) {
+    // The slot cannot hold a single chip. Everything is hidden and counted, so
+    // the fitting pass asks for a rectangle that can.
+    for (const f of block.children) {
+      f.geom = geom;
+      f.slotW = 0;
+      f.slotH = 0;
+      f.x = r.x;
+      f.y = r.y;
+      f.w = 0;
+      f.h = 0;
+      f.fits = true;
+      f.holdsAll = true;
+      f.usable = false;
+      block.hidden++;
+    }
+    return;
+  }
+
+  // As few columns as the height allows, so the chips stay wide and their
+  // names readable, and never more than the width can hold.
+  const cols = Math.max(1, Math.min(fitCols, Math.ceil(n / fitRows)));
+  const colW = Math.floor(slot.w / cols);
+
   for (let i = 0; i < n; i++) {
     const f = block.children[i];
     const cx = i % cols;
@@ -437,8 +464,8 @@ function placeStubs(block: StubBlock, slot: IntRect): void {
       x: slot.x + cx * colW,
       y: slot.y + cy * chip.h,
       // The last column takes what the division left over, so the block's
-      // right edge is the slot's.
-      w: cx === cols - 1 ? Math.max(chip.w, slot.w - cx * colW) : colW,
+      // right edge is the slot's and no further.
+      w: cx === cols - 1 ? slot.w - cx * colW : colW,
       h: chip.h,
     };
     const world = toWorld(at);
@@ -454,9 +481,7 @@ function placeStubs(block: StubBlock, slot: IntRect): void {
     f.fits = true;
     f.usable = true;
     f.holdsAll = true;
-    // Past the bottom of the block there is nowhere to go. Counted in the
-    // stats and asserted on, rather than quietly drawn over a sibling.
-    if (at.y + chip.h > slot.y + slot.h) {
+    if (cy >= fitRows) {
       f.w = 0;
       f.h = 0;
       f.usable = false;
@@ -763,6 +788,17 @@ export interface LayoutStats {
   /** Placeholders that did not fit in their block. Also has to be zero: a
    *  file the mode exists to show as present must not go missing. */
   hiddenStubs: number;
+  /**
+   * Panels that stand outside the directory box they belong to. Has to be
+   * zero.
+   *
+   * Checked apart from `overlaps` because the two catch different mistakes and
+   * one of them was invisible: overlaps are counted between siblings, so
+   * anything that leaves its own box and lands in another directory is not a
+   * pair the sibling test ever looks at. That is exactly what a grid of
+   * placeholders did, and it took a separate measurement to see it.
+   */
+  escapes: number;
   /** Sibling pairs that overlap. Must be zero: the treemap tiles exactly, so
    *  anything here means the integer split lost or double-counted a cell. */
   overlaps: number;
@@ -825,6 +861,21 @@ export function layoutStats(l: Layout): LayoutStats {
 
   let overlaps = 0;
   let offGrid = 0;
+  let escapes = 0;
+  // Containment, per directory, over its files and over the chips of its
+  // placeholder block. Linear, unlike an all-pairs overlap test, and it
+  // catches anything that leaves its box whether or not a sibling is there.
+  const outside = (a: { x: number; y: number; w: number; h: number }, d: DirNode) =>
+    a.w > 0 && a.h > 0
+    && (a.x < d.x - 0.5 || a.y < d.y - 0.5
+      || a.x + a.w > d.x + d.w + 0.5 || a.y + a.h > d.y + d.h + 0.5);
+  for (const d of l.dirs) {
+    for (const c of d.children) {
+      if (c.kind === 'stubs') {
+        for (const chip of c.children) if (outside(chip, d)) escapes++;
+      } else if (outside(c, d)) escapes++;
+    }
+  }
   let worst = { path: '', children: 0, cellsW: 0, cellsH: 0 };
   const onGrid = (v: number) => Math.abs(v / CELL - Math.round(v / CELL)) < 1e-6;
   for (const d of l.dirs) {
@@ -859,6 +910,7 @@ export function layoutStats(l: Layout): LayoutStats {
     unusable,
     overflowing,
     hiddenStubs,
+    escapes,
     overlaps,
     offGrid,
     dirCount: l.dirs.length,

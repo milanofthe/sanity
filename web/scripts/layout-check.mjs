@@ -82,6 +82,8 @@ for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   // A placeholder with nowhere to go is a file the view claims to be showing
   // and is not.
   if (num('hidden') !== 0) problems.push(`hidden=${num('hidden')}`);
+  // Anything standing outside its own directory box is in somebody else's.
+  if (num('escapes') !== 0) problems.push(`escapes=${num('escapes')}`);
   if (fill < minFill) problems.push(`fill=${(fill * 100).toFixed(1)}% < ${minFill * 100}%`);
   const bloat = num('bloat p95');
   if (!(bloat <= maxBloat)) problems.push(`bloat p95=${bloat.toFixed(2)} > ${maxBloat}`);
