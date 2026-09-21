@@ -13,7 +13,9 @@ import { metrics, timing } from '$lib/metrics';
 import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
 import { rgb, UiInk, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
-import { columnPitch, columnWidth, textOriginX, textOriginY } from '$lib/canvas/layout/panel';
+import {
+  columnPitch, columnWidth, COLUMN_GUTTER, textOriginX, textOriginY,
+} from '$lib/canvas/layout/panel';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { GlyphAtlas } from './glyphatlas';
 import { OverviewTextures, type Slot } from './codetex';
@@ -63,6 +65,20 @@ const STUB_MIN_PX = 1.5;
 /** Border width of a top-level directory, in device pixels; each level in
  *  loses one, to a floor of one. */
 const DIR_BORDER_PX = 4;
+
+/**
+ * Line count for a header, short enough to fit one.
+ *
+ * Thousands are abbreviated because the exact figure is not what the header is
+ * for: a glance should say whether a file is small, large or enormous, and four
+ * characters of panel width is a fair price for that. The status bar carries
+ * the exact totals.
+ */
+function compactCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n / 1000)}k`;
+}
 
 /**
  * A stable hue per directory path, in turns.
@@ -309,6 +325,7 @@ export class Scene {
       }
 
       this.pushPanel(f);
+      this.pushColumnRules(f, cam.zoom);
       this.pushHeader(f, cam.zoom, f.node.path === this.hoveredPath);
       if (overviewFade > 0.004) this.pushOverview(f, overviewFade);
       if (spanFade > 0.004) this.pushSpans(f, spanFade, pxPerLine, vx0, vy0, vx1, vy1);
@@ -438,18 +455,26 @@ export class Scene {
     const dot = n.name.lastIndexOf('.');
     const ext = dot > 0 ? n.name.slice(dot + 1) : '';
     const dir = n.path.slice(0, Math.max(0, n.path.length - n.name.length - 1));
+    const lines = f.node.stub ? '' : compactCount(n.lineCount);
 
-    // The badge is right-aligned and is the first thing dropped when space
-    // runs short, since the extension is also visible in the name.
+    // Right-aligned, in order: the type badge, then the line count. Both are
+    // dropped before the name when space runs short, the badge first because
+    // the extension is also visible in the name itself.
+    let right = room;
     const badge = ext && room > n.name.length + ext.length + 3 ? ext : '';
     if (badge) {
-      this.pushText(
-        badge, x + (room - badge.length) * metrics.charWidth, y,
-        UiInk.Badge, fade, badge.length,
-      );
+      right -= badge.length;
+      this.pushText(badge, x + right * metrics.charWidth, y, UiInk.Badge, fade, badge.length);
+      right -= 1;
+    }
+    if (lines && right > n.name.length + lines.length + 3) {
+      right -= lines.length;
+      this.pushText(lines, x + right * metrics.charWidth, y, UiInk.Path, fade, lines.length);
+    } else {
+      right = room - (badge ? badge.length + 1 : 0);
     }
 
-    const budget = room - (badge ? badge.length + 2 : 0);
+    const budget = Math.max(1, right - 2);
     const shown =
       n.name.length <= budget ? n.name : `${n.name.slice(0, Math.max(1, budget - 2))}..`;
     const used = this.pushText(shown, x, y, UiInk.Name, fade, budget);
@@ -493,6 +518,37 @@ export class Scene {
       this.fgRects, n.x + inset, n.y + h / 2 - 0.5, Math.max(0, w - 2 * inset), 1,
       this.pal.surface.reducedInk, 0.65, 0, 0,
     );
+  }
+
+  /**
+   * A hairline down the middle of each gutter between code columns.
+   *
+   * A panel that wraps its lines into columns reads as one block of text
+   * without them: the eye has no way to tell whether the next column continues
+   * the file or starts something new, and at the zoom where the wrapping
+   * matters the gutter alone is only a couple of pixels wide. The rule stops
+   * short of the header so it does not cut through the file name.
+   */
+  private pushColumnRules(f: SceneFile, zoom: number): void {
+    const g = f.node.geom;
+    if (g.columns < 2) return;
+    // Below this the rules would be denser than the content they separate.
+    if (g.pitch * zoom < 24) return;
+
+    const n = f.node;
+    const top = n.y + textOriginY;
+    const height = n.h - textOriginY - metrics.panelPadY;
+    if (height <= 0) return;
+    const w = Math.max(1 / zoom, 1);
+
+    for (let c = 1; c < g.columns; c++) {
+      // Centre of the gutter between column c-1 and column c.
+      const x = n.x + textOriginX + c * g.pitch - COLUMN_GUTTER / 2 - w / 2;
+      this.pushRect(
+        this.bgRects, x, top, w, height,
+        this.pal.surface.border, 0.85, 0, 0,
+      );
+    }
   }
 
   private pushPanel(f: SceneFile): void {
