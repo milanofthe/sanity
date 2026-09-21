@@ -78,8 +78,26 @@ export const columns = {
   preferredMin: 24,
   hardMin: 12,
   max: Math.min(120, overview.texCols),
-  /** How many code columns a panel may wrap its lines into. */
-  maxPerPanel: 12,
+  /**
+   * How many code columns a panel may wrap its lines into.
+   *
+   * Raised from twelve, which turned out to be the binding constraint on the
+   * whole layout rather than a detail of one panel. Twelve columns is the
+   * widest a panel can be, so it is also the flattest slot it can fill, and
+   * for a very tall file that is barely wider than square: an 8045 line file
+   * tops out at 1.04. The treemap hands out slots a little wider than square
+   * as a matter of course, so those files could not fill their slots, the
+   * fitting loop bought area to compensate, and 200 files of 4000 lines ended
+   * up with a canvas 4.4 times larger than they needed. At 32 the bound stops
+   * binding: the same case fills 99 percent with panels 1.00 times the area
+   * they need, in two passes instead of forty.
+   *
+   * Nothing else moved. The column count a panel actually picks comes from
+   * aiming at a square, so ordinary files never come near the cap, and the
+   * other six repository shapes in the layout check are unchanged to the
+   * decimal.
+   */
+  maxPerPanel: 32,
   /** Fewest lines a code column is quantized to. */
   minLines: 4,
 } as const;

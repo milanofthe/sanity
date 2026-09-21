@@ -63,6 +63,17 @@ const DIR_LABEL_CELLS = 1;
  */
 const DIR_GAP_CELLS = 1;
 
+/**
+ * Ceiling on the aspect bound a directory passes upward.
+ *
+ * Bounds multiply up a tree: a directory of eight flexible children is eight
+ * times as flexible, and four levels of that is a number the treemap may as
+ * well treat as no bound at all. Capping it keeps the arithmetic finite and
+ * costs nothing, since a rectangle ten times as wide as it is tall is already
+ * outside what a squarified treemap hands out.
+ */
+const DIR_ASPECT_CAP = 10;
+
 export interface FileEntry {
   path: string;
   lineCount: number;
@@ -103,6 +114,12 @@ export interface FileNode {
   /** Treemap weight: the area this file needs. Corrected by the fitting
    *  passes when the shape it was given turns out to need more. */
   area: number;
+  /** Smallest slot the panel can be drawn in, and the widest shape it can
+   *  take, in grid cells. Handed to the treemap so it can respect them while
+   *  it cuts, rather than being discovered afterwards. See `Sized`. */
+  minW: number;
+  minH: number;
+  maxAspect: number;
   /** The slot the treemap handed out, kept so overflow can be detected. */
   slotW: number;
   slotH: number;
@@ -122,6 +139,22 @@ export interface DirNode {
   children: Node[];
   depth: number;
   area: number;
+  /** Smallest slot this directory can hold its frame and its largest child
+   *  in, in grid cells. */
+  minW: number;
+  minH: number;
+  /**
+   * Widest shape this directory can be given, as width over height.
+   *
+   * A directory does have one, and forgetting it was expensive. Its children
+   * can be arranged many ways, so on its own it is flexible, but no
+   * arrangement is wider than all of them side by side: a box holding three
+   * files that can each be at most twice as wide as tall cannot usefully be
+   * twenty times as wide as tall. Without this the bound was enforced between
+   * siblings and then thrown away one level up, which put flat rectangles in
+   * front of children that could not fill them.
+   */
+  maxAspect: number;
   x: number;
   y: number;
   w: number;
@@ -139,7 +172,39 @@ export interface Layout {
 }
 
 function newDir(name: string, path: string, depth: number): DirNode {
-  return { kind: 'dir', name, path, children: [], depth, area: 0, x: 0, y: 0, w: 0, h: 0 };
+  return {
+    kind: 'dir', name, path, children: [], depth, area: 0,
+    minW: 1, minH: 1, maxAspect: Infinity, x: 0, y: 0, w: 0, h: 0,
+  };
+}
+
+/**
+ * The smallest slot a panel can be drawn in, and the widest shape it can take.
+ *
+ * The floors are the preferred minimum column width and a panel with a single
+ * line in it. The ceiling on the aspect is the panel at its widest: every code
+ * column it is allowed, each as wide as the file's own longest line, which is
+ * as flat as it can get. A slot wider than that cannot be filled however the
+ * lines are wrapped, which is the thing the fitting loop used to discover one
+ * expensive pass at a time.
+ */
+function panelBounds(lineCols: ArrayLike<number>, geom: PanelGeometry): {
+  minW: number; minH: number; maxAspect: number;
+} {
+  const rows = Math.max(1, visualRowsCached(lineCols, geom.cols));
+  const pitch = geom.cols * metrics.charWidth + COLUMN_GUTTER;
+  const widest = MAX_COLUMNS * pitch - COLUMN_GUTTER + 2 * metrics.panelPadX;
+  const shortest =
+    Math.ceil(rows / MAX_COLUMNS) * metrics.lineHeight
+    + metrics.titleHeight + 2 * metrics.panelPadY;
+  return {
+    // Plus the cell each panel gives up at its right and bottom edge, or the
+    // floor would be one cell short of usable exactly when it matters.
+    minW: cells(MIN_PANEL_COLS * metrics.charWidth + 2 * metrics.panelPadX) + PANEL_GAP_CELLS,
+    minH: cells(metrics.titleHeight + 2 * metrics.panelPadY + metrics.lineHeight)
+      + PANEL_GAP_CELLS,
+    maxAspect: widest / Math.max(1, shortest),
+  };
 }
 
 function buildTree(entries: FileEntry[]): DirNode {
@@ -164,6 +229,16 @@ function buildTree(entries: FileEntry[]): DirNode {
     // A source without widths gets a flat profile, which reduces to the old
     // one-row-per-line behaviour rather than breaking.
     const lineCols = e.lineCols ?? new Uint16Array(e.lineCount).fill(e.maxCols);
+    const geom = e.stub ? stubGeometry() : panelGeometry(lineCols, e.maxCols);
+    const bounds = e.stub
+      ? {
+        // A stub is a fixed box: its minimum is its size and it has no other
+        // shape to offer.
+        minW: cells(geom.w) + PANEL_GAP_CELLS,
+        minH: cells(geom.h) + PANEL_GAP_CELLS,
+        maxAspect: geom.w / Math.max(1, geom.h),
+      }
+      : panelBounds(lineCols, geom);
     parent.children.push({
       kind: 'file',
       name: fileName,
@@ -172,7 +247,10 @@ function buildTree(entries: FileEntry[]): DirNode {
       maxCols: e.maxCols,
       clipCols: Math.max(e.clipCols ?? e.maxCols, e.maxCols),
       lineCols,
-      geom: e.stub ? stubGeometry() : panelGeometry(lineCols, e.maxCols),
+      geom,
+      minW: bounds.minW,
+      minH: bounds.minH,
+      maxAspect: bounds.maxAspect,
       stub: Boolean(e.stub),
       fits: true,
       usable: true,
@@ -215,12 +293,25 @@ function collapseChains(dir: DirNode): void {
  */
 function computeAreas(dir: DirNode): number {
   let inner = 0;
+  let minW = 1;
+  let minH = 1;
+  let wide = 0;
   for (const c of dir.children) {
     inner += c.kind === 'file' ? c.area : computeAreas(c);
+    // A directory has to be able to hold its largest child, whatever else it
+    // holds: below that, the child it cannot fit is the one that misfits, and
+    // the correction would go to the child while the shortage is the parent's.
+    if (c.minW > minW) minW = c.minW;
+    if (c.minH > minH) minH = c.minH;
+    // Every child side by side: the widest arrangement there is.
+    wide += Math.min(DIR_ASPECT_CAP, c.maxAspect);
   }
   const side = Math.sqrt(Math.max(1, inner));
   const pad = 2 * metrics.dirPad;
   dir.area = (side + pad) * (side + pad + metrics.dirLabelHeight);
+  dir.minW = minW + 2 * DIR_PAD_CELLS + DIR_GAP_CELLS;
+  dir.minH = minH + 2 * DIR_PAD_CELLS + DIR_LABEL_CELLS + DIR_GAP_CELLS;
+  dir.maxAspect = Math.min(DIR_ASPECT_CAP, Math.max(1, wide));
   return dir.area;
 }
 
@@ -245,6 +336,22 @@ function placeFile(f: FileNode, slot: IntRect): void {
     w: Math.max(1, slot.w - PANEL_GAP_CELLS),
     h: Math.max(1, slot.h - PANEL_GAP_CELLS),
   };
+  // A slot wider than any shape the panel can take is trimmed rather than
+  // filled, and the cells at its right stay empty.
+  //
+  // The rule everywhere else is that the panel *is* the slot, because that is
+  // what makes every edge in the layout line up. This is the one exception,
+  // and it buys something the rule cannot: a treemap's last row takes whatever
+  // depth is left over, and if that leaves a flat strip, a file that may wrap
+  // into at most twelve code columns cannot fill it however it is arranged.
+  // Measured on 200 files of 4000 lines, one file landed in a strip of aspect
+  // 4.4 against the 2.4 it could use, came out too narrow to draw with 2311
+  // lines that had nowhere to go, and forty correction passes could not help
+  // it: growing its area does not change the shape of a leftover. Trimming
+  // costs a fraction of a percent of fill and keeps the content.
+  if (own.w > own.h * f.maxAspect) {
+    own.w = Math.max(1, Math.min(own.w, Math.floor(own.h * f.maxAspect)));
+  }
   const r = toWorld(own);
   const w = r.w;
   const h = r.h;

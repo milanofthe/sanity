@@ -26,14 +26,18 @@ const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 // loop buys area instead. Both are real weaknesses rather than noise; the
 // numbers are here so a change that makes either worse is visible.
 const CASES = [
-  { cfg: 'files=120&lines=90', fill: 0.92, bloat: 1.15 },
-  { cfg: 'files=400&lines=180', fill: 0.94, bloat: 1.15 },
-  { cfg: 'files=1000&lines=300', fill: 0.95, bloat: 1.15 },
-  { cfg: 'files=1200&lines=400', fill: 0.96, bloat: 1.15 },
-  { cfg: 'files=2500&lines=600', fill: 0.96, bloat: 1.25 },
-  // Pathological shapes: almost all tiny files, and a few enormous ones.
-  { cfg: 'files=800&lines=12', fill: 0.81, bloat: 3.2 },
-  { cfg: 'files=200&lines=4000', fill: 0.98, bloat: 8.5 },
+  { cfg: 'files=120&lines=90', fill: 0.92, bloat: 1.05 },
+  { cfg: 'files=400&lines=180', fill: 0.94, bloat: 1.05 },
+  { cfg: 'files=1000&lines=300', fill: 0.95, bloat: 1.05 },
+  { cfg: 'files=1200&lines=400', fill: 0.96, bloat: 1.05 },
+  { cfg: 'files=2500&lines=600', fill: 0.96, bloat: 1.05 },
+  // Pathological shapes: almost all tiny files, and a few enormous ones. The
+  // first is the one case still worth improving: a twelve line file is smaller
+  // than the floor a panel has, so its slot is set by that floor rather than
+  // by its content, and the 95th percentile sits at 1.56 against 1.00
+  // everywhere else.
+  { cfg: 'files=800&lines=12', fill: 0.81, bloat: 1.8 },
+  { cfg: 'files=200&lines=4000', fill: 0.98, bloat: 1.1 },
 ];
 
 const browser = await launch();
