@@ -15,8 +15,9 @@
     "ui-shots": "npm --prefix web exec -- node scripts/ui-shots.mjs",
     "layout-check": "npm --prefix web exec -- node scripts/layout-check.mjs",
     "menu-check": "npm --prefix web exec -- node scripts/menu-check.mjs",
-    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check && npm run shimmer-check",
-    "shimmer-check": "npm --prefix web exec -- node scripts/shimmer-check.mjs"
+    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check && npm run shimmer-check && npm run heat-check",
+    "shimmer-check": "npm --prefix web exec -- node scripts/shimmer-check.mjs",
+    "heat-check": "npm --prefix web exec -- node scripts/heat-check.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
