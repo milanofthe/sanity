@@ -89,12 +89,45 @@ export const overviewFS = `${HEAD}
 // GLSL ES 3.0 has no default precision for array samplers, unlike sampler2D.
 precision highp sampler2DArray;
 uniform sampler2DArray uTex;
+// Vertical texel count of the layer, which is the height class this draw call
+// is bound to. One value per call, since a call is one chunk and a chunk is
+// one class.
+uniform float uTexRows;
+// 1 applies the sharpening, 0 falls back to plain bilinear. Only so the two
+// can be compared: scripts/sharp-check.mjs measures the vertical contrast
+// with it on and off, which is the difference this is for.
+uniform float uSharp;
 in vec2 vUv;
 flat in float vLayer;
 flat in float vFade;
 out vec4 oColor;
+
+/**
+ * Sample with the vertical interpolation sharpened where the texture is
+ * magnified.
+ *
+ * The texture holds one texel per screen row of the panel, so vertically it is
+ * exactly 1:1 at one pixel per line and magnified by the pixels-per-line
+ * factor above that. Measured across the hand-over band: 1.8x at 1.8 px/line,
+ * 3.2x at 3.2. Plain bilinear over that smears each line of code into its
+ * neighbours, which is the softness you see just before the token bars take
+ * over. Horizontally there is no such problem: 128 texels cover at most 120
+ * characters, so it is never magnified and stays linear.
+ *
+ * The fix keeps a one-pixel ramp at each texel boundary and flattens the rest,
+ * so it is linear at 1:1 and approaches nearest under heavy magnification.
+ * That is sharp without aliasing, and it costs six instructions rather than
+ * the extra taps a bicubic would need.
+ */
 void main() {
-  vec4 t = texture(uTex, vec3(vUv, vLayer));
+  // Texels per screen pixel, vertically. Below one, the texture is magnified.
+  float perPx = fwidth(vUv.y) * uTexRows;
+  float k = clamp(perPx, 0.0, 1.0);
+  float ty = vUv.y * uTexRows - 0.5;
+  float fy = fract(ty);
+  float sharp = clamp((fy - 0.5) / max(k, 1e-3) + 0.5, 0.0, 1.0);
+  float v = mix(vUv.y, (floor(ty) + 0.5 + sharp) / uTexRows, uSharp);
+  vec4 t = texture(uTex, vec3(vUv.x, v, vLayer));
   oColor = vec4(t.rgb, t.a * vFade);
 }`;
 

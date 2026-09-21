@@ -23,7 +23,7 @@ import {
 import { lineAtRow, visualRowsCached, wrapOffsets } from '$lib/canvas/layout/wrap';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { GlyphAtlas } from './glyphatlas';
-import { OverviewTextures, type Slot } from './codetex';
+import { HEIGHT_CLASSES, OverviewTextures, type Slot } from './codetex';
 import {
   createProgram, instanceAttribs, quadAttrib, uniforms, unitQuad,
   InstanceBuffer, type GL,
@@ -229,6 +229,10 @@ export class Scene {
   /** Path whose header the pointer is over, for the hover highlight. */
   hoveredPath: string | null = null;
 
+  /** Sharpen the overview texture's vertical interpolation. Off only for the
+   *  measurement that shows what it is worth. */
+  sharpen = true;
+
   /** Transform in force while the current panel's geometry is pushed. */
   private tf: Transform = IDENTITY;
   /** Longest distance from the layout centre, for the appearance stagger. */
@@ -263,7 +267,7 @@ export class Scene {
     this.progSpan = createProgram(gl, spanVS, spanFS, 'span');
     this.progGlyph = createProgram(gl, glyphVS, glyphFS, 'glyph');
     this.uRect = uniforms(gl, this.progRect, ['uView', 'uViewport']);
-    this.uOverview = uniforms(gl, this.progOverview, ['uView', 'uTex']);
+    this.uOverview = uniforms(gl, this.progOverview, ['uView', 'uTex', 'uTexRows', 'uSharp']);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
       'uView', 'uKind[0]', 'uAtlas', 'uCell', 'uGlyphScale', 'uGridCols',
@@ -1003,12 +1007,14 @@ export class Scene {
     gl.useProgram(this.progOverview);
     gl.uniformMatrix3fv(this.uOverview.uView, false, this.view);
     gl.uniform1i(this.uOverview.uTex, 0);
+    gl.uniform1f(this.uOverview.uSharp, this.sharpen ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0);
 
     for (const [key, b] of this.overviewByChunk) {
       if (b.count === 0) continue;
       const [ci, chi] = key.split(':').map(Number);
       gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textures.texture(ci, chi));
+      gl.uniform1f(this.uOverview.uTexRows, HEIGHT_CLASSES[ci]);
       b.upload();
       quadAttrib(gl, this.progOverview, this.quad);
       gl.bindBuffer(gl.ARRAY_BUFFER, b.buf);

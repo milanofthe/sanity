@@ -15,14 +15,15 @@
     "ui-shots": "node web/scripts/ui-shots.mjs",
     "layout-check": "node web/scripts/layout-check.mjs",
     "menu-check": "node web/scripts/menu-check.mjs",
-    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check && npm run shimmer-check && npm run heat-check && npm run wrap-check && npm run change-check && npm run stability-check && npm run anim-check && npm run coverage",
+    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check && npm run shimmer-check && npm run heat-check && npm run wrap-check && npm run change-check && npm run stability-check && npm run anim-check && npm run sharp-check && npm run coverage",
     "shimmer-check": "node web/scripts/shimmer-check.mjs",
     "heat-check": "node web/scripts/heat-check.mjs",
     "wrap-check": "node web/scripts/wrap-check.mjs",
     "change-check": "node web/scripts/change-check.mjs",
     "stability-check": "node web/scripts/stability-check.mjs",
     "coverage": "cargo run -q --release -p sanity-core --example coverage -- .",
-    "anim-check": "node web/scripts/anim-check.mjs"
+    "anim-check": "node web/scripts/anim-check.mjs",
+    "sharp-check": "node web/scripts/sharp-check.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
