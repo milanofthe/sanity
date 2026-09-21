@@ -1,0 +1,16 @@
+{
+  "name": "sanity-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "playwright": "^1.53.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}
