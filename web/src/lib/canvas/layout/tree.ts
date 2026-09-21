@@ -10,8 +10,31 @@ import {
 } from './panel';
 import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
 
-/** Width over height the whole canvas aims for; screens are wide. */
-const ROOT_ASPECT = 16 / 9;
+/**
+ * Width over height the whole canvas aims for.
+ *
+ * Follows the window rather than being fixed, because the fit-to-view zoom is
+ * `min(vw / w, vh / h)`: whichever way the canvas and the window disagree, the
+ * difference is screen left empty. A 16:9 canvas in a 3:2 window uses 88
+ * percent of the height available to it and nothing can be done about that
+ * from the camera's side.
+ *
+ * It is free to follow the window because the layout barely cares. Swept from
+ * 1.0 to 3.0 on a 989 file repository, the fill rate stayed between 95.8 and
+ * 96.6 percent and the mean panel aspect between 1.24 and 1.41, so there is no
+ * packing reason to prefer one over another.
+ *
+ * The clamp keeps a pathological window from producing a canvas nobody can
+ * navigate: a very tall one would stack the whole project into a ribbon.
+ */
+const ROOT_ASPECT_MIN = 0.8;
+const ROOT_ASPECT_MAX = 3.2;
+const ROOT_ASPECT_DEFAULT = 16 / 9;
+
+function rootAspect(viewport?: { w: number; h: number }): number {
+  if (!viewport || viewport.w <= 0 || viewport.h <= 0) return ROOT_ASPECT_DEFAULT;
+  return Math.min(ROOT_ASPECT_MAX, Math.max(ROOT_ASPECT_MIN, viewport.w / viewport.h));
+}
 
 /**
  * Gap between a panel and the edge of its slot: one grid cell.
@@ -295,10 +318,18 @@ function collect(dir: DirNode, files: FileNode[], dirs: DirNode[]): void {
 }
 
 /** How many times to re-run the subdivision with corrected areas. */
-// Raised from 14 when wrapping arrived: a wrapped panel is taller than its
-// line count suggests, so the first area estimate is further off and the loop
-// needs a few more turns to settle. It still stops as soon as nothing misfits.
-const FIT_PASSES = 22;
+/**
+ * Cap on the correction loop. It stops as soon as nothing misfits, so this is
+ * a safety limit rather than a cost.
+ *
+ * Raised twice: wrapping made the first area estimate further off, since a
+ * wrapped panel is taller than its line count suggests, and files compete for
+ * the same slots so a correction to one disturbs its siblings. The worst case
+ * in scripts/layout-check.mjs, 800 files of twelve lines across 87
+ * directories, settles on pass 32 in 8 milliseconds; a realistic repository
+ * takes three to thirteen.
+ */
+const FIT_PASSES = 40;
 
 /**
  * Lay out once, then correct.
@@ -311,11 +342,11 @@ const FIT_PASSES = 22;
  * passes, and unlike a safety factor it costs nothing in fill where the first
  * guess was already right.
  */
-function fitPasses(root: DirNode, files: FileNode[]): number {
+function fitPasses(root: DirNode, files: FileNode[], aspect: number): number {
   let remaining = 0;
   for (let pass = 0; pass < FIT_PASSES; pass++) {
     const area = computeAreas(root);
-    const w = Math.sqrt(area * ROOT_ASPECT);
+    const w = Math.sqrt(area * aspect);
     placeDir(root, { x: 0, y: 0, w: cells(w), h: cells(area / w) });
 
     remaining = 0;
@@ -345,7 +376,10 @@ function fitPasses(root: DirNode, files: FileNode[]): number {
 /** How many subdivision passes the last layout actually needed. */
 export let passesUsed = 0;
 
-export function computeLayout(entries: FileEntry[]): Layout {
+export function computeLayout(
+  entries: FileEntry[],
+  viewport?: { w: number; h: number },
+): Layout {
   const root = buildTree(entries);
   collapseChains(root);
   sortChildren(root);
@@ -353,7 +387,7 @@ export function computeLayout(entries: FileEntry[]): Layout {
   const allFiles: FileNode[] = [];
   const allDirs: DirNode[] = [];
   collect(root, allFiles, allDirs);
-  fitPasses(root, allFiles);
+  fitPasses(root, allFiles, rootAspect(viewport));
 
   const files: FileNode[] = [];
   const dirs: DirNode[] = [];

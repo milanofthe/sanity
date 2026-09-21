@@ -6,7 +6,8 @@
 
 import { Camera } from '$lib/canvas/camera';
 import {
-  computeLayout, layoutStats, passesUsed, type FileEntry, type FileNode, type Layout,
+  computeLayout, layoutStats, passesUsed,
+  type FileEntry, type FileNode, type Layout,
 } from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
@@ -103,6 +104,9 @@ export class CanvasApp {
         }
       },
       bench: (seconds = 12) => this.bench(seconds),
+      relayout: () => {
+        if (this.lastSource) this.open(this.lastSource);
+      },
     };
   }
 
@@ -121,6 +125,7 @@ export class CanvasApp {
   /** Replace the whole scene. Layout runs synchronously, texture upload is
    *  spread across frames so opening a large repo does not lock the window. */
   open(source: RepoSource): void {
+    this.lastSource = source;
     this.scene = null;
     this.hovered = null;
     this.decoded.clear();
@@ -134,8 +139,11 @@ export class CanvasApp {
     }
 
     const t0 = performance.now();
+    // The canvas takes the window's proportions, so fitting it leaves no
+    // screen unused; see rootAspect.
     this.layout = computeLayout(
       source.entries.map((e) => ({ ...e, lineCols: this.decoded.get(e.path)?.lineCols })),
+      { w: this.cam.vw, h: this.cam.vh },
     );
     const st = layoutStats(this.layout);
     this.fill = st.fill;
@@ -162,6 +170,9 @@ export class CanvasApp {
   }
 
   /** Fit the whole project. Animated unless asked otherwise. */
+  /** Last opened source, so a measurement script can re-lay it out. */
+  lastSource: RepoSource | null = null;
+
   fit(seconds = 0.45): void {
     if (!this.layout) return;
     if (seconds <= 0) this.cam.fit(...this.layout.bounds);
