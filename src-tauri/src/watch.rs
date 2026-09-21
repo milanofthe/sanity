@@ -350,6 +350,81 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+/// The sending side, end to end: a real watch on a real directory, a real
+    /// write, and the batch that comes out. Everything above this test is the
+    /// parts; this is whether they are connected.
+    #[test]
+    fn writing_a_file_produces_one_batch() {
+        let dir = std::env::temp_dir().join(format!("sanity-live-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/a.rs"), b"fn main() {}\n").unwrap();
+        // FSEvents reports the resolved path, and /var is a symlink to
+        // /private/var on macOS, so a watch on the unresolved path would never
+        // match its own events.
+        let dir = dir.canonicalize().unwrap();
+
+        let (tx, rx) = mpsc::channel::<Batch>();
+        let watch = start(dir.clone(), |_| true, move |b| {
+            let _ = tx.send(b);
+        })
+        .expect("the watch has to start");
+
+        // FSEvents needs a moment to arm before it reports anything.
+        std::thread::sleep(Duration::from_millis(400));
+        std::fs::write(dir.join("src/a.rs"), b"fn main() { println!(); }\n").unwrap();
+
+        let batch = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a write has to produce a batch");
+        assert!(
+            batch.changed.contains(&"src/a.rs".to_string()),
+            "the written file has to be in the batch: {batch:?}"
+        );
+
+        drop(watch);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Several writes in quick succession arrive as one batch, not five. This
+    /// is the property the whole debounce exists for.
+    #[test]
+    fn a_burst_of_writes_arrives_as_few_batches() {
+        let dir = std::env::temp_dir().join(format!("sanity-burst-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+
+        let (tx, rx) = mpsc::channel::<Batch>();
+        let watch = start(dir.clone(), |_| true, move |b| {
+            let _ = tx.send(b);
+        })
+        .expect("the watch has to start");
+        std::thread::sleep(Duration::from_millis(400));
+
+        // Twenty files written as fast as they can be, which is what a
+        // formatter pass over a directory looks like.
+        for i in 0..20 {
+            std::fs::write(dir.join(format!("f{i}.txt")), b"x\n").unwrap();
+        }
+
+        // Collect until it goes quiet.
+        let mut batches = 0;
+        let mut seen = HashSet::new();
+        while let Ok(b) = rx.recv_timeout(Duration::from_secs(2)) {
+            batches += 1;
+            for p in b.changed {
+                seen.insert(p);
+            }
+        }
+
+        assert_eq!(seen.len(), 20, "every write has to be reported: {seen:?}");
+        assert!(batches <= 3, "twenty writes came as {batches} batches, not a handful");
+
+        drop(watch);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn duplicate_events_for_one_save_collapse() {
         let mut d = Debounce::default();

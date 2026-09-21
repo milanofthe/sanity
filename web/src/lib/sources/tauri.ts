@@ -6,6 +6,7 @@
 // copy them twice. See `repo_payloads` in src-tauri/src/lib.rs.
 
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { CanvasApp } from '$lib/canvas/app';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
@@ -30,7 +31,18 @@ interface ScanResult {
   files: ScanFile[];
   groups: Omit<FileGroup, 'mode'>[];
   binary: number;
+  /** Files with at least one line changed against the baseline. */
+  changed: number;
+  /** Which baseline the change state was computed against. */
+  baseline: string;
   elapsedMs: number;
+}
+
+/** What the watcher reports, after the backend has filtered it. */
+interface ChangeBatch {
+  changed: string[];
+  removed: string[];
+  headMoved: boolean;
 }
 
 let scan: ScanResult | null = null;
@@ -106,7 +118,7 @@ export async function loadRepo(path: string): Promise<void> {
 }
 
 /** Build the scene from the loaded scan and the current view modes. */
-export function openLoaded(app: CanvasApp): void {
+export function openLoaded(app: CanvasApp, keepView = false): void {
   if (!scan) return;
   const entries = scan.files
     .map((f) => ({
@@ -118,22 +130,125 @@ export function openLoaded(app: CanvasApp): void {
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
 
-  app.open({
-    entries,
-    payload: (p) => payloads.get(p),
-    text,
-  });
+  app.open(
+    {
+      entries,
+      payload: (p) => payloads.get(p),
+      text,
+    },
+    keepView,
+  );
 }
 
 export function loadedRoot(): string | null {
   return scan?.root ?? null;
 }
 
-/** Re-read one file after the watcher reports it changed. */
-export async function refreshFile(app: CanvasApp, path: string): Promise<void> {
-  text.invalidate(path);
-  const buf = payloads.get(path);
-  if (!buf) return;
-  const data = decoded.get(path) ?? decodeFile(buf);
-  app.touch(path, data);
+/**
+ * Re-read the given files and put them on the canvas.
+ *
+ * Returns true when the geometry has to be recomputed. Most saves do not
+ * need that: a file whose wrapped rows still fit its panel is updated by
+ * rewriting one texture layer, which costs a fraction of a millisecond and
+ * leaves every other panel exactly where it was. A relayout is only for a
+ * file that outgrew its panel, or one that appeared or disappeared, because
+ * those change what the treemap has to divide up.
+ */
+async function applyChanged(app: CanvasApp, paths: string[], warm: boolean): Promise<boolean> {
+  if (paths.length === 0) return false;
+  const blob = await invoke<ArrayBuffer>('refresh_files', { paths });
+  const fresh = unpack(blob);
+  let structural = false;
+
+  for (const [path, buf] of fresh) {
+    const known = payloads.has(path);
+    payloads.set(path, buf);
+    const data = decodeFile(buf);
+    decoded.set(path, data);
+    text.invalidate(path);
+
+    if (!known || !app.fitsInPlace(path, data)) {
+      structural = true;
+      continue;
+    }
+    app.touch(path, data, warm);
+  }
+  return structural;
+}
+
+/** Forget files that are gone. Always structural: the treemap loses a leaf. */
+async function applyRemoved(paths: string[]): Promise<boolean> {
+  if (paths.length === 0) return false;
+  for (const path of paths) {
+    payloads.delete(path);
+    decoded.delete(path);
+    text.invalidate(path);
+  }
+  await invoke('drop_files', { paths });
+  return true;
+}
+
+/**
+ * Pick up the index after a structural change, then lay out again.
+ *
+ * The index comes from held backend state rather than a fresh scan, so a new
+ * file costs one read instead of the four seconds a large project takes.
+ */
+async function restructure(app: CanvasApp): Promise<void> {
+  scan = await invoke<ScanResult>('repo_index');
+  project.refreshGroups(scan.groups);
+  openLoaded(app, true);
+}
+
+/**
+ * Watch the open repository and keep the canvas in step.
+ *
+ * The debouncing happens in the backend, so one batch here is one save or one
+ * checkout, never a stream of duplicates. Batches are serialised: a checkout
+ * can produce a second batch while the first is still decoding, and running
+ * two relayouts at once would leave the scene describing neither state.
+ */
+export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
+  let busy: Promise<void> = Promise.resolve();
+
+  const unlisten = await listen<ChangeBatch>('sanity://changed', (event) => {
+    const batch = event.payload;
+    busy = busy
+      .then(async () => {
+        let structural = await applyRemoved(batch.removed);
+        structural = (await applyChanged(app, batch.changed, true)) || structural;
+
+        if (batch.headMoved) {
+          // A commit or a checkout moves the baseline for files nobody wrote,
+          // so every held file has to be asked again. These arrive cold: the
+          // glow means "someone just changed this", and a commit is the
+          // opposite of that.
+          const blob = await invoke<ArrayBuffer>('refresh_changes');
+          for (const [path, buf] of unpack(blob)) {
+            payloads.set(path, buf);
+            const data = decodeFile(buf);
+            decoded.set(path, data);
+            if (app.fitsInPlace(path, data)) app.touch(path, data, false);
+            else structural = true;
+          }
+        }
+
+        if (structural) await restructure(app);
+      })
+      // A failed batch must not stop the ones after it, and the next save
+      // re-reads the file anyway.
+      .catch((e) => console.warn('watch batch failed', e));
+  });
+
+  return unlisten;
+}
+
+/** Stop watching. */
+export async function stopWatching(): Promise<void> {
+  if (!inTauri()) return;
+  try {
+    await invoke('stop_watch');
+  } catch {
+    // Nothing was being watched.
+  }
 }

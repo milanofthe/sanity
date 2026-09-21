@@ -5,4 +5,7 @@ target/
 *.log
 web/shots/
 artifacts/
-web/public/fixture/
+# Fixtures dumped from other repositories by `cargo run -p sanity-core
+# --example dump`. Several megabytes each, regenerated in one command, and
+# what is in them is somebody else's code rather than this project's.
+web/public/

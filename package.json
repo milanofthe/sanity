@@ -11,14 +11,15 @@
     "dev": "npm --prefix web run dev",
     "check": "npm --prefix web run check && npm --prefix web exec svelte-check -- --threshold error && cargo clippy --workspace --all-targets -- -D warnings",
     "test": "npm --prefix web test && cargo test --workspace",
-    "shots": "npm --prefix web exec -- node scripts/shot.mjs",
-    "ui-shots": "npm --prefix web exec -- node scripts/ui-shots.mjs",
-    "layout-check": "npm --prefix web exec -- node scripts/layout-check.mjs",
-    "menu-check": "npm --prefix web exec -- node scripts/menu-check.mjs",
-    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check && npm run shimmer-check && npm run heat-check && npm run wrap-check",
-    "shimmer-check": "npm --prefix web exec -- node scripts/shimmer-check.mjs",
-    "heat-check": "npm --prefix web exec -- node scripts/heat-check.mjs",
-    "wrap-check": "npm --prefix web exec -- node scripts/wrap-check.mjs"
+    "shots": "node web/scripts/shot.mjs",
+    "ui-shots": "node web/scripts/ui-shots.mjs",
+    "layout-check": "node web/scripts/layout-check.mjs",
+    "menu-check": "node web/scripts/menu-check.mjs",
+    "check-all": "npm run check && npm run test && npm run layout-check && npm run menu-check && npm run shimmer-check && npm run heat-check && npm run wrap-check && npm run change-check",
+    "shimmer-check": "node web/scripts/shimmer-check.mjs",
+    "heat-check": "node web/scripts/heat-check.mjs",
+    "wrap-check": "node web/scripts/wrap-check.mjs",
+    "change-check": "node web/scripts/change-check.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

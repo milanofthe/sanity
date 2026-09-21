@@ -16,7 +16,9 @@
 	} from '$lib/sources/fixture';
 	import {
 		inTauri, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder, startup,
+		stopWatching, watchRepo,
 	} from '$lib/sources/tauri';
+	import type { UnlistenFn } from '@tauri-apps/api/event';
 	import { bandsFromQuery, setBands } from '$lib/canvas/lod';
 
 	let app = $state<CanvasApp | undefined>();
@@ -24,6 +26,8 @@
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let ctx = $state<{ x: number; y: number; path: string | null } | null>(null);
+	/** The running watch, so opening another folder replaces it. */
+	let unwatch: UnlistenFn | null = null;
 
 	const fileName = (p: string) => p.split('/').pop() ?? p;
 
@@ -64,15 +68,34 @@
 		busy = true;
 		error = null;
 		try {
+			// Stop the previous watch before the scan, or events for the folder
+			// being replaced would arrive against the new file list.
+			unwatch?.();
+			unwatch = null;
+			await stopWatching();
+
 			await loadRepo(target);
 			rebuild();
 			app.fit();
+			// Watching is what makes this a monitor rather than a snapshot, so
+			// it starts with the folder. A folder that cannot be watched is
+			// still viewable, which is why this does not fail the open.
+			unwatch = await watchRepo(app).catch((e) => {
+				console.warn('watch failed', e);
+				return null;
+			});
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
 			busy = false;
 		}
 	}
+
+	$effect(() => () => {
+		unwatch?.();
+		unwatch = null;
+		void stopWatching();
+	});
 
 	// The canvas resolves its colours from CSS, so a theme switch has to tell
 	// it to read them again.

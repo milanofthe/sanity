@@ -4,33 +4,14 @@
 // change to a component or a token is checked against what it looks like
 // rather than against whether it compiles.
 
-import { chromium } from 'playwright';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { launch } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const outDir = process.env.SANITY_OUT ?? 'shots/ui';
 mkdirSync(outDir, { recursive: true });
 
-const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
-const executablePath = (() => {
-  const dirs = readdirSync(cacheRoot)
-    .filter((d) => /^chromium-\d+$/.test(d))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
-  for (const d of dirs) {
-    for (const c of [
-      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
-      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
-    ]) {
-      if (existsSync(c)) return c;
-    }
-  }
-  return undefined;
-})();
-
-const browser = await chromium.launch({
-  executablePath,
-  args: ['--use-gl=angle', '--use-angle=metal', '--ignore-gpu-blocklist'],
-});
+const browser = await launch({ args: ['--ignore-gpu-blocklist'] });
 const page = await browser.newPage({
   viewport: { width: 1500, height: 940 },
   deviceScaleFactor: 2,

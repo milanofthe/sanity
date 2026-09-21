@@ -6,32 +6,13 @@
 // this the recency glow, the heat decay and the changed-line gutters could rot
 // unnoticed until the watcher lands and then fail for reasons unrelated to it.
 
-import { chromium } from 'playwright';
-import { existsSync, readdirSync } from 'node:fs';
 import { decodePng } from './png.mjs';
+import { launch, pixelDiff, zoomForPanels } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const src = process.env.SANITY_SRC ?? 'fixture=fixture';
 
-const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
-const executablePath = (() => {
-  for (const d of readdirSync(cacheRoot)
-    .filter((x) => /^chromium-\d+$/.test(x))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
-    for (const c of [
-      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
-      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
-    ]) {
-      if (existsSync(c)) return c;
-    }
-  }
-  return undefined;
-})();
-
-const browser = await chromium.launch({
-  executablePath,
-  args: ['--use-gl=angle', '--use-angle=metal'],
-});
+const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
 page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
 await page.goto(`${base}/?${src}`, { waitUntil: 'load' });
@@ -59,20 +40,6 @@ const visible = await page.evaluate(async () => {
 await page.waitForTimeout(700);
 console.log(`${visible} panels in view`);
 
-const pixelDiff = (a, b) => {
-  const A = decodePng(a);
-  const B = decodePng(b);
-  let changed = 0;
-  for (let i = 0; i < A.data.length; i += 4) {
-    const d =
-      Math.abs(A.data[i] - B.data[i]) +
-      Math.abs(A.data[i + 1] - B.data[i + 1]) +
-      Math.abs(A.data[i + 2] - B.data[i + 2]);
-    if (d > 20) changed++;
-  }
-  return changed;
-};
-
 const before = await page.screenshot({ type: 'png' });
 // Only the panels actually on screen: touching one off screen cannot change a
 // pixel, and counting it would let the check pass on nothing.
@@ -91,7 +58,7 @@ const touched = await page.evaluate(() => {
 await page.waitForTimeout(400);
 const after = await page.screenshot({ type: 'png' });
 
-const changed = pixelDiff(before, after);
+const changed = pixelDiff(decodePng, before, after);
 console.log(`touched ${touched} files, ${changed} pixels changed`);
 
 let failures = 0;

@@ -1,6 +1,6 @@
 //! Dump a real scan to disk so the browser can render it.
 //!
-//!   cargo run --release -p sanity-core --example dump -- <repo> <outdir>
+//!   cargo run --release -p sanity-core --example dump -- <repo> <outdir> [head|branch]
 //!
 //! Exists to close a verification gap: the Tauri window cannot be captured
 //! without screen recording permission, so without this there is no way to
@@ -10,16 +10,23 @@
 
 use std::path::PathBuf;
 
+use std::collections::HashMap;
+
 use sanity_core::filter::{Filter, Verdict};
+use sanity_core::git::{self, Baseline};
 use sanity_core::lang::extension_of;
 use sanity_core::scan;
-use sanity_core::wire::{encode, FLAG_BINARY};
+use sanity_core::wire::{encode, FileData, FLAG_BINARY};
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let (Some(repo), Some(outdir)) = (args.next(), args.next()) else {
         eprintln!("usage: dump <repo> <outdir>");
         std::process::exit(2);
+    };
+    let baseline = match args.next().as_deref() {
+        Some("branch") => Baseline::MergeBase,
+        _ => Baseline::Head,
     };
     let root = PathBuf::from(&repo);
     let out = PathBuf::from(&outdir);
@@ -33,8 +40,12 @@ fn main() {
 
     let mut files = Vec::new();
     let mut groups: Vec<(String, u32, u32, Option<String>)> = Vec::new();
-    let mut payloads: Vec<(String, Vec<u8>)> = Vec::new();
     let mut texts: Vec<(String, String)> = Vec::new();
+    // Payloads are held undecoded until the change state has been stamped in,
+    // because the state is part of the payload and git answers for the whole
+    // repository at once.
+    let mut decoded: Vec<(String, FileData)> = Vec::new();
+    let mut line_counts: HashMap<String, u32> = HashMap::new();
 
     for rel in &listed {
         let Some((data, info)) = scan::read_file(&root, rel) else { continue };
@@ -70,7 +81,8 @@ fn main() {
                 .map(|a| format!(r#","artefact":{}"#, json_string(a)))
                 .unwrap_or_default(),
         ));
-        payloads.push((rel.clone(), encode(&data)));
+        line_counts.insert(rel.clone(), info.line_count);
+        decoded.push((rel.clone(), data));
         // Text for the readable zoom level. Only for files small enough to be
         // worth reading; the dump is a development artefact, not a cache.
         if info.line_count < 4000 {
@@ -79,6 +91,26 @@ fn main() {
             }
         }
     }
+
+    // Stamp in the change state, exactly as scan_repo does, so the fixture
+    // shows what the app shows rather than a repository with no history.
+    let mut changed = 0u32;
+    if git::is_repo(&root) {
+        let changes = git::line_changes(&root, baseline, &line_counts);
+        for (rel, data) in decoded.iter_mut() {
+            let n = data.line_count();
+            if let Some(c) = changes.get(rel) {
+                if c.lines.iter().any(|&x| x != 0) {
+                    data.line_state.clear();
+                    data.line_state.extend_from_slice(&c.lines[..c.lines.len().min(n)]);
+                    data.line_state.resize(n, 0);
+                    changed += 1;
+                }
+            }
+        }
+    }
+    let payloads: Vec<(String, Vec<u8>)> =
+        decoded.iter().map(|(rel, d)| (rel.clone(), encode(d))).collect();
 
     groups.sort_by_key(|g| std::cmp::Reverse(g.2));
     let groups_json: Vec<String> = groups
@@ -95,10 +127,14 @@ fn main() {
         .collect();
 
     let scan_json = format!(
-        r#"{{"root":{},"files":[{}],"groups":[{}],"binary":0,"elapsedMs":0}}"#,
+        r#"{{"root":{},"files":[{}],"groups":[{}],"binary":0,"changed":{changed},"baseline":{},"elapsedMs":0}}"#,
         json_string(&root.to_string_lossy()),
         files.join(","),
         groups_json.join(","),
+        json_string(match baseline {
+            Baseline::Head => "head",
+            Baseline::MergeBase => "branch",
+        }),
     );
     std::fs::write(out.join("scan.json"), scan_json).expect("write scan.json");
     std::fs::write(out.join("payloads.bin"), pack(&payloads)).expect("write payloads.bin");
@@ -111,7 +147,7 @@ fn main() {
         .expect("write texts.json");
 
     println!(
-        "dumped {} files, {} payload bytes, {} texts to {}",
+        "dumped {} files ({changed} changed), {} payload bytes, {} texts to {}",
         payloads.len(),
         payloads.iter().map(|(_, b)| b.len()).sum::<usize>(),
         texts.len(),

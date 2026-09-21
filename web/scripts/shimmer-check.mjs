@@ -11,32 +11,13 @@
 //   2. A horizontal slice through a border must contain no intermediate
 //      values between the border colour and what is on either side.
 
-import { chromium } from 'playwright';
-import { existsSync, readdirSync } from 'node:fs';
+import { launch, zoomForPanels } from './browser.mjs';
 import { decodePng } from './png.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const src = process.env.SANITY_SRC ?? 'fixture=fixture';
 
-const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
-const executablePath = (() => {
-  for (const d of readdirSync(cacheRoot)
-    .filter((x) => /^chromium-\d+$/.test(x))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
-    for (const c of [
-      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
-      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
-    ]) {
-      if (existsSync(c)) return c;
-    }
-  }
-  return undefined;
-})();
-
-const browser = await chromium.launch({
-  executablePath,
-  args: ['--use-gl=angle', '--use-angle=metal'],
-});
+const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
 page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
 await page.goto(`${base}/?${src}`, { waitUntil: 'load' });
@@ -50,14 +31,17 @@ await page.waitForFunction(
 );
 await page.waitForTimeout(600);
 
-// A zoom where region borders are on screen at a few pixels.
+// A zoom where a good number of panel and region borders are on screen. A
+// fixed zoom put the camera inside the interior of a single panel once panels
+// grew with wrapping, and a check for border blending found no border.
+const visible = await zoomForPanels(page, 20);
 await page.evaluate(() => {
   const c = window.__sanity.app.cam;
-  window.__sanity.zoomTo(0.25);
   c.x = Math.round(c.x);
   c.y = Math.round(c.y);
 });
 await page.waitForTimeout(400);
+console.log(`${visible} panels in view`);
 
 let failures = 0;
 

@@ -87,6 +87,12 @@ pub struct Repo {
     /// The baseline in force, so a watch-driven refresh uses the same one the
     /// scan did without the frontend having to repeat it.
     baseline: Baseline,
+    /// The file rows as the layout needs them. Held so a watcher event can
+    /// update one row and hand the whole index back without re-reading the
+    /// tree, which takes four seconds on a large project.
+    files: Vec<FileInfo>,
+    /// Files skipped as binary, carried so the index still adds up.
+    binary: u32,
 }
 
 impl Default for Repo {
@@ -99,6 +105,8 @@ impl Default for Repo {
             filter: Filter::new(),
             known: HashSet::new(),
             baseline: Baseline::Head,
+            files: Vec::new(),
+            binary: 0,
         }
     }
 }
@@ -161,7 +169,6 @@ async fn scan_repo(
 
     let mut files = Vec::with_capacity(listed.len());
     let mut payloads = Vec::with_capacity(listed.len());
-    let mut groups: Vec<GroupInfo> = Vec::new();
     let mut binary = 0u32;
 
     let mut data: Vec<(String, FileData)> = Vec::with_capacity(listed.len());
@@ -177,15 +184,7 @@ async fn scan_repo(
             Verdict::Keep => None,
             Verdict::Artefact(r) => Some(reason_text(r)),
         };
-        push_group(&mut groups, rel, &info, artefact.as_deref());
-
-        files.push(FileInfo {
-            path: rel.clone(),
-            line_count: info.line_count,
-            max_cols: width_percentile(&data_one.line_cols, 0.9),
-            clip_cols: info.max_cols,
-            artefact,
-        });
+        files.push(file_info(rel, &data_one, &info, artefact));
         line_counts.insert(rel.clone(), info.line_count);
         data.push((rel.clone(), data_one));
     }
@@ -199,11 +198,11 @@ async fn scan_repo(
         payloads.push((rel.clone(), encode(data_one)));
     }
 
-    groups.sort_by(|a, b| b.lines.cmp(&a.lines));
+    let groups = groups_from(&files);
 
     let result = ScanResult {
         root: root.to_string_lossy().into_owned(),
-        files,
+        files: files.clone(),
         groups,
         binary,
         changed,
@@ -217,9 +216,11 @@ async fn scan_repo(
         repo.payloads = payloads;
         repo.data = data;
         repo.known = line_counts.keys().cloned().collect();
+        repo.files = files;
         repo.line_counts = line_counts;
         repo.filter = filter.clone();
         repo.baseline = baseline;
+        repo.binary = binary;
     }
 
     // Watching is what turns a snapshot into a monitor, so it starts with the
@@ -239,23 +240,46 @@ async fn scan_repo(
     Ok(result)
 }
 
-fn push_group(groups: &mut Vec<GroupInfo>, rel: &str, info: &ScannedFile, artefact: Option<&str>) {
-    let ext = extension_of(rel);
-    if let Some(g) = groups.iter_mut().find(|g| g.id == ext) {
-        g.files += 1;
-        g.lines += info.line_count;
-        // A group is generated if any of its files is: the reason of the first
-        // one that says so is representative enough for a picker row.
-        if g.artefact.is_none() {
-            g.artefact = artefact.map(str::to_string);
+/// The picker rows, derived from the file rows.
+///
+/// Derived rather than accumulated, so that a file the watcher adds or removes
+/// updates the picker through the same code the scan used. Sorted by weight,
+/// which is the order the picker shows.
+fn groups_from(files: &[FileInfo]) -> Vec<GroupInfo> {
+    let mut groups: Vec<GroupInfo> = Vec::new();
+    for f in files {
+        let ext = extension_of(&f.path);
+        match groups.iter_mut().find(|g| g.id == ext) {
+            Some(g) => {
+                g.files += 1;
+                g.lines += f.line_count;
+                // A group is generated if any of its files is: the reason of
+                // the first one that says so is representative for a row.
+                if g.artefact.is_none() {
+                    g.artefact = f.artefact.clone();
+                }
+            }
+            None => groups.push(GroupInfo {
+                id: ext,
+                files: 1,
+                lines: f.line_count,
+                artefact: f.artefact.clone(),
+            }),
         }
-    } else {
-        groups.push(GroupInfo {
-            id: ext,
-            files: 1,
-            lines: info.line_count,
-            artefact: artefact.map(str::to_string),
-        });
+    }
+    groups.sort_by(|a, b| b.lines.cmp(&a.lines));
+    groups
+}
+
+/// One file row from a fresh read. The same computation for a scan and for a
+/// watcher refresh, so the two cannot disagree about a panel's size.
+fn file_info(rel: &str, data: &FileData, info: &ScannedFile, artefact: Option<String>) -> FileInfo {
+    FileInfo {
+        path: rel.to_string(),
+        line_count: info.line_count,
+        max_cols: width_percentile(&data.line_cols, 0.9),
+        clip_cols: info.max_cols,
+        artefact,
     }
 }
 
@@ -372,9 +396,9 @@ async fn refresh_files(
     baseline: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    let (root, mut line_counts, held) = {
+    let (root, mut line_counts, held, filter) = {
         let repo = state.repo.lock().map_err(|e| e.to_string())?;
-        (repo.root.clone(), repo.line_counts.clone(), repo.baseline)
+        (repo.root.clone(), repo.line_counts.clone(), repo.baseline, repo.filter.clone())
     };
     // The baseline is remembered from the scan, so the watcher does not have
     // to carry it through every event.
@@ -384,6 +408,7 @@ async fn refresh_files(
     }
 
     let mut fresh: Vec<(String, FileData)> = Vec::with_capacity(paths.len());
+    let mut rows: Vec<FileInfo> = Vec::with_capacity(paths.len());
     for rel in &paths {
         // Containment, as everywhere a path arrives from outside.
         let full = root.join(rel);
@@ -396,7 +421,12 @@ async fn refresh_files(
         if data_one.flags & FLAG_BINARY != 0 {
             continue;
         }
+        let artefact = match filter.classify_sized(rel, info.line_count) {
+            Verdict::Keep => None,
+            Verdict::Artefact(r) => Some(reason_text(r)),
+        };
         line_counts.insert(rel.clone(), info.line_count);
+        rows.push(file_info(rel, &data_one, &info, artefact));
         fresh.push((rel.clone(), data_one));
     }
 
@@ -410,6 +440,13 @@ async fn refresh_files(
     {
         let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
         repo.line_counts = line_counts;
+        for row in rows {
+            repo.known.insert(row.path.clone());
+            match repo.files.iter_mut().find(|f| f.path == row.path) {
+                Some(slot) => *slot = row,
+                None => repo.files.push(row),
+            }
+        }
         for (rel, d) in fresh {
             match repo.data.iter_mut().find(|(p, _)| *p == rel) {
                 Some(slot) => slot.1 = d,
@@ -467,6 +504,25 @@ async fn refresh_changes(
     }
 
     Ok(Response::new(pack_payloads(&out)?))
+}
+
+/// The file rows and picker groups as they now stand.
+///
+/// Answered from held state, so the frontend can pick up a file the watcher
+/// added without the four seconds a full re-read of a large project costs.
+#[tauri::command]
+async fn repo_index(state: State<'_, AppState>) -> Result<ScanResult, String> {
+    let repo = state.repo.lock().map_err(|e| e.to_string())?;
+    Ok(ScanResult {
+        root: repo.root.to_string_lossy().into_owned(),
+        files: repo.files.clone(),
+        groups: groups_from(&repo.files),
+        binary: repo.binary,
+        changed: repo.data.iter().filter(|(_, d)| d.line_state.iter().any(|&s| s != 0)).count()
+            as u32,
+        baseline: baseline_name(repo.baseline).to_string(),
+        elapsed_ms: 0,
+    })
 }
 
 /// Start watching the open folder and forward each batch to the webview.
@@ -534,6 +590,7 @@ async fn drop_files(paths: Vec<String>, state: State<'_, AppState>) -> Result<()
         repo.data.retain(|(p, _)| p != path);
         repo.line_counts.remove(path);
         repo.known.remove(path);
+        repo.files.retain(|f| f.path != *path);
     }
     Ok(())
 }
@@ -690,7 +747,8 @@ pub fn run() {
             refresh_files,
             refresh_changes,
             stop_watch,
-            drop_files
+            drop_files,
+            repo_index
         ])
         .run(tauri::generate_context!())
         .expect("error while running sanity");

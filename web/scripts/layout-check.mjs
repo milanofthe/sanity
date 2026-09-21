@@ -6,8 +6,7 @@
 // `misfits` is reported but not asserted: it counts panels narrower than the
 // preferred width, which is cosmetic.
 
-import { chromium } from 'playwright';
-import { existsSync, readdirSync } from 'node:fs';
+import { launch } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 // Every panel and directory gives up one grid cell at its right and bottom
@@ -17,21 +16,6 @@ const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 // a 14 unit gap is a fifth of a panel's height. Separated borders are worth
 // more than the area.
 const MIN_FILL = Number(process.env.SANITY_MIN_FILL ?? 0.85);
-
-const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
-const executablePath = (() => {
-  for (const d of readdirSync(cacheRoot)
-    .filter((x) => /^chromium-\d+$/.test(x))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
-    for (const c of [
-      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
-      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
-    ]) {
-      if (existsSync(c)) return c;
-    }
-  }
-  return undefined;
-})();
 
 const CASES = [
   'files=120&lines=90',
@@ -44,10 +28,7 @@ const CASES = [
   'files=200&lines=4000',
 ];
 
-const browser = await chromium.launch({
-  executablePath,
-  args: ['--use-gl=angle', '--use-angle=metal'],
-});
+const browser = await launch();
 const page = await browser.newPage();
 let lastLine = null;
 page.on('console', (m) => {

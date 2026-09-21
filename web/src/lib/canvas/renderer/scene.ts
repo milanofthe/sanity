@@ -16,7 +16,7 @@ import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canva
 import {
   columnPitch, columnWidth, COLUMN_GUTTER, textIndent, textOriginX, textOriginY,
 } from '$lib/canvas/layout/panel';
-import { lineAtRow, wrapOffsets } from '$lib/canvas/layout/wrap';
+import { lineAtRow, visualRowsCached, wrapOffsets } from '$lib/canvas/layout/wrap';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { GlyphAtlas } from './glyphatlas';
 import { OverviewTextures, type Slot } from './codetex';
@@ -80,6 +80,10 @@ const GLYPH_STRIDE = 6;
  * kind of statement and should look it.
  */
 const HAIRLINE_PX = 1;
+/** How far a border moves towards the heat colour when the file differs from
+ *  the baseline. Enough to pick out of a screen of panels, far enough from the
+ *  full heat colour that a just-written file still stands out among them. */
+const DIRTY_TINT = 0.45;
 
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
@@ -137,6 +141,21 @@ function dirColourIndex(path: string, count: number): number {
  * white instead, because scaling up clips and a clipped channel is how the
  * light themes grew a band of fluorescent magenta.
  */
+/**
+ * A file's change state as one value: the first line state that is not
+ * unchanged, or unchanged if there is none.
+ *
+ * A file usually has one kind of change in it, and where the changes are is
+ * the gutter's job; this is only for the panel-level signal.
+ */
+function aggregateState(data: FileData): LineState {
+  for (let i = 0; i < data.lineState.length; i++) {
+    const st = data.lineState[i];
+    if (st !== LineState.Unchanged) return st as LineState;
+  }
+  return LineState.Unchanged;
+}
+
 function mixToward(base: number, target: number, amount: number): number {
   if (amount <= 0) return base;
   const [br, bg, bb] = rgb(base);
@@ -266,7 +285,7 @@ export class Scene {
         node, data,
         slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0 },
         rows: new Uint32Array(1),
-        heat: 0, state: LineState.Unchanged,
+        heat: 0, state: aggregateState(data),
       });
       return;
     }
@@ -275,29 +294,63 @@ export class Scene {
     // so a row of the texture is a row of the panel either way.
     const slot = this.textures.allocate(rows[data.lineCount]);
     node.layer = slot.layer;
-    let state: LineState = LineState.Unchanged;
-    for (let i = 0; i < data.lineState.length; i++) {
-      if (data.lineState[i] !== LineState.Unchanged) {
-        state = data.lineState[i] as LineState;
-        break;
-      }
-    }
     this.textures.write(slot, data, node.geom.cols, rows);
-    this.files.set(node.path, { node, data, slot, rows, heat: 0, state });
+    this.files.set(node.path, {
+      node, data, slot, rows, heat: 0, state: aggregateState(data),
+    });
   }
 
-  /** Called when the watcher reports a file changed on disk. */
-  touch(path: string, data?: FileData): void {
+  /**
+   * Called when the watcher reports a file changed on disk.
+   *
+   * `warm` is false when the change came from the baseline moving rather than
+   * from someone writing the file: a commit turns every panel cold at once,
+   * and flashing two hundred of them would say the opposite of what happened.
+   */
+  touch(path: string, data?: FileData, warm = true): void {
     const f = this.files.get(path);
     if (!f) return;
     if (data) {
       f.data = data;
+      f.state = aggregateState(data);
       if (!f.node.stub) {
         f.rows = wrapOffsets(data.lineCols, f.node.geom.cols);
         this.textures.write(f.slot, data, f.node.geom.cols, f.rows);
       }
     }
-    f.heat = 1;
+    if (warm) f.heat = 1;
+  }
+
+  /**
+   * Whether a file still fits the panel it was laid out into.
+   *
+   * A texture slot is allocated for a fixed number of rows, so a file that
+   * grew past it would be written truncated. The caller uses this to decide
+   * between an in-place update and a relayout; asking here rather than in the
+   * caller keeps the row count and the slot size in one place.
+   */
+  fits(path: string, data: FileData): boolean {
+    const f = this.files.get(path);
+    if (!f) return false;
+    if (f.node.stub) return true;
+    const geom = f.node.geom;
+    const rows = visualRowsCached(data.lineCols, geom.cols);
+    return rows <= geom.columns * geom.linesPerColumn && rows <= f.slot.texRows;
+  }
+
+  /** Current heat per file, so a relayout does not throw the recency away. */
+  heatMap(): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const [path, f] of this.files) if (f.heat > 0) out.set(path, f.heat);
+    return out;
+  }
+
+  /** Restore heat after a relayout. */
+  applyHeat(heat: Map<string, number>): void {
+    for (const [path, value] of heat) {
+      const f = this.files.get(path);
+      if (f) f.heat = value;
+    }
   }
 
   finalizeTextures(): void {
@@ -576,6 +629,7 @@ export class Scene {
     const w = Math.max(n.w, floor * 4);
     const h = Math.max(n.h, floor);
     const hot = f.heat > 0.02;
+    const dirty = f.state !== LineState.Unchanged;
     // Below a couple of pixels a border would be the whole panel.
     const borderPx = h * zoom > 4 ? 1 : 0;
     this.pushRect(this.bgRects, n.x, n.y, w, h, this.pal.surface.reducedBg, 1, 0, 0);
@@ -583,7 +637,12 @@ export class Scene {
       this.pushRect(
         this.fgRects, n.x, n.y, w, h,
         this.pal.surface.reducedBg, 0,
-        hot ? this.pal.surface.heat : this.pal.surface.border, borderPx,
+        hot
+          ? this.pal.surface.heat
+          : dirty
+            ? mixToward(this.pal.surface.border, this.pal.surface.heat, DIRTY_TINT)
+            : this.pal.surface.border,
+        borderPx,
       );
     }
     if (h * zoom < 5) return;
@@ -643,14 +702,25 @@ export class Scene {
    */
   private pushPanelBorder(f: SceneFile): void {
     const n = f.node;
-    // Recency, not aggregate git state: at any realistic change rate nearly
-    // every file has one changed line somewhere, so colouring borders by state
-    // lights up the whole canvas and carries no information. Where a change is
-    // belongs in the gutter; how recent it is belongs on the border.
+    // Two signals, deliberately different in strength.
+    //
+    // `heat` is recency: someone wrote this file a moment ago. It warms the
+    // border fully and thickens it, and it fades.
+    //
+    // `state` is standing: this file differs from the baseline. It only tints
+    // the border, at hairline width, because it does not fade and should not
+    // shout. This was left out at first on the assumption that nearly every
+    // file differs from the baseline, which measurement contradicted: on a
+    // 1063 file project one commit touches 0.4% of files, five touch 1.5% and
+    // twenty touch 8.5%. Uncommitted work is a handful of files, which is
+    // exactly the thing worth seeing from the outermost zoom.
     const hot = f.heat > 0.02;
-    const border = hot ? this.pal.surface.heat : this.pal.surface.border;
-    // A recently changed file thickens and warms its border; otherwise this is
-    // the same hairline as everything else in the panel.
+    const dirty = f.state !== LineState.Unchanged;
+    const border = hot
+      ? this.pal.surface.heat
+      : dirty
+        ? mixToward(this.pal.surface.border, this.pal.surface.heat, DIRTY_TINT)
+        : this.pal.surface.border;
     const borderPx = hot ? HAIRLINE_PX + 2 * f.heat : HAIRLINE_PX;
     // Transparent fill, so this draws only the outline over what is there.
     this.pushRect(this.fgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 0, border, borderPx);

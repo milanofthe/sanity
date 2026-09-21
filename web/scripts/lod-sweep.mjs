@@ -4,33 +4,15 @@
 // Uses the same crop of the same file at every zoom, so the frames differ only
 // in level of detail.
 
-import { chromium } from 'playwright';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { launch } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const src = process.env.SANITY_SRC ?? 'fixture=fixture';
 const outDir = process.env.SANITY_OUT ?? 'shots/lod';
 mkdirSync(outDir, { recursive: true });
 
-const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
-const executablePath = (() => {
-  for (const d of readdirSync(cacheRoot)
-    .filter((x) => /^chromium-\d+$/.test(x))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
-    for (const c of [
-      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
-      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
-    ]) {
-      if (existsSync(c)) return c;
-    }
-  }
-  return undefined;
-})();
-
-const browser = await chromium.launch({
-  executablePath,
-  args: ['--use-gl=angle', '--use-angle=metal'],
-});
+const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 700, height: 460 }, deviceScaleFactor: 2 });
 page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
 await page.goto(`${base}/?${src}`, { waitUntil: 'load' });

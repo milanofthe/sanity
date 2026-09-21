@@ -84,6 +84,23 @@ class ProjectState {
 		}
 	}
 
+	/**
+	 * Take a new set of rows while keeping what the user chose.
+	 *
+	 * Used when the watcher adds or removes a file: the counts move, but a
+	 * group the user switched to reduced has to stay reduced. `load` resets
+	 * every mode to its default, which is right for opening a project and
+	 * wrong for a file being saved.
+	 */
+	refreshGroups(rows: Omit<FileGroup, 'mode'>[]) {
+		const chosen = new Map(this.groups.map((g) => [g.id, g.mode]));
+		this.load(this.root, rows, this.synthetic);
+		for (const g of this.groups) {
+			const was = chosen.get(g.id);
+			if (was) g.mode = was;
+		}
+	}
+
 	mode(id: string): ViewMode {
 		return this.groups.find((g) => g.id === id)?.mode ?? 'full';
 	}

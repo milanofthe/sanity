@@ -124,7 +124,8 @@ export class CanvasApp {
 
   /** Replace the whole scene. Layout runs synchronously, texture upload is
    *  spread across frames so opening a large repo does not lock the window. */
-  open(source: RepoSource): void {
+  open(source: RepoSource, keepView = false): void {
+    const heat = keepView ? (this.scene?.heatMap() ?? new Map()) : new Map<string, number>();
     this.lastSource = source;
     this.scene = null;
     this.hovered = null;
@@ -166,7 +167,35 @@ export class CanvasApp {
     this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
     this.pending = this.layout.files.map((f) => f.path);
     this.uploaded = 0;
-    this.fit();
+    if (keepView) {
+      // A relayout while someone is working must not move the view. The
+      // camera keeps its world coordinates, which is right as long as the
+      // layout barely changed, and a file growing by a few lines is the
+      // common case. Issue #8 covers anchoring on a file and animating.
+      this.scene.applyHeat(heat);
+    } else {
+      this.fit();
+    }
+  }
+
+  /**
+   * Re-lay out the current source without moving the view.
+   *
+   * Used when a watched file no longer fits its panel, or when a file
+   * appeared or disappeared: the geometry has to be recomputed, but the
+   * recency glow and the camera should survive it.
+   */
+  relayout(source?: RepoSource): void {
+    const use = source ?? this.lastSource;
+    if (use) this.open(use, true);
+  }
+
+  /**
+   * Whether a file still fits the panel it has, so the caller can update in
+   * place instead of relaying out the whole project.
+   */
+  fitsInPlace(path: string, data: FileData): boolean {
+    return this.scene?.fits(path, data) ?? false;
   }
 
   /** Fit the whole project. Animated unless asked otherwise. */
@@ -206,9 +235,14 @@ export class CanvasApp {
     this.scene?.setPalette(this.pal);
   }
 
-  /** Mark a file as changed on disk; drives the recency glow. */
-  touch(path: string, data?: FileData): void {
-    this.scene?.touch(path, data);
+  /**
+   * Mark a file as changed on disk; drives the recency glow.
+   *
+   * `warm` is false when only the change state moved, not the file: see
+   * Scene.touch.
+   */
+  touch(path: string, data?: FileData, warm = true): void {
+    this.scene?.touch(path, data, warm);
   }
 
   /**

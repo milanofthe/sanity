@@ -2,8 +2,8 @@
 // of detail and runs the in-page benchmark sweep. This is how a rendering
 // change gets verified without a human having to stare at it.
 
-import { chromium } from 'playwright';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { launch } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const files = process.env.SANITY_FILES ?? '400';
@@ -11,35 +11,8 @@ const lines = process.env.SANITY_LINES ?? '180';
 const outDir = process.env.SANITY_OUT ?? 'shots';
 mkdirSync(outDir, { recursive: true });
 
-// Point at whichever Chromium is in the Playwright cache rather than pinning a
-// browser download to the package version. SANITY_HEADED=1 runs it in a real
-// window, which is the only way to get numbers off the actual GPU: headless
-// falls back to SwiftShader and measures the CPU instead.
-const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
-const executablePath = process.env.SANITY_CHROME ?? (() => {
-  const dirs = readdirSync(cacheRoot)
-    .filter((d) => /^chromium-\d+$/.test(d))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
-  for (const d of dirs) {
-    const candidates = [
-      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
-      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
-    ];
-    for (const c of candidates) if (existsSync(c)) return c;
-  }
-  return undefined;
-})();
-
-const browser = await chromium.launch({
-  executablePath,
-  headless: process.env.SANITY_HEADED !== '1',
-  args: [
-    '--use-gl=angle',
-    '--use-angle=metal',
-    '--ignore-gpu-blocklist',
-    '--enable-gpu-rasterization',
-    '--enable-zero-copy',
-  ],
+const browser = await launch({
+  args: ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--enable-zero-copy'],
 });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2 });
 

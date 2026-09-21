@@ -6,29 +6,10 @@
 // a rendering bug and was a CSS height bug, so it is worth a check that says
 // which of the two it is.
 
-import { chromium } from 'playwright';
-import { existsSync, readdirSync } from 'node:fs';
+import { launch } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
-const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
-const executablePath = (() => {
-  for (const d of readdirSync(cacheRoot)
-    .filter((x) => /^chromium-\d+$/.test(x))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
-    for (const c of [
-      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
-      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
-    ]) {
-      if (existsSync(c)) return c;
-    }
-  }
-  return undefined;
-})();
-
-const browser = await chromium.launch({
-  executablePath,
-  args: ['--use-gl=angle', '--use-angle=metal'],
-});
+const browser = await launch();
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
 await page.goto(`${base}/?files=60&lines=80`, { waitUntil: 'load' });
