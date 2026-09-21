@@ -8,7 +8,7 @@
 	import MenuItem from '$lib/ui/MenuItem.svelte';
 	import MenuSection from '$lib/ui/MenuSection.svelte';
 	import SanityMark from '$lib/ui/SanityMark.svelte';
-	import Swatches from '$lib/ui/Swatches.svelte';
+	import ThemePreview from '$lib/ui/ThemePreview.svelte';
 	import Search from '$lib/ui/Search.svelte';
 	import FileTypePicker from './FileTypePicker.svelte';
 	import { ui } from '$lib/state/ui.svelte';
@@ -104,14 +104,14 @@
 
 	<Menu
 		label="Theme"
-		width="200px"
+		width="300px"
 		open={ui.openMenu === 'theme'}
 		ontoggle={toggle('theme')}
 		onclose={close}
 	>
 		{#each THEMES as t (t.id)}
-			<MenuItem checked={ui.theme === t.id} onclick={() => ui.setTheme(t.id)}>
-				<Swatches colors={[t.bg, t.panel, t.accent]} />
+			<MenuItem tall checked={ui.theme === t.id} onclick={() => ui.setTheme(t.id)}>
+				<ThemePreview theme={t.id} />
 				{t.label}
 			</MenuItem>
 		{/each}

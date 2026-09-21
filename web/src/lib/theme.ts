@@ -6,20 +6,33 @@
 // chrome and the canvas from the same override block, and a colour cannot
 // drift between the two.
 
-export type ThemeId = 'sanity' | 'mariana' | 'monokai' | 'breakers';
+export type ThemeId =
+  | 'sanity'
+  | 'mariana'
+  | 'one'
+  | 'nord'
+  | 'gruvbox'
+  | 'monokai'
+  | 'breakers'
+  | 'solar';
 
 export interface ThemeInfo {
   id: ThemeId;
   label: string;
-  /** Swatches for the picker, so it does not have to mount a theme to show it. */
-  bg: string;
-  panel: string;
-  accent: string;
 }
 
 /**
- * The Sublime Text default schemes, values verbatim from
- * Packages/Color Scheme - Default in the Sublime distribution.
+ * The schemes, in order from dark to light.
+ *
+ * Mariana, Monokai and Breakers come from the Sublime Text distribution,
+ * values verbatim from Packages/Color Scheme - Default. One, Nord, Gruvbox and
+ * Solarized come from their own published palettes, also verbatim; each block
+ * in tokens.css names its source. sanity's own is the only invented one.
+ *
+ * The list carries the id and the label and nothing else: the Theme menu draws
+ * each one as a miniature of the canvas using that theme's own custom
+ * properties, so a picker colour kept here would be a second copy of three of
+ * them, free to drift.
  *
  * Celeste, Sublime's light default, is deliberately absent: it paints keywords
  * and types in the same black as ordinary text, and an app whose whole point
@@ -28,10 +41,14 @@ export interface ThemeInfo {
  * ground.
  */
 export const THEMES: ThemeInfo[] = [
-  { id: 'sanity', label: 'Sanity', bg: '#16181a', panel: '#1e2124', accent: '#ff2020' },
-  { id: 'mariana', label: 'Mariana', bg: '#2f3640', panel: '#30383f', accent: '#e05561' },
-  { id: 'monokai', label: 'Monokai', bg: '#1a1a15', panel: '#272822', accent: '#f92672' },
-  { id: 'breakers', label: 'Breakers', bg: '#ebeff0', panel: '#fbfcfc', accent: '#cf4550' },
+  { id: 'sanity', label: 'Sanity' },
+  { id: 'mariana', label: 'Mariana' },
+  { id: 'one', label: 'One' },
+  { id: 'nord', label: 'Nord' },
+  { id: 'gruvbox', label: 'Gruvbox' },
+  { id: 'monokai', label: 'Monokai' },
+  { id: 'breakers', label: 'Breakers' },
+  { id: 'solar', label: 'Solar' },
 ];
 
 /** Token colours, in the order of `Kind` in the wire format. */

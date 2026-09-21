@@ -48,7 +48,11 @@ agents work in the repository.
   backend, which reads and scans the whole tree per keystroke, so nothing has
   to be held in memory: 11.6 MB in 5 to 6 milliseconds here, 18.6 MB in 7 to 8
   on a larger project.
-- **Four themes**: Mariana, Monokai, Breakers, and sanity's own. A file type
+- **Eight themes**: sanity's own, Mariana, One, Nord, Gruvbox, Monokai, and
+  two light ones, Breakers and Solarized. The Theme menu shows each as a
+  miniature of the canvas in it, ground, panel, header and token-coloured
+  lines, rather than as three colour chips: the question when picking one is
+  what your code looks like in it. A file type
   picker draws each extension in full, as a placeholder, or not at all. The
   placeholders of a directory are packed into a grid of named chips rather than
   put through the treemap, since a placeholder has a fixed size and carries no
@@ -109,13 +113,15 @@ npm run check-all
 ```
 
 Type checks, clippy with warnings denied, 106 TypeScript tests and 66 Rust
-tests, then eleven checks that drive a real browser and assert on pixels: the
+tests, then twelve checks that drive a real browser and assert on pixels: the
 layout invariants, the dropdown geometry, that borders do not shimmer under a
 subpixel pan, that a change flashes its panel and then stops, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
 animate and come to rest, that an idle canvas draws nothing, that the overview
 texture is not smeared vertically, that a change plays as remove then add, and
-that a search dims the project, lights its matches and flies to a line. The
+that a search dims the project, lights its matches and flies to a line, and
+that every theme is complete, legible and its own rather than falling back to
+Mariana for whatever its block forgot. The
 layout case list includes a project two thirds reduced to placeholders. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.

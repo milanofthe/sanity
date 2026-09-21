@@ -358,3 +358,261 @@
 	--warn: var(--red-soft);
 	--error: var(--red-ink);
 }
+
+/* --- Nord ------------------------------------------------------------------
+
+   Arctic Ice Studio's palette, the nord colours verbatim. nord0 is the editor
+   background, so it becomes the panel and the canvas goes a step darker, the
+   same liberty the Mariana mapping takes. */
+
+[data-theme='nord'] {
+	--nord0: #2e3440;
+	--nord1: #3b4252;
+	--nord2: #434c5e;
+	--nord3: #4c566a;
+	--nord4: #d8dee9;
+	--nord7: #8fbcbb;
+	--nord8: #88c0d0;
+	--nord9: #81a1c1;
+	--nord10: #5e81ac;
+	--nord11: #bf616a;
+	--nord12: #d08770;
+	--nord13: #ebcb8b;
+	--nord14: #a3be8c;
+	--nord15: #b48ead;
+
+	--data-1: var(--nord8);
+	--data-2: var(--nord15);
+	--data-3: var(--nord14);
+	--data-4: var(--nord12);
+	--data-5: var(--nord3);
+	--data-6: var(--nord11);
+
+	--accent: var(--nord8);
+	--accent-deep: var(--nord10);
+	--on-accent: var(--nord0);
+
+	--bg: #272c36;
+	--bg-panel: var(--nord0);
+	--bg-inset: var(--nord1);
+	--bg-hover: var(--nord2);
+	--bg-active: var(--nord3);
+	--border: #3f4859;
+	--border-strong: var(--nord3);
+	--text: var(--nord4);
+	--text-dim: #a9b4c6;
+	--text-faint: #7b879b;
+
+	--tok-comment: var(--nord3);
+	--tok-doc-comment: #5d6a80;
+	--tok-string: var(--nord14);
+	--tok-number: var(--nord15);
+	--tok-keyword: var(--nord9);
+	--tok-type: var(--nord7);
+	--tok-function: var(--nord8);
+	--tok-punctuation: #8b97ab;
+	--tok-constant: var(--nord13);
+	--tok-attribute: var(--nord12);
+
+	--added: var(--nord14);
+	--modified: var(--nord13);
+	--deleted: var(--nord11);
+	--heat: var(--nord8);
+
+	--dir-bg: #22262f;
+	--reduced-bg: var(--nord1);
+	--reduced-ink: #5a657a;
+}
+
+/* --- Gruvbox ---------------------------------------------------------------
+
+   Pavel Pertsev's dark medium variant. The warmest scheme here, and the one
+   that makes the treemap read as paper rather than as a screen. */
+
+[data-theme='gruvbox'] {
+	--gb-bg: #282828;
+	--gb-bg1: #3c3836;
+	--gb-bg2: #504945;
+	--gb-bg3: #665c54;
+	--gb-fg: #ebdbb2;
+	--gb-fg3: #bdae93;
+	--gb-gray: #928374;
+	--gb-red: #fb4934;
+	--gb-green: #b8bb26;
+	--gb-yellow: #fabd2f;
+	--gb-blue: #83a598;
+	--gb-purple: #d3869b;
+	--gb-aqua: #8ec07c;
+	--gb-orange: #fe8019;
+
+	--data-1: var(--gb-blue);
+	--data-2: var(--gb-purple);
+	--data-3: var(--gb-green);
+	--data-4: var(--gb-orange);
+	--data-5: var(--gb-gray);
+	--data-6: var(--gb-red);
+
+	--accent: var(--gb-orange);
+	--accent-deep: #d65d0e;
+	--on-accent: #1d2021;
+
+	--bg: #1d2021;
+	--bg-panel: var(--gb-bg);
+	--bg-inset: var(--gb-bg1);
+	--bg-hover: var(--gb-bg2);
+	--bg-active: var(--gb-bg3);
+	--border: #494340;
+	--border-strong: var(--gb-bg3);
+	--text: var(--gb-fg);
+	--text-dim: var(--gb-fg3);
+	--text-faint: var(--gb-gray);
+
+	--tok-comment: var(--gb-gray);
+	--tok-doc-comment: #a89984;
+	--tok-string: var(--gb-green);
+	--tok-number: var(--gb-purple);
+	--tok-keyword: var(--gb-red);
+	--tok-type: var(--gb-yellow);
+	--tok-function: var(--gb-aqua);
+	--tok-punctuation: #a89984;
+	--tok-constant: var(--gb-purple);
+	--tok-attribute: var(--gb-orange);
+
+	--added: var(--gb-green);
+	--modified: var(--gb-yellow);
+	--deleted: var(--gb-red);
+	--heat: var(--gb-orange);
+
+	--dir-bg: #191c1d;
+	--reduced-bg: var(--gb-bg1);
+	--reduced-ink: #7c6f64;
+}
+
+/* --- One -------------------------------------------------------------------
+
+   Atom's One Dark, which is what most editors ship as their default now, so
+   it is the one scheme here that will already look familiar. */
+
+[data-theme='one'] {
+	--one-bg: #282c34;
+	--one-panel: #21252b;
+	--one-fg: #abb2bf;
+	--one-comment: #5c6370;
+	--one-red: #e06c75;
+	--one-green: #98c379;
+	--one-yellow: #e5c07b;
+	--one-orange: #d19a66;
+	--one-blue: #61afef;
+	--one-purple: #c678dd;
+	--one-cyan: #56b6c2;
+
+	--data-1: var(--one-blue);
+	--data-2: var(--one-purple);
+	--data-3: var(--one-green);
+	--data-4: var(--one-orange);
+	--data-5: var(--one-comment);
+	--data-6: var(--one-red);
+
+	--accent: var(--one-blue);
+	--accent-deep: #4b8fd0;
+	--on-accent: var(--one-panel);
+
+	--bg: #1c1f24;
+	--bg-panel: var(--one-bg);
+	--bg-inset: #2c313a;
+	--bg-hover: #3a3f4b;
+	--bg-active: #454b59;
+	--border: #3b414d;
+	--border-strong: #4f5666;
+	--text: var(--one-fg);
+	--text-dim: #8d95a3;
+	--text-faint: #6b7280;
+
+	--tok-comment: var(--one-comment);
+	--tok-doc-comment: #6d7484;
+	--tok-string: var(--one-green);
+	--tok-number: var(--one-orange);
+	--tok-keyword: var(--one-purple);
+	--tok-type: var(--one-yellow);
+	--tok-function: var(--one-blue);
+	--tok-punctuation: #7f8796;
+	--tok-constant: var(--one-cyan);
+	--tok-attribute: var(--one-red);
+
+	--added: var(--one-green);
+	--modified: var(--one-yellow);
+	--deleted: var(--one-red);
+	--heat: var(--one-blue);
+
+	--dir-bg: #181b1f;
+	--reduced-bg: #2c313a;
+	--reduced-ink: #565d6b;
+}
+
+/* --- Solar -----------------------------------------------------------------
+
+   Ethan Schoonover's Solarized, light variant, values verbatim. The second
+   light scheme, and a very different one from Breakers: its ground is warm
+   paper rather than white, which is the whole point of the design. */
+
+[data-theme='solar'] {
+	/* Light, so derived colours darken instead of lightening. */
+	--ink-mix: #000000;
+	--ground-mix: #ffffff;
+
+	--sol-base3: #fdf6e3;
+	--sol-base2: #eee8d5;
+	--sol-base1: #93a1a1;
+	--sol-base0: #839496;
+	--sol-base00: #657b83;
+	--sol-yellow: #b58900;
+	--sol-orange: #cb4b16;
+	--sol-red: #dc322f;
+	--sol-magenta: #d33682;
+	--sol-violet: #6c71c4;
+	--sol-blue: #268bd2;
+	--sol-cyan: #2aa198;
+	--sol-green: #859900;
+
+	--data-1: var(--sol-blue);
+	--data-2: var(--sol-violet);
+	--data-3: var(--sol-green);
+	--data-4: var(--sol-orange);
+	--data-5: var(--sol-base1);
+	--data-6: var(--sol-red);
+
+	--accent: var(--sol-blue);
+	--accent-deep: #1e6fa8;
+	--on-accent: var(--sol-base3);
+
+	--bg: #efe8d3;
+	--bg-panel: var(--sol-base3);
+	--bg-inset: var(--sol-base2);
+	--bg-hover: #e4ddc8;
+	--bg-active: #d9d2bd;
+	--border: #ddd6c1;
+	--border-strong: var(--sol-base1);
+	--text: var(--sol-base00);
+	--text-dim: var(--sol-base0);
+	--text-faint: var(--sol-base1);
+
+	--tok-comment: var(--sol-base1);
+	--tok-doc-comment: #8d9b9b;
+	--tok-string: var(--sol-cyan);
+	--tok-number: var(--sol-magenta);
+	--tok-keyword: var(--sol-green);
+	--tok-type: var(--sol-yellow);
+	--tok-function: var(--sol-blue);
+	--tok-punctuation: var(--sol-base0);
+	--tok-constant: var(--sol-violet);
+	--tok-attribute: var(--sol-orange);
+
+	--added: var(--sol-green);
+	--modified: var(--sol-yellow);
+	--deleted: var(--sol-red);
+	--heat: var(--sol-orange);
+
+	--dir-bg: #e7e0ca;
+	--reduced-bg: var(--sol-base2);
+	--reduced-ink: #a9b3b3;
+}

@@ -14,6 +14,7 @@
 		hint = '',
 		checked = false,
 		disabled = false,
+		tall = false,
 		icon,
 		onclick,
 		children
@@ -22,6 +23,10 @@
 		hint?: string;
 		checked?: boolean;
 		disabled?: boolean;
+		/** Lets the row grow to its content, for a row that holds a picture
+		 *  rather than a line of text. Off by default, because rows that size
+		 *  themselves is what the fixed height exists to prevent. */
+		tall?: boolean;
 		/** Leading icon. Replaces the check mark's slot, so a row has one or
 		 *  the other and the labels still line up either way. */
 		icon?: IconName;
@@ -30,7 +35,7 @@
 	} = $props();
 </script>
 
-<button class="item" class:checked {disabled} {onclick}>
+<button class="item" class:checked class:tall {disabled} {onclick}>
 	<span class="mark">
 		{#if checked}<Icon name="check" size={11} width={2} />{:else if icon}<Icon
 				name={icon}
@@ -60,6 +65,16 @@
 		line-height: 1;
 		text-align: left;
 		cursor: pointer;
+	}
+	/* A row holding a picture rather than a line of text sizes itself, which
+	   the fixed height exists to prevent everywhere else. */
+	.item.tall {
+		min-height: 0;
+		padding-top: var(--sp-1);
+		padding-bottom: var(--sp-1);
+	}
+	.item.tall.checked {
+		background: var(--bg-active);
 	}
 	.item:hover:not(:disabled) {
 		background: var(--bg-hover);
