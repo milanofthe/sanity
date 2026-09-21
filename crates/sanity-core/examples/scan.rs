@@ -30,8 +30,8 @@ fn main() {
     }
 
     println!(
-        "{:<16} {:>6} {:>10} {:>8} {:>9} {:>7} {:>6}",
-        "REPO", "FILES", "LINES", "BINARY", "SPANS", "HILIT", "MS"
+        "{:<16} {:>6} {:>10} {:>8} {:>9} {:>7} {:>7} {:>6}",
+        "REPO", "FILES", "LINES", "BINARY", "SPANS", "HILIT", "LIST", "MS"
     );
 
     for arg in &args {
@@ -46,6 +46,10 @@ fn main() {
                 continue;
             }
         };
+        // Listing and reading are reported apart: one walks directories and
+        // asks git what to ignore, the other reads and tokenises, and they are
+        // two different costs when the question is where the time goes.
+        let list_ms = t0.elapsed().as_millis();
 
         let mut files = 0u32;
         let mut lines = 0u64;
@@ -80,7 +84,7 @@ fn main() {
 
         let ms = t0.elapsed().as_millis();
         println!(
-            "{name:<16} {files:>6} {lines:>10} {binary:>8} {spans:>9} {:>6.0}% {ms:>6}",
+            "{name:<16} {files:>6} {lines:>10} {binary:>8} {spans:>9} {:>6.0}% {list_ms:>7} {ms:>6}",
             100.0 * highlighted as f64 / lines.max(1) as f64,
         );
 

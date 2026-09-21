@@ -13,7 +13,53 @@
 import { decodePng } from './png.mjs';
 import { base, canvasBox, frameOnScreen, launch, settled, src } from './browser.mjs';
 
-const QUERY = 'scene';
+/**
+ * The queries come from the fixture rather than from this file.
+ *
+ * They used to be two words picked by hand, which tied the check to whichever
+ * repository the fixture happened to be dumped from: swapping it for another
+ * project left one query matching nothing and the other matching a path when
+ * it was supposed to match only text. Derived here, the check asserts the same
+ * properties whatever is open.
+ */
+async function pickQueries(page) {
+  return page.evaluate(async () => {
+    const app = window.__sanity.app;
+    const files = app.layout.files;
+    const paths = files.map((f) => f.path);
+
+    // A name query: the stem of a file of middling size, which is guaranteed
+    // to match at least itself.
+    const sorted = [...files].sort((a, b) => a.lineCount - b.lineCount);
+    const mid = sorted[Math.floor(sorted.length / 2)];
+    const stem = (mid.path.split('/').pop() ?? '').replace(/\.[^.]+$/, '');
+    const name = stem.slice(0, Math.max(4, Math.min(10, stem.length)));
+
+    // A text query: a word out of the files themselves that no path contains,
+    // so stepping starts at a line rather than at a panel.
+    const words = new Set();
+    for (const f of sorted.slice(-40)) {
+      for (let line = 0; line < Math.min(120, f.lineCount); line++) {
+        const text = app.scene.text.lineText(f.path, line);
+        if (!text) continue;
+        for (const w of text.toLowerCase().match(/[a-z][a-z_]{5,}/g) ?? []) {
+          if (!paths.some((p) => p.toLowerCase().includes(w))) words.add(w);
+        }
+      }
+      if (words.size > 400) break;
+    }
+    for (const w of words) {
+      if (app.search(w).length !== 0) continue;
+      const r = await app.findText(w);
+      if (r.total >= 4 && r.files >= 2) {
+        app.search('');
+        return { name, text: w };
+      }
+    }
+    app.search('');
+    return { name, text: null };
+  });
+}
 
 const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
@@ -36,6 +82,11 @@ const fail = (msg) => {
   console.log(`FAIL  ${msg}`);
   failures++;
 };
+
+const picked = await pickQueries(page);
+const QUERY = picked.name;
+console.log(`queries from the fixture: "${QUERY}" by name, "${picked.text}" in the text`);
+await settled(page);
 
 /** Mean luminance inside a device-pixel rect. */
 function luminance(png, r) {
@@ -91,11 +142,16 @@ if (!matchPath) {
 }
 console.log(`"${QUERY}" should find ${matchPath} first, out of ${expected.at(-1)} files`);
 
-// A panel that does not match, big enough to sample: the one to watch dim.
+// A panel the query does not reach at all, big enough to sample: the one to
+// watch dim. Neither a name match nor a file with a hit in its text, since
+// both of those are lit on purpose and one of them is what this is measured
+// against.
 const other = await page.evaluate(
-  ([q, hit]) => {
+  async ([q, hit]) => {
     const app = window.__sanity.app;
     const found = new Set(app.search(q).map((m) => m.path));
+    await app.findText(q);
+    for (const h of app.hits) found.add(h.path);
     app.search('');
     let best = null;
     for (const f of app.layout.files) {
@@ -106,6 +162,11 @@ const other = await page.evaluate(
   },
   [QUERY, matchPath],
 );
+if (!other) {
+  fail(`"${QUERY}" reaches every file, so there is nothing to watch dim`);
+  await browser.close();
+  process.exit(1);
+}
 
 await frameOnScreen(page);
 const before = await page.screenshot({ type: 'png' });
@@ -217,7 +278,12 @@ if (text !== '') {
 // that both share. TEXT is a word the fixture's own files contain.
 // A word the fixture's files talk about and none of them is named after, so
 // the first thing Enter steps to is a line rather than a panel.
-const TEXT = 'butterworth';
+const TEXT = picked.text;
+if (!TEXT) {
+  fail('no word in the fixture matches its text without also matching a path');
+  await browser.close();
+  process.exit(1);
+}
 await page.click('header input');
 await page.keyboard.down('Meta');
 await page.keyboard.press('a');

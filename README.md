@@ -15,9 +15,10 @@ agents work in the repository.
 ## What it does
 
 - **Layout.** A squarified treemap on an integer grid, one cell per line
-  height, nested by directory. 86 to 99 percent of the canvas is panel,
-  measured across seven repositories from 120 to 2500 files. Long lines wrap
-  rather than clip; no character is dropped.
+  height, nested by directory. 83 to 99 percent of the canvas is panel,
+  measured across seven repository shapes from 120 to 2500 files, and no panel
+  is more than a tenth larger than the file in it needs at the 95th
+  percentile. Long lines wrap rather than clip; no character is dropped.
 - **Three levels of detail**, weighted as a partition of one so nothing
   double-draws through a transition. Below 1.8 pixels per line a file is one
   textured quad per column, sampled from a saturation-weighted mip chain.
@@ -29,7 +30,7 @@ agents work in the repository.
   fade with the panel's glow, which decays over 90 seconds.
 - **16 languages** through tree-sitter, plus a coarse lexer for Verilog-A and
   SPICE, which have no grammar that fits them. A code language gets a colour on
-  63 to 88 percent of its characters, prose markup on less because prose is
+  70 to 89 percent of its characters, prose markup on less because prose is
   supposed to stay plain; `--example coverage` reports it per language and
   fails if one falls below what is expected of it.
 - **Search from the toolbar**, over names and over text. Typing filters live:
@@ -38,9 +39,9 @@ agents work in the repository.
   the path is visible. Lines whose text matches are banded inside their panels.
   Enter walks what was found, files by name first and then hits line by line,
   flying the camera to each; Escape clears. The text search runs in the
-  backend, which reads and scans 18.6 MB across 1062 files in 7 to 8
-  milliseconds, so it happens per keystroke and nothing has to be held in
-  memory.
+  backend, which reads and scans the whole tree per keystroke, so nothing has
+  to be held in memory: 11.6 MB in 5 to 6 milliseconds here, 18.6 MB in 7 to 8
+  on a larger project.
 - **Four themes**: Mariana, Monokai, Breakers, and sanity's own. A file type
   picker draws each extension in full, as a placeholder, or not at all.
 - Read-only. A panel's header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
@@ -50,18 +51,19 @@ agents work in the repository.
 
 ## Measured
 
-On `sane`, 1062 files and 217,823 lines, release build, Apple M3.
+On [pathsim](https://github.com/pathsim/pathsim), 328 files and 71,278 lines
+over 11.6 MB, release build, Apple M3.
 
 | | |
 |---|---|
-| list the files | 16 ms |
-| read and tokenise | 349 ms, across 8 cores |
-| compute the layout | 19 ms |
-| rasterise 989 overview textures | 308 ms |
-| search every file for a word | 7 to 8 ms, across 8 cores |
-| draw a frame | 0.32 to 1.32 ms of CPU |
+| list the files | 9 ms |
+| read and tokenise | 303 ms, across 8 cores |
+| compute the layout | 5 ms |
+| rasterise 328 overview textures | 108 ms |
+| search every file for a word | 5 to 6 ms, across 8 cores |
+| draw a frame | 0.20 to 0.90 ms of CPU |
 | idle | 0.00 percent of a core |
-| memory | 196 MB resident, 249 MB of texture |
+| memory | 147 MB resident, 109 MB of texture |
 
 Idle is zero because the renderer draws on demand: the frame loop stops when
 nothing is moving and the watch thread blocks until the filesystem says
