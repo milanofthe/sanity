@@ -63,6 +63,8 @@ export class CanvasApp {
 
   /** Called when a panel header is clicked. */
   onOpenFile: ((path: string) => void) | null = null;
+  /** Called on right click, with the file under the pointer if there was one. */
+  onContextMenu: ((at: { x: number; y: number; path: string | null }) => void) | null = null;
 
   private fill = 0;
   private frameMs = 16.7;
@@ -148,8 +150,32 @@ export class CanvasApp {
     this.fit();
   }
 
-  fit(): void {
-    if (this.layout) this.cam.fit(...this.layout.bounds);
+  /** Fit the whole project. Animated unless asked otherwise. */
+  fit(seconds = 0.45): void {
+    if (!this.layout) return;
+    if (seconds <= 0) this.cam.fit(...this.layout.bounds);
+    else this.cam.flyToRect(...this.layout.bounds, seconds);
+  }
+
+  /** Fit one file, at a zoom where its text is readable if it will fit. */
+  focusFile(path: string, seconds = 0.5): void {
+    const node = this.layout?.files.find((f) => f.path === path);
+    if (!node) return;
+    // A little margin so the panel does not touch the window edge.
+    const pad = metrics.lineHeight * 2;
+    this.cam.flyToRect(
+      node.x - pad, node.y - pad, node.x + node.w + pad, node.y + node.h + pad, seconds,
+    );
+  }
+
+  /** The panel under a screen position, header or body. */
+  fileAt(sx: number, sy: number): FileNode | null {
+    if (!this.layout) return null;
+    const [wx, wy] = this.cam.screenToWorld(sx, sy);
+    for (const f of this.layout.files) {
+      if (wx >= f.x && wx <= f.x + f.w && wy >= f.y && wy <= f.y + f.h) return f;
+    }
+    return null;
   }
 
   /** Re-read the palette from CSS and push it into the scene. */
@@ -224,6 +250,32 @@ export class CanvasApp {
       if (this.scene) this.scene.hoveredPath = null;
       c.style.cursor = '';
     });
+
+    // Double click fits: on a panel, that panel; on the background, the whole
+    // project. The single-click handler already returns early on a drag, and a
+    // double click also fires two pointerups, so a header double click opens
+    // the file and then fits it, which is the useful reading of both.
+    c.addEventListener('dblclick', (e) => {
+      const [sx, sy] = [
+        e.clientX - c.getBoundingClientRect().left,
+        e.clientY - c.getBoundingClientRect().top,
+      ];
+      const hit = this.fileAt(sx, sy);
+      if (hit) this.focusFile(hit.path);
+      else this.fit();
+    });
+
+    c.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const r = c.getBoundingClientRect();
+      const sx = e.clientX - r.left;
+      const sy = e.clientY - r.top;
+      this.onContextMenu?.({
+        x: e.clientX,
+        y: e.clientY,
+        path: this.fileAt(sx, sy)?.path ?? null,
+      });
+    });
     c.addEventListener(
       'wheel',
       (e) => {
@@ -257,6 +309,7 @@ export class CanvasApp {
   }
 
   private frame = (now: number): void => {
+    this.cam.update(now);
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.frameMs = (now - this.lastFrame) * 0.15 + this.frameMs * 0.85;
     this.lastFrame = now;

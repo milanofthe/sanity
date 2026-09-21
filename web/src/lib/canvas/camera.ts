@@ -1,10 +1,24 @@
 // World space is measured in CSS pixels at zoom 1. The camera maps world to
 // clip space; every LOD decision downstream is derived from `zoom` alone.
 
+interface Flight {
+  x0: number;
+  y0: number;
+  /** Log zoom, because that is what interpolates evenly. */
+  lz0: number;
+  x1: number;
+  y1: number;
+  lz1: number;
+  start: number;
+  duration: number;
+}
+
 export class Camera {
   x = 0;
   y = 0;
   zoom = 1;
+
+  private flight: Flight | null = null;
 
   /** Viewport size in CSS pixels. */
   vw = 1;
@@ -25,6 +39,7 @@ export class Camera {
   /** Zoom around a fixed screen point, so the world point under the cursor
    *  stays put. */
   zoomAt(sx: number, sy: number, factor: number): void {
+    this.flight = null;
     const [wx, wy] = this.screenToWorld(sx, sy);
     const next = Math.min(this.maxZoom, Math.max(this.minZoom, this.zoom * factor));
     if (next === this.zoom) return;
@@ -35,6 +50,7 @@ export class Camera {
   }
 
   panBy(dxScreen: number, dyScreen: number): void {
+    this.flight = null;
     this.x -= dxScreen / this.zoom;
     this.y -= dyScreen / this.zoom;
   }
@@ -62,12 +78,82 @@ export class Camera {
     out[8] = 1;
   }
 
-  fit(x0: number, y0: number, x1: number, y1: number, padFrac = 0.04): void {
+  /** Zoom and centre that would fit the rect, without applying it. */
+  fitFor(
+    x0: number, y0: number, x1: number, y1: number, padFrac = 0.04,
+  ): { x: number; y: number; zoom: number } {
     const w = Math.max(1, x1 - x0);
     const h = Math.max(1, y1 - y0);
     const z = Math.min(this.vw / w, this.vh / h) * (1 - padFrac);
-    this.zoom = Math.min(this.maxZoom, Math.max(this.minZoom, z));
-    this.x = (x0 + x1) / 2;
-    this.y = (y0 + y1) / 2;
+    return {
+      x: (x0 + x1) / 2,
+      y: (y0 + y1) / 2,
+      zoom: Math.min(this.maxZoom, Math.max(this.minZoom, z)),
+    };
+  }
+
+  fit(x0: number, y0: number, x1: number, y1: number, padFrac = 0.04): void {
+    const t = this.fitFor(x0, y0, x1, y1, padFrac);
+    this.flight = null;
+    this.x = t.x;
+    this.y = t.y;
+    this.zoom = t.zoom;
+  }
+
+  /**
+   * Animate to a target.
+   *
+   * Zoom is interpolated in log space. Linear interpolation of the zoom factor
+   * looks wrong for the same reason linear interpolation of a scale does: a
+   * flight from 0.02 to 2 would spend almost all its time at the far end and
+   * then snap, because equal steps in zoom are not equal steps in apparent
+   * motion. In log space, each frame covers the same ratio.
+   */
+  flyTo(x: number, y: number, zoom: number, seconds = 0.45): void {
+    const target = Math.min(this.maxZoom, Math.max(this.minZoom, zoom));
+    if (seconds <= 0) {
+      this.flight = null;
+      this.x = x;
+      this.y = y;
+      this.zoom = target;
+      return;
+    }
+    this.flight = {
+      x0: this.x,
+      y0: this.y,
+      lz0: Math.log(this.zoom),
+      x1: x,
+      y1: y,
+      lz1: Math.log(target),
+      start: performance.now(),
+      duration: seconds * 1000,
+    };
+  }
+
+  flyToRect(x0: number, y0: number, x1: number, y1: number, seconds = 0.45, padFrac = 0.04): void {
+    const t = this.fitFor(x0, y0, x1, y1, padFrac);
+    this.flyTo(t.x, t.y, t.zoom, seconds);
+  }
+
+  get flying(): boolean {
+    return this.flight !== null;
+  }
+
+  /** Cancel an animation, so a drag or a wheel takes over immediately. */
+  stop(): void {
+    this.flight = null;
+  }
+
+  /** Advance any animation. Call once per frame before rendering. */
+  update(now: number): void {
+    const f = this.flight;
+    if (!f) return;
+    const raw = Math.min(1, (now - f.start) / f.duration);
+    // Cubic ease in and out: no sudden start, no overshoot at the end.
+    const t = raw < 0.5 ? 4 * raw * raw * raw : 1 - (-2 * raw + 2) ** 3 / 2;
+    this.x = f.x0 + (f.x1 - f.x0) * t;
+    this.y = f.y0 + (f.y1 - f.y0) * t;
+    this.zoom = Math.exp(f.lz0 + (f.lz1 - f.lz0) * t);
+    if (raw >= 1) this.flight = null;
   }
 }

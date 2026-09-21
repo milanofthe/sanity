@@ -10,11 +10,13 @@ import { chromium } from 'playwright';
 import { existsSync, readdirSync } from 'node:fs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
-// 0.88 rather than 0.9: directories give up a grid cell at their right and
-// bottom edge so sibling borders do not land on top of each other, and on a
-// repo of many tiny files in many directories that costs a point or two of
-// fill. Separated borders are worth more than the area.
-const MIN_FILL = Number(process.env.SANITY_MIN_FILL ?? 0.88);
+// Every panel and directory gives up one grid cell at its right and bottom
+// edge, so no two neighbours draw their border along the same line. On a
+// realistic repository that costs two or three points of fill; the floor is
+// set for the pathological case in this list, 800 files of twelve lines, where
+// a 14 unit gap is a fifth of a panel's height. Separated borders are worth
+// more than the area.
+const MIN_FILL = Number(process.env.SANITY_MIN_FILL ?? 0.85);
 
 const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
 const executablePath = (() => {

@@ -5,3 +5,4 @@ target/
 *.log
 web/shots/
 artifacts/
+web/public/fixture/

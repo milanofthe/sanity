@@ -46,12 +46,15 @@ export function quantize(n: number, min = 8): number {
 }
 
 export interface PanelGeometry {
-  /** Text columns per code column, quantized. */
+  /** Characters of text drawn per code column. */
   cols: number;
   /** Number of code columns the lines are wrapped into. */
   columns: number;
-  /** Lines per code column, quantized. */
+  /** Lines per code column. */
   linesPerColumn: number;
+  /** Distance from one code column to the next, in world units. Stored rather
+   *  than derived from `cols`, because surplus slot width becomes gutter. */
+  pitch: number;
   /** Outer size in world units, title bar and padding included. */
   w: number;
   h: number;
@@ -70,6 +73,7 @@ export function stubGeometry(): PanelGeometry {
     cols: MIN_PANEL_COLS,
     columns: 1,
     linesPerColumn: 0,
+    pitch: MIN_PANEL_COLS * metrics.charWidth + COLUMN_GUTTER,
     w: MIN_PANEL_COLS * metrics.charWidth + 2 * metrics.panelPadX,
     h: metrics.titleHeight,
   };
@@ -127,7 +131,11 @@ export interface SlotFit extends PanelGeometry {
   usable: boolean;
 }
 
-export function fillSlot(lineCount: number, slotW: number, slotH: number): SlotFit {
+/** Characters of slack allowed beyond a file's own width before the surplus
+ *  is turned into gutter instead of column. */
+const WIDTH_SLACK = 6;
+
+export function fillSlot(lineCount: number, fileCols: number, slotW: number, slotH: number): SlotFit {
   const innerW = slotW - 2 * metrics.panelPadX;
   const innerH = slotH - metrics.titleHeight - 2 * metrics.panelPadY;
   const lines = Math.max(1, lineCount);
@@ -137,6 +145,7 @@ export function fillSlot(lineCount: number, slotW: number, slotH: number): SlotF
       cols: HARD_MIN_COLS,
       columns: 1,
       linesPerColumn: Math.max(1, Math.floor(innerH / metrics.lineHeight)),
+      pitch: HARD_MIN_COLS * metrics.charWidth + COLUMN_GUTTER,
       w: slotW,
       h: slotH,
       ok: false,
@@ -153,6 +162,7 @@ export function fillSlot(lineCount: number, slotW: number, slotH: number): SlotF
       cols: PREFERRED_MIN_COLS,
       columns: MAX_COLUMNS,
       linesPerColumn,
+      pitch: PREFERRED_MIN_COLS * metrics.charWidth + COLUMN_GUTTER,
       w: slotW,
       h: slotH,
       ok: false,
@@ -165,16 +175,25 @@ export function fillSlot(lineCount: number, slotW: number, slotH: number): SlotF
   // at the right edge rather than spread into fractional offsets.
   const pitch = Math.floor((innerW + COLUMN_GUTTER) / columns / metrics.charWidth)
     * metrics.charWidth;
-  const cols = Math.floor((pitch - COLUMN_GUTTER) / metrics.charWidth);
+  const available = Math.floor((pitch - COLUMN_GUTTER) / metrics.charWidth);
+
+  // Cap the text width at what the file actually uses. Without this a flat,
+  // wide slot produces columns with room for two hundred characters holding
+  // lines of sixty, and the panel reads as mostly empty: the visible symptom
+  // was large blank regions inside otherwise dense panels. The surplus becomes
+  // gutter, so the panel still fills its slot and the columns spread out.
+  const wanted = Math.max(PREFERRED_MIN_COLS, Math.min(MAX_PANEL_COLS, fileCols + WIDTH_SLACK));
+  const cols = Math.min(available, wanted);
 
   return {
-    cols: Math.min(MAX_PANEL_COLS, cols),
+    cols,
     columns,
     linesPerColumn,
+    pitch,
     w: slotW,
     h: slotH,
-    ok: cols >= PREFERRED_MIN_COLS,
-    usable: cols >= HARD_MIN_COLS,
+    ok: available >= PREFERRED_MIN_COLS,
+    usable: available >= HARD_MIN_COLS,
   };
 }
 
@@ -201,6 +220,7 @@ export function panelGeometry(lineCount: number, maxCols: number): PanelGeometry
     cols,
     columns,
     linesPerColumn,
+    pitch: cols * metrics.charWidth + COLUMN_GUTTER,
     w: inner.w + 2 * metrics.panelPadX,
     h: inner.h + 2 * metrics.panelPadY + metrics.titleHeight,
   };
@@ -219,7 +239,7 @@ export const textOriginY = metrics.titleHeight + metrics.panelPadY;
  * columns as a fractional offset.
  */
 export function columnPitch(g: PanelGeometry): number {
-  return g.cols * metrics.charWidth + COLUMN_GUTTER;
+  return g.pitch;
 }
 
 /** Usable text width of one code column, in world units. */

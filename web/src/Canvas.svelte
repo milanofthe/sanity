@@ -5,10 +5,11 @@
 	import { onMount } from 'svelte';
 	import { CanvasApp, type CanvasStats } from '$lib/canvas/app';
 
-	let { app = $bindable(), onstats, onopenfile }: {
+	let { app = $bindable(), onstats, onopenfile, oncontextmenu }: {
 		app?: CanvasApp;
 		onstats?: (s: CanvasStats) => void;
 		onopenfile?: (path: string) => void;
+		oncontextmenu?: (at: { x: number; y: number; path: string | null }) => void;
 	} = $props();
 
 	let canvas: HTMLCanvasElement;
@@ -17,6 +18,7 @@
 		const instance = new CanvasApp(canvas);
 		if (onstats) instance.onStats = onstats;
 		if (onopenfile) instance.onOpenFile = onopenfile;
+		if (oncontextmenu) instance.onContextMenu = oncontextmenu;
 		app = instance;
 		return () => instance.destroy();
 	});

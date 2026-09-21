@@ -42,6 +42,16 @@ export interface Slot {
  *  tallest class no matter how few files actually land in it. */
 const CHUNK_BUDGET_BYTES = 8 << 20;
 
+/**
+ * Weight a fully desaturated texel keeps when a mip level is reduced.
+ *
+ * At 1 the reduction is a plain average and colour washes out; at 0 a single
+ * saturated texel would take over its whole block and the overview would
+ * crawl while zooming. A quarter keeps comments and strings legible several
+ * levels out without either happening.
+ */
+const SAT_FLOOR = 0.25;
+
 interface Chunk {
   tex: WebGLTexture;
   layers: number;
@@ -207,36 +217,112 @@ export class OverviewTextures {
 
     const chunk = cls.chunks[slot.chunkIdx];
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, chunk.tex);
+    // The mip chain is built from the whole layer, transparent rows past the
+    // end of a short file included, so reducing cannot pull in whatever a
+    // previous occupant of the layer left behind.
+    const full = new Uint8Array(tw * th * 4);
+    full.set(out.subarray(0, tw * rows * 4));
+
     gl.texSubImage3D(
       gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot.layer,
-      tw, rows, 1,
+      tw, th, 1,
       gl.RGBA, gl.UNSIGNED_BYTE,
-      out, 0,
+      full, 0,
     );
-    // Rows beyond the file's own extent stay transparent; clear them once so a
-    // recycled layer does not bleed a previous file into this one.
-    if (rows < th) {
-      const blank = new Uint8Array(tw * (th - rows) * 4);
-      gl.texSubImage3D(
-        gl.TEXTURE_2D_ARRAY, 0, 0, rows, slot.layer,
-        tw, th - rows, 1,
-        gl.RGBA, gl.UNSIGNED_BYTE,
-        blank, 0,
-      );
-    }
+    this.uploadMips(slot.layer, full, tw, th);
     chunk.dirty = true;
   }
 
-  /** Regenerate mipmaps for any chunk written to since the last call. */
-  finalize(): void {
-    const { gl } = this;
-    for (const cls of this.classes) {
-      for (const chunk of cls.chunks) {
-        if (!chunk.dirty) continue;
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, chunk.tex);
-        gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
-        chunk.dirty = false;
+  /**
+   * Reduce one mip level, weighting each texel by coverage and saturation.
+   *
+   * A plain box filter, which is what `generateMipmap` applies, averages
+   * colour towards grey: most of a line of code is identifiers, so the few
+   * saturated texels are outvoted at every level, and three or four levels out
+   * every file has drifted to the same neutral tone. What that looks like is
+   * the colours changing as you zoom out rather than only the scale.
+   *
+   * Weighting by saturation lets comments, strings and keywords survive the
+   * reduction, so a file keeps its signature all the way out. Alpha stays a
+   * plain average, because it is ink coverage and has to remain linear or the
+   * indentation structure would bloom.
+   */
+  private reduce(src: Uint8Array, sw: number, sh: number): { data: Uint8Array; w: number; h: number } {
+    const dw = Math.max(1, sw >> 1);
+    const dh = Math.max(1, sh >> 1);
+    const dst = new Uint8Array(dw * dh * 4);
+
+    for (let y = 0; y < dh; y++) {
+      const rows = [Math.min(sh - 1, y * 2), Math.min(sh - 1, y * 2 + 1)];
+      for (let x = 0; x < dw; x++) {
+        const colsIdx = [Math.min(sw - 1, x * 2), Math.min(sw - 1, x * 2 + 1)];
+        let wr = 0;
+        let wg = 0;
+        let wb = 0;
+        let weight = 0;
+        let alpha = 0;
+
+        for (const sy of rows) {
+          for (const sx of colsIdx) {
+            const o = (sy * sw + sx) * 4;
+            const r = src[o];
+            const g = src[o + 1];
+            const b = src[o + 2];
+            const a = src[o + 3];
+            alpha += a;
+            if (a === 0) continue;
+            const max = Math.max(r, g, b);
+            const min = Math.min(r, g, b);
+            const sat = max === 0 ? 0 : (max - min) / max;
+            // Coverage times a saturation boost: a coloured texel counts for
+            // roughly four times a grey one of the same coverage.
+            const w = (a / 255) * (SAT_FLOOR + (1 - SAT_FLOOR) * sat);
+            wr += r * w;
+            wg += g * w;
+            wb += b * w;
+            weight += w;
+          }
+        }
+
+        const o = (y * dw + x) * 4;
+        if (weight > 0) {
+          dst[o] = Math.min(255, Math.round(wr / weight));
+          dst[o + 1] = Math.min(255, Math.round(wg / weight));
+          dst[o + 2] = Math.min(255, Math.round(wb / weight));
+        }
+        dst[o + 3] = Math.round(alpha / 4);
       }
+    }
+    return { data: dst, w: dw, h: dh };
+  }
+
+  /** Build and upload the whole mip chain for one layer. */
+  private uploadMips(layer: number, base: Uint8Array, w: number, h: number): void {
+    const { gl } = this;
+    let src = base;
+    let sw = w;
+    let sh = h;
+    let level = 1;
+    while (sw > 1 || sh > 1) {
+      const next = this.reduce(src, sw, sh);
+      gl.texSubImage3D(
+        gl.TEXTURE_2D_ARRAY, level, 0, 0, layer,
+        next.w, next.h, 1,
+        gl.RGBA, gl.UNSIGNED_BYTE,
+        next.data, 0,
+      );
+      src = next.data;
+      sw = next.w;
+      sh = next.h;
+      level++;
+    }
+  }
+
+  /** Mip chains are written per layer as files arrive, so there is nothing to
+   *  flush. Kept because the call site should not have to know that. */
+  finalize(): void {
+    for (const cls of this.classes) {
+      for (const chunk of cls.chunks) chunk.dirty = false;
     }
   }
 

@@ -14,14 +14,15 @@ import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
 const ROOT_ASPECT = 16 / 9;
 
 /**
- * Inset between a panel and the edge of its slot.
+ * Gap between a panel and the edge of its slot: one grid cell.
  *
- * Zero: the panels tile. Their one pixel borders then sit directly against
- * each other, which is what makes the alignment visible rather than something
- * you have to take on trust. A margin here would also push the text off the
- * character lattice, since it is not a multiple of the character width.
+ * One cell rather than zero so that two neighbouring panels do not each draw
+ * their border along the same line, and rather than some smaller value because
+ * a gap off the lattice would push the text off the character grid with it.
+ * Same size as the gap between directories, so every separation in the layout
+ * is the same width.
  */
-const PANEL_INSET = 0;
+const PANEL_GAP_CELLS = 1;
 
 /** Directory frame, in grid cells, so the nesting also lands on the lattice. */
 const DIR_PAD_CELLS = 1;
@@ -192,9 +193,16 @@ function sortChildren(dir: DirNode): void {
 }
 
 function placeFile(f: FileNode, slot: IntRect): void {
-  const r = toWorld(slot);
-  const w = Math.max(CELL, r.w - PANEL_INSET);
-  const h = Math.max(CELL, r.h - PANEL_INSET);
+  // Give up a cell at the right and bottom, the same way directories do.
+  const own: IntRect = {
+    x: slot.x,
+    y: slot.y,
+    w: Math.max(1, slot.w - PANEL_GAP_CELLS),
+    h: Math.max(1, slot.h - PANEL_GAP_CELLS),
+  };
+  const r = toWorld(own);
+  const w = r.w;
+  const h = r.h;
   f.slotW = w;
   f.slotH = h;
   f.x = r.x;
@@ -213,7 +221,7 @@ function placeFile(f: FileNode, slot: IntRect): void {
 
   // The panel is the slot. Everything about its text layout is derived from
   // the rectangle it was given, which is what makes the edges align.
-  const fit = fillSlot(f.lineCount, w, h);
+  const fit = fillSlot(f.lineCount, f.maxCols, w, h);
   f.geom = fit;
   f.w = w;
   f.h = h;

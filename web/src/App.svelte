@@ -2,12 +2,18 @@
 	// The shell: toolbar, canvas, status bar. Holds the wiring between the
 	// chrome's state and the canvas, and nothing else.
 	import Toolbar from './Toolbar.svelte';
+	import ContextMenu from '$lib/ui/ContextMenu.svelte';
+	import MenuItem from '$lib/ui/MenuItem.svelte';
+	import MenuSection from '$lib/ui/MenuSection.svelte';
 	import Canvas from './Canvas.svelte';
 	import StatusBar from './StatusBar.svelte';
 	import type { CanvasApp, CanvasStats } from '$lib/canvas/app';
 	import { project } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { openSynthetic } from '$lib/sources/synthetic';
+	import {
+		fixtureLoaded, fixtureName, loadFixture, openFixture,
+	} from '$lib/sources/fixture';
 	import {
 		inTauri, initialRepo, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
 	} from '$lib/sources/tauri';
@@ -16,6 +22,16 @@
 	let stats = $state<CanvasStats | null>(null);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
+	let ctx = $state<{ x: number; y: number; path: string | null } | null>(null);
+
+	const fileName = (p: string) => p.split('/').pop() ?? p;
+
+	function openFile(path: string) {
+		if (!inTauri() || !loadedRoot()) return;
+		openInEditor(path).catch((e) => {
+			error = e instanceof Error ? e.message : String(e);
+		});
+	}
 
 	// Re-open the scene whenever the set of drawn types changes. The layout is
 	// a pure function of the file list, so this is the whole implementation of
@@ -24,7 +40,8 @@
 
 	function rebuild() {
 		if (!app) return;
-		if (loadedRoot()) openLoaded(app);
+		if (fixtureLoaded()) openFixture(app);
+		else if (loadedRoot()) openLoaded(app);
 		else openSynthetic(app);
 	}
 
@@ -70,6 +87,18 @@
 		started = true;
 		// A folder from the command line wins; otherwise show generated data so
 		// the window has something to be before one is chosen.
+		const fixture = fixtureName();
+		if (fixture) {
+			busy = true;
+			loadFixture(fixture)
+				.then(() => {
+					rebuild();
+					app?.fit();
+				})
+				.catch((e) => (error = e instanceof Error ? e.message : String(e)))
+				.finally(() => (busy = false));
+			return;
+		}
 		initialRepo().then((path) => {
 			if (path) openFolder(path);
 			else if (app && project.groups.length === 0) openSynthetic(app, true);
@@ -94,13 +123,46 @@
 <Canvas
 	bind:app
 	onstats={(s) => (stats = s)}
-	onopenfile={(path) => {
-		// Clicking a panel header opens the file. Only meaningful with a real
-		// repository behind it, so it is a no-op on synthetic data.
-		if (!inTauri() || !loadedRoot()) return;
-		openInEditor(path).catch((e) => {
-			error = e instanceof Error ? e.message : String(e);
-		});
-	}}
+	onopenfile={openFile}
+	oncontextmenu={(at) => (ctx = at)}
 />
 <StatusBar {stats} {error} />
+
+<ContextMenu x={ctx?.x ?? 0} y={ctx?.y ?? 0} open={ctx !== null} onclose={() => (ctx = null)}>
+	{#if ctx?.path}
+		<MenuSection title={fileName(ctx.path)}>
+			<MenuItem
+				label="Fit to view"
+				onclick={() => {
+					if (ctx?.path) app?.focusFile(ctx.path);
+					ctx = null;
+				}}
+			/>
+			<MenuItem
+				label="Open in editor"
+				disabled={!inTauri() || !loadedRoot()}
+				onclick={() => {
+					if (ctx?.path) openFile(ctx.path);
+					ctx = null;
+				}}
+			/>
+			<MenuItem
+				label="Copy path"
+				onclick={() => {
+					if (ctx?.path) navigator.clipboard?.writeText(ctx.path);
+					ctx = null;
+				}}
+			/>
+		</MenuSection>
+	{/if}
+	<MenuSection>
+		<MenuItem
+			label="Fit project"
+			hint="f"
+			onclick={() => {
+				app?.fit();
+				ctx = null;
+			}}
+		/>
+	</MenuSection>
+</ContextMenu>
