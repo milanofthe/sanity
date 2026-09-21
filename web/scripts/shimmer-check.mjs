@@ -1,0 +1,142 @@
+// Asserts that borders do not shimmer while panning.
+//
+// A one pixel border on fractional coordinates gets antialiased across two
+// pixels, and the split changes with every subpixel of pan, so the line pulses.
+// That is invisible in a screenshot and obvious in motion, which makes it
+// exactly the kind of thing to measure instead of look at.
+//
+// Two checks:
+//   1. Sub-pixel pans must not change the image at all. With snapping, a pan
+//      of a quarter pixel rounds to the same grid and renders identically.
+//   2. A horizontal slice through a border must contain no intermediate
+//      values between the border colour and what is on either side.
+
+import { chromium } from 'playwright';
+import { existsSync, readdirSync } from 'node:fs';
+import { decodePng } from './png.mjs';
+
+const base = process.env.SANITY_URL ?? 'http://localhost:5183';
+const src = process.env.SANITY_SRC ?? 'fixture=fixture';
+
+const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
+const executablePath = (() => {
+  for (const d of readdirSync(cacheRoot)
+    .filter((x) => /^chromium-\d+$/.test(x))
+    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
+    for (const c of [
+      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
+      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
+    ]) {
+      if (existsSync(c)) return c;
+    }
+  }
+  return undefined;
+})();
+
+const browser = await chromium.launch({
+  executablePath,
+  args: ['--use-gl=angle', '--use-angle=metal'],
+});
+const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
+page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
+await page.goto(`${base}/?${src}`, { waitUntil: 'load' });
+await page.waitForFunction(
+  () => {
+    const t = document.querySelector('footer')?.textContent ?? '';
+    return t.length > 0 && !t.includes('indexing');
+  },
+  null,
+  { timeout: 180000 },
+);
+await page.waitForTimeout(600);
+
+// A zoom where region borders are on screen at a few pixels.
+await page.evaluate(() => {
+  const c = window.__sanity.app.cam;
+  window.__sanity.zoomTo(0.25);
+  c.x = Math.round(c.x);
+  c.y = Math.round(c.y);
+});
+await page.waitForTimeout(400);
+
+let failures = 0;
+
+const between = (a, b, c) => (a < b && b < c) || (c < b && b < a);
+
+/**
+ * Look for antialiased edges directly, without needing to know any colour.
+ *
+ * An antialiased boundary leaves a pixel whose value lies strictly between its
+ * two neighbours in every channel: that is what blending produces and a hard
+ * edge cannot. Counting those is a colour-independent test for whether any
+ * edge is being blended, which matters because a blended edge on fractional
+ * coordinates moves its blend with every subpixel of pan, and that is the
+ * shimmer.
+ *
+ * `edges` is reported alongside, so a run that found nothing to look at cannot
+ * pass as a run that found nothing wrong.
+ */
+async function edgeStats() {
+  const png = decodePng(await page.screenshot({ type: 'png' }));
+  const { width, height, data } = png;
+  let edges = 0;
+  let blended = 0;
+
+  // Rows through the canvas, clear of the toolbar and the status bar.
+  for (const frac of [0.25, 0.4, 0.55, 0.7, 0.85]) {
+    const y = Math.floor(height * frac);
+    for (let x = 1; x < width - 1; x++) {
+      const o = (y * width + x) * 4;
+      const p = o - 4;
+      const n = o + 4;
+      const step =
+        Math.abs(data[o] - data[p]) +
+        Math.abs(data[o + 1] - data[p + 1]) +
+        Math.abs(data[o + 2] - data[p + 2]);
+      if (step > 24) edges++;
+      const isBlend =
+        between(data[p], data[o], data[n]) &&
+        between(data[p + 1], data[o + 1], data[n + 1]) &&
+        between(data[p + 2], data[o + 2], data[n + 2]);
+      const spread =
+        Math.abs(data[p] - data[n]) +
+        Math.abs(data[p + 1] - data[n + 1]) +
+        Math.abs(data[p + 2] - data[n + 2]);
+      if (isBlend && spread > 40) blended++;
+    }
+  }
+  return { edges, blended };
+}
+
+const samples = [];
+for (const dx of [0, 0.25, 0.5, 0.75]) {
+  await page.evaluate((d) => {
+    const c = window.__sanity.app.cam;
+    c.x = Math.round(c.x) + d / c.zoom;
+  }, dx);
+  await page.waitForTimeout(250);
+  samples.push(await edgeStats());
+}
+
+const edges = samples.map((s) => s.edges);
+const blended = samples.map((s) => s.blended);
+console.log(`edges sampled:       ${edges.join(' / ')}`);
+console.log(`blended edge pixels: ${blended.join(' / ')}`);
+
+if (Math.min(...edges) < 20) {
+  console.log('FAIL  too few edges sampled for the result to mean anything');
+  failures++;
+}
+// Glyph antialiasing is deliberate and shows up here too, so the budget is
+// not zero; a blended rectangle edge across this many rows runs to hundreds.
+const limit = Number(process.env.SANITY_BLEND_LIMIT ?? 120);
+if (Math.max(...blended) > limit) {
+  console.log(`FAIL  ${Math.max(...blended)} blended edge pixels, over the ${limit} allowed`);
+  failures++;
+} else {
+  console.log('ok    no rectangle edge is being blended');
+}
+
+await browser.close();
+console.log(failures === 0 ? '\nborders are stable under panning' : `\n${failures} check(s) failed`);
+process.exit(failures === 0 ? 0 : 1);

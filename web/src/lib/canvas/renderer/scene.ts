@@ -74,9 +74,17 @@ const HAIRLINE_PX = 1;
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
 
-/** Border width of a top-level directory, in device pixels; each level in
- *  loses one, to a floor of one. */
-const DIR_BORDER_PX = 4;
+/**
+ * Border width of a top-level directory, in device pixels. Each level in loses
+ * one, down to `DIR_BORDER_MIN_PX`.
+ *
+ * Heavier than the hairline that panels use, and deliberately so: a region
+ * boundary encloses many panels and has to be readable as the stronger
+ * statement of the two. At four dropping to one, the inner levels were the
+ * same weight as the panels inside them and the nesting disappeared.
+ */
+const DIR_BORDER_PX = 6;
+const DIR_BORDER_MIN_PX = 2;
 
 /**
  * Line count for a header, short enough to fit one.
@@ -205,7 +213,7 @@ export class Scene {
     this.progOverview = createProgram(gl, overviewVS, overviewFS, 'overview');
     this.progSpan = createProgram(gl, spanVS, spanFS, 'span');
     this.progGlyph = createProgram(gl, glyphVS, glyphFS, 'glyph');
-    this.uRect = uniforms(gl, this.progRect, ['uView', 'uScale']);
+    this.uRect = uniforms(gl, this.progRect, ['uView', 'uViewport']);
     this.uOverview = uniforms(gl, this.progOverview, ['uView', 'uTex']);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
@@ -303,12 +311,12 @@ export class Scene {
     d[o + 8] = br; d[o + 9] = bg; d[o + 10] = bb; d[o + 11] = borderPx;
   }
 
-  private drawRects(b: InstanceBuffer, scale: number): void {
+  private drawRects(b: InstanceBuffer): void {
     if (b.count === 0) return;
     const { gl } = this;
     gl.useProgram(this.progRect);
     gl.uniformMatrix3fv(this.uRect.uView, false, this.view);
-    gl.uniform1f(this.uRect.uScale, scale);
+    gl.uniform2f(this.uRect.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     b.upload();
     quadAttrib(gl, this.progRect, this.quad);
     gl.bindBuffer(gl.ARRAY_BUFFER, b.buf);
@@ -381,12 +389,11 @@ export class Scene {
     gl.clearColor(br, bg, bb, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    const scale = cam.zoom * cam.dpr;
-    this.drawRects(this.bgRects, scale);
+    this.drawRects(this.bgRects);
     this.drawOverview();
     this.drawSpans();
     this.drawGlyphs(pxPerLine, cam.dpr);
-    this.drawRects(this.fgRects, scale);
+    this.drawRects(this.fgRects);
 
     let overviewQuads = 0;
     for (const b of this.overviewByChunk.values()) overviewQuads += b.count;
@@ -420,7 +427,7 @@ export class Scene {
     // uniform hairline made a four-level tree look flat, and a border in world
     // units would vanish when zoomed out, so this is in device pixels and
     // clamped to at least one.
-    const weight = Math.max(1, DIR_BORDER_PX - d.depth);
+    const weight = Math.max(DIR_BORDER_MIN_PX, DIR_BORDER_PX - d.depth);
     // Fill behind everything, frame in front, for the same reason panels split
     // theirs: the children are drawn in between.
     this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, tint, 1, 0, 0);

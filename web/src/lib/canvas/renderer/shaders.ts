@@ -13,18 +13,38 @@ in vec4 aRect;    // world x, y, w, h
 in vec4 aFill;    // rgba
 in vec4 aBorder;  // rgb, and border width in device pixels in .a
 uniform mat3 uView;
-uniform float uScale;  // world units to device pixels
+uniform vec2 uViewport;  // framebuffer size in device pixels
 out vec2 vLocalPx;
 out vec2 vSizePx;
 out vec4 vFill;
 out vec4 vBorder;
+
+// Clip space to device pixels and back.
+vec2 toPx(vec2 clip) { return (clip * 0.5 + 0.5) * uViewport; }
+vec2 toClip(vec2 px) { return (px / uViewport) * 2.0 - 1.0; }
+
 void main() {
-  vec2 world = aRect.xy + aCorner * aRect.zw;
-  vSizePx = aRect.zw * uScale;
+  // Snap both corners to the pixel grid.
+  //
+  // Without this a one pixel border lands on fractional coordinates, the
+  // fragment shader antialiases it across two pixels, and the split changes
+  // with every subpixel of pan: the border pulses. Snapping makes it exactly
+  // one pixel wherever it is, so it steps rather than shimmers, and it also
+  // keeps the fill's edges from bleeding a half-transparent seam between two
+  // rectangles that share an edge.
+  vec2 p0 = toPx((uView * vec3(aRect.xy, 1.0)).xy);
+  vec2 p1 = toPx((uView * vec3(aRect.xy + aRect.zw, 1.0)).xy);
+  vec2 q0 = floor(p0 + 0.5);
+  vec2 q1 = floor(p1 + 0.5);
+  // A rectangle rounded to nothing would vanish; keep at least one pixel.
+  vec2 dir = sign(q1 - q0 + 0.0001);
+  q1 = q0 + dir * max(abs(q1 - q0), vec2(1.0));
+
+  vSizePx = abs(q1 - q0);
   vLocalPx = aCorner * vSizePx;
   vFill = aFill;
   vBorder = aBorder;
-  gl_Position = vec4((uView * vec3(world, 1.0)).xy, 0.0, 1.0);
+  gl_Position = vec4(toClip(mix(q0, q1, aCorner)), 0.0, 1.0);
 }`;
 
 export const rectFS = `${HEAD}
@@ -36,10 +56,14 @@ out vec4 oColor;
 void main() {
   float d = min(min(vLocalPx.x, vSizePx.x - vLocalPx.x),
                 min(vLocalPx.y, vSizePx.y - vLocalPx.y));
-  // Antialias the border over one pixel, and clamp its width so a rectangle
-  // smaller than its own border does not turn into a solid block of border.
+  // Clamp the width so a rectangle smaller than its own border does not turn
+  // into a solid block of border.
   float w = min(vBorder.a, min(vSizePx.x, vSizePx.y) * 0.5);
-  float onBorder = w > 0.0 ? 1.0 - smoothstep(w - 0.5, w + 0.5, d) : 0.0;
+  // A hard edge, not a smoothstep: the vertex shader has already snapped the
+  // rectangle to whole pixels, so the border covers whole pixels and needs no
+  // antialiasing. Blending it instead is what made the edges shimmer, since
+  // the coverage of each boundary pixel changed with every subpixel of pan.
+  float onBorder = w > 0.0 ? 1.0 - step(w, d) : 0.0;
   oColor = vec4(mix(vFill.rgb, vBorder.rgb, onBorder), mix(vFill.a, 1.0, onBorder));
 }`;
 

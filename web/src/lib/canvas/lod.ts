@@ -35,14 +35,22 @@ export interface LodBands {
 const DEFAULT_BANDS: LodBands = {
   tokensFrom: 1.8,
   tokensTo: 3.2,
-  // Text is fully up at twelve pixels per line, which is where the em box is
-  // about ten pixels and the code plainly readable. The band used to run from
-  // twelve to seventeen, so at zoom 1 the glyphs were only forty percent in
-  // and the bars still dominated text you could already read. The question is
-  // not when glyphs become legible but when they become more useful than
-  // bars, and that is as soon as they are legible at all.
-  textFrom: 8,
-  textTo: 12,
+  // Text starts at four pixels per line and is fully up by six.
+  //
+  // Walked down from twelve-to-seventeen in three steps, because every guess
+  // was too cautious in the same direction. Two things were wrong in the
+  // reasoning. The first: the question is not when glyphs look good but when
+  // they beat bars, and a soft word beats a sharp bar almost immediately,
+  // since the bar is only ever a stand-in for the word. The second: a wide
+  // band is not a gentle transition, it is a long stretch where neither
+  // representation is fully there, so the band is now two pixels rather than
+  // five.
+  //
+  // Four is the floor. Below it the em box is under three and a half pixels
+  // and glyphs stop being distinguishable from noise, which is the one case
+  // where bars really are the better picture.
+  textFrom: 4,
+  textTo: 6,
 };
 
 /**
