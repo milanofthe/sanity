@@ -42,6 +42,16 @@ pub const HIGHLIGHT_NAMES: &[&str] = &[
     "string.escape",
     "string.special",
     "tag",
+    // nvim-treesitter's names, which is what tree-sitter-md's queries were
+    // written against. A capture that matches no entry here resolves to
+    // nothing, silently, so a grammar using another vocabulary renders as
+    // plain text however well it parses.
+    "text.emphasis",
+    "text.literal",
+    "text.reference",
+    "text.strong",
+    "text.title",
+    "text.uri",
     "type",
     "type.builtin",
     "variable",
@@ -80,6 +90,16 @@ const KIND_FOR_NAME: &[Kind] = &[
     Kind::String,      // string.escape
     Kind::String,      // string.special
     Kind::Type,        // tag
+    // What is worth seeing in a document at a glance: the headings that give
+    // it structure, the code and links that are not prose, and that is about
+    // it. Emphasis gets a colour of its own rather than being folded into
+    // plain, because otherwise a document has exactly two colours.
+    Kind::Variable,    // text.emphasis
+    Kind::String,      // text.literal
+    Kind::Constant,    // text.reference
+    Kind::Constant,    // text.strong
+    Kind::Keyword,     // text.title
+    Kind::Constant,    // text.uri
     Kind::Type,        // type
     Kind::Type,        // type.builtin
     Kind::Variable,    // variable
@@ -113,13 +133,17 @@ struct Entry {
     locals: &'static [&'static str],
 }
 
+/// Markdown's injection query, with `injection.include-children` added to the
+/// inline pattern. See the note in the file.
+const MARKDOWN_INJECTIONS: &str = include_str!("../queries/markdown/injections.scm");
+
+/// The LaTeX highlight query, written by hand against the node names the
+/// grammar produces. See the note at the top of the file.
+const LATEX_HIGHLIGHTS: &str = include_str!("../queries/latex/highlights.scm");
+
 /// Registry order sets the language ids, so entries are only ever appended.
 ///
-/// Id 15 is deliberately unused: it was LaTeX, dropped because
-/// `tree-sitter-latex` ships the grammar with its highlight query commented
-/// out, and `tree-sitter-verilog` ships none at all. Both need a query written
-/// by hand before they can be added, which is tracked separately. Ids are
-/// written into payload headers, so a gap is cheaper than a renumber.
+/// Ids are written into payload headers, so a gap is cheaper than a renumber.
 fn entries() -> &'static [Entry] {
     &[
         Entry {
@@ -234,7 +258,9 @@ fn entries() -> &'static [Entry] {
             extensions: &["md", "markdown"],
             language: || tree_sitter_md::LANGUAGE.into(),
             highlights: &[tree_sitter_md::HIGHLIGHT_QUERY_BLOCK],
-            injections: &[tree_sitter_md::INJECTION_QUERY_BLOCK],
+            // The shipped query with one directive added; see the note in the
+            // file for why it is the difference between working and not.
+            injections: &[MARKDOWN_INJECTIONS],
             locals: &[],
         },
         Entry {
@@ -253,6 +279,28 @@ fn entries() -> &'static [Entry] {
             language: || tree_sitter_html::LANGUAGE.into(),
             highlights: &[tree_sitter_html::HIGHLIGHTS_QUERY],
             injections: &[tree_sitter_html::INJECTIONS_QUERY],
+            locals: &[],
+        },
+        Entry {
+            // Reachable only through markdown's injection query, never by
+            // extension: a paragraph is a separate grammar in tree-sitter-md,
+            // and without this everything inside one has no query looking at
+            // it, which measured as 0.7 percent of characters coloured.
+            id: 17,
+            name: "markdown_inline",
+            extensions: &[],
+            language: || tree_sitter_md::INLINE_LANGUAGE.into(),
+            highlights: &[tree_sitter_md::HIGHLIGHT_QUERY_INLINE],
+            injections: &[tree_sitter_md::INJECTION_QUERY_INLINE],
+            locals: &[],
+        },
+        Entry {
+            id: 15,
+            name: "latex",
+            extensions: &["tex", "sty", "cls", "bib"],
+            language: || codebook_tree_sitter_latex::LANGUAGE.into(),
+            highlights: &[LATEX_HIGHLIGHTS],
+            injections: &[],
             locals: &[],
         },
         Entry {
@@ -310,6 +358,44 @@ pub fn grammar_for_extension(ext: &str) -> Option<&'static Grammar> {
         .find(|e| e.extensions.contains(&lower.as_str()))
         .map(|e| e.id)?;
     grammars().iter().find(|g| g.id == id)
+}
+
+/// Names an injection query may use for a language, mapped to a registry name.
+///
+/// Injection queries name languages however their author felt like, and the
+/// names have to line up with the registry or the injection is silently
+/// declined. `inline` is what tree-sitter-md's block query calls its own
+/// paragraph grammar.
+const ALIASES: &[(&str, &str)] = &[
+    ("js", "javascript"),
+    ("jsx", "tsx"),
+    ("ts", "typescript"),
+    ("mjs", "javascript"),
+    ("cjs", "javascript"),
+    ("py", "python"),
+    ("rs", "rust"),
+    ("sh", "bash"),
+    ("shell", "bash"),
+    ("zsh", "bash"),
+    ("c++", "cpp"),
+    ("golang", "go"),
+    ("md", "markdown"),
+    ("inline", "markdown_inline"),
+    ("markdown-inline", "markdown_inline"),
+    ("tex", "latex"),
+    ("yml", "yaml"),
+];
+
+/// The grammar registered under this name, following aliases. Case
+/// insensitive, because injection queries are not consistent about it.
+pub fn grammar_for_name(name: &str) -> Option<&'static Grammar> {
+    let lower = name.to_ascii_lowercase();
+    let resolved = ALIASES
+        .iter()
+        .find(|(from, _)| *from == lower.as_str())
+        .map(|(_, to)| *to)
+        .unwrap_or(lower.as_str());
+    grammars().iter().find(|g| g.name == resolved)
 }
 
 /// Extension of a repo-relative path, or None for an extensionless file.

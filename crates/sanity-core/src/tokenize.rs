@@ -130,15 +130,20 @@ pub fn tokenize(text: &str, grammar: &Grammar) -> FileData {
     let mut highlighter = Highlighter::new();
 
     // Arguments after the source are the text encoding (None for UTF-8), a
-    // cancellation flag, and the injection callback. Injections are declined:
-    // a fenced code block inside Markdown highlighted as its own language
-    // would be nice, and needs its own grammar lookup to do properly.
+    // cancellation flag, and the injection callback.
+    //
+    // Injections are accepted, and they are not a nicety. A `.svelte` file is
+    // parsed as HTML, so without them the TypeScript in its script block is
+    // the bulk of the file and entirely uncoloured; measured at 16 percent of
+    // characters coloured against 85 percent for the same code in a `.ts`
+    // file. Markdown is worse: its paragraphs are a separate grammar, so
+    // everything inside one had no query looking at it at all.
     let events = match highlighter.highlight(
         &grammar.config,
         text.as_bytes(),
         None,
         None,
-        |_| None,
+        |name| crate::lang::grammar_for_name(name).map(|g| &g.config),
     ) {
         Ok(e) => e,
         Err(_) => return crate::scan::plain_file_data(text),
@@ -193,6 +198,82 @@ mod tests {
         let line2 = kinds_on_line(&f, 2);
         assert!(line2.contains(&(Kind::Keyword as u8)), "let is a keyword");
         assert!(line2.contains(&(Kind::String as u8)), "string literal");
+    }
+
+    /// The two regressions that return silently, because a grammar that
+    /// captures nothing still parses and still renders.
+    #[test]
+    fn injected_languages_are_highlighted() {
+        // A .svelte file is parsed as HTML, so the TypeScript in its script
+        // block is only reached through an injection. Without one this is the
+        // bulk of the file and entirely uncoloured: measured at 16 percent of
+        // characters coloured against 85 percent for the same code in a .ts
+        // file.
+        let g = grammar_for_extension("svelte").unwrap();
+        let src = "<script lang=\"ts\">\n  const x = 1;\n</script>\n<p>hi</p>\n";
+        let f = tokenize(src, g);
+        f.validate().unwrap();
+        assert!(
+            kinds_on_line(&f, 1).contains(&(Kind::Keyword as u8)),
+            "const inside a script block has to be a keyword: {:?}",
+            kinds_on_line(&f, 1)
+        );
+    }
+
+    #[test]
+    fn markdown_reaches_its_own_inline_grammar() {
+        // In tree-sitter-md a paragraph is a separate grammar, and the markup
+        // delimiters inside it are children of the block node, so the
+        // injection needs `include-children` or the inline grammar is handed
+        // the prose with the markup cut out and captures nothing.
+        let g = grammar_for_extension("md").unwrap();
+        let src = "# A heading\n\nSome prose with **bold** and `code`.\n";
+        let f = tokenize(src, g);
+        f.validate().unwrap();
+
+        assert!(
+            kinds_on_line(&f, 0).contains(&(Kind::Keyword as u8)),
+            "a heading has to stand out: {:?}",
+            kinds_on_line(&f, 0)
+        );
+        let prose = kinds_on_line(&f, 2);
+        assert!(
+            prose.iter().any(|&k| k != Kind::Plain as u8),
+            "emphasis and code spans have to be marked: {prose:?}"
+        );
+    }
+
+    #[test]
+    fn a_fenced_code_block_is_highlighted_as_its_language() {
+        let g = grammar_for_extension("md").unwrap();
+        let src = "text\n\n```rust\nfn main() {}\n```\n";
+        let f = tokenize(src, g);
+        assert!(
+            kinds_on_line(&f, 3).contains(&(Kind::Keyword as u8)),
+            "fn inside a rust fence has to be a keyword: {:?}",
+            kinds_on_line(&f, 3)
+        );
+    }
+
+    #[test]
+    fn latex_gets_commands_comments_and_environments() {
+        // The query is hand written, so this is the only thing standing
+        // between it and quietly matching nothing.
+        let g = grammar_for_extension("tex").unwrap();
+        let src = "% a note\n\\documentclass{article}\n\\begin{align}\n  x^2\n\\end{align}\n";
+        let f = tokenize(src, g);
+        f.validate().unwrap();
+        assert!(kinds_on_line(&f, 0).contains(&(Kind::Comment as u8)), "percent starts a comment");
+        assert!(
+            kinds_on_line(&f, 1).contains(&(Kind::Keyword as u8)),
+            "documentclass is structure: {:?}",
+            kinds_on_line(&f, 1)
+        );
+        assert!(
+            kinds_on_line(&f, 2).contains(&(Kind::Type as u8)),
+            "the environment name is a type: {:?}",
+            kinds_on_line(&f, 2)
+        );
     }
 
     #[test]

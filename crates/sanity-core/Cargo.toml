@@ -21,6 +21,10 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
+# The latex-lsp grammar. Published under this name because the
+# canonical crate stopped at 0.1.0; it parses real papers cleanly
+# while `tree-sitter-latex` ships its query commented out.
+codebook-tree-sitter-latex = "0.6.1"
 tree-sitter-yaml = "0.7.2"
 
 [dev-dependencies]
