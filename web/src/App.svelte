@@ -134,9 +134,10 @@
 
 <ContextMenu x={ctx?.x ?? 0} y={ctx?.y ?? 0} open={ctx !== null} onclose={() => (ctx = null)}>
 	{#if ctx?.path}
-		<MenuSection title={fileName(ctx.path)}>
+		<MenuSection title={fileName(ctx.path)} verbatim>
 			<MenuItem
 				label="Fit to view"
+				icon="fit"
 				onclick={() => {
 					if (ctx?.path) app?.focusFile(ctx.path);
 					ctx = null;
@@ -144,6 +145,7 @@
 			/>
 			<MenuItem
 				label="Open in editor"
+				icon="external"
 				disabled={!inTauri() || !loadedRoot()}
 				onclick={() => {
 					if (ctx?.path) openFile(ctx.path);
@@ -152,6 +154,7 @@
 			/>
 			<MenuItem
 				label="Copy path"
+				icon="copy"
 				onclick={() => {
 					if (ctx?.path) navigator.clipboard?.writeText(ctx.path);
 					ctx = null;
@@ -162,6 +165,7 @@
 	<MenuSection>
 		<MenuItem
 			label="Fit project"
+			icon="fit"
 			hint="f"
 			onclick={() => {
 				app?.fit();

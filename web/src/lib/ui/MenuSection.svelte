@@ -1,11 +1,18 @@
 <script lang="ts">
 	// A titled group inside a Menu, with a rule above it.
 	import type { Snippet } from 'svelte';
-	let { title = '', children }: { title?: string; children: Snippet } = $props();
+	let {
+		title = '',
+		/** Leave the title as written. Section headings are upper-cased for the
+		 *  usual reason, but a file name is case sensitive and upper-casing it
+		 *  shows something that is not the name. */
+		verbatim = false,
+		children
+	}: { title?: string; verbatim?: boolean; children: Snippet } = $props();
 </script>
 
 <div class="section">
-	{#if title}<div class="title">{title}</div>{/if}
+	{#if title}<div class="title" class:verbatim>{title}</div>{/if}
 	{@render children()}
 </div>
 
@@ -23,5 +30,15 @@
 		text-transform: uppercase;
 		color: var(--text-faint);
 		padding: 2px var(--sp-3) var(--sp-1);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.title.verbatim {
+		text-transform: none;
+		letter-spacing: 0.01em;
+		font-family: var(--font-mono);
+		font-size: var(--fs-xs);
+		color: var(--text-dim);
 	}
 </style>

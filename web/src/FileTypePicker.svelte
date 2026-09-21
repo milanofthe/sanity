@@ -31,6 +31,9 @@
 			<div class="row" style:--share={`${(share(g.lines) * 100).toFixed(1)}%`}>
 				<span class="col-name">
 					<span class="name">{g.id}</span>
+					{#if g.id === 'other'}
+						<span class="why">under 0.5%</span>
+					{/if}
 				</span>
 				<span class="col-num">{n(g.files)}</span>
 				<span class="col-num">{n(g.lines)}</span>
@@ -104,7 +107,7 @@
 	.foot,
 	.group-head {
 		display: grid;
-		grid-template-columns: 1fr 48px 70px auto;
+		grid-template-columns: minmax(0, 1fr) 52px 74px auto;
 		align-items: center;
 		gap: var(--sp-2);
 		min-height: var(--row-h);
@@ -131,15 +134,24 @@
 		font-size: var(--fs-s);
 		color: var(--text);
 	}
-	/* Share of the repository as a fill behind the row, so the list reads as a
-	   distribution at a glance. A separate bar next to the name read as a
-	   dash and competed with the numbers. */
-	.row {
-		background: linear-gradient(
-			to right,
-			var(--bg-active) 0 var(--share),
-			transparent var(--share) 100%
-		);
+	/* Share of the repository, as a fill behind the type name only.
+	   Spanning the whole row put a hard vertical edge through the file and
+	   line columns, which read as a broken layout rather than as a bar. */
+	.col-name {
+		position: relative;
+	}
+	.col-name::before {
+		content: '';
+		position: absolute;
+		inset: 2px auto 2px -4px;
+		width: var(--share);
+		max-width: calc(100% + 8px);
+		background: var(--bg-active);
+		z-index: 0;
+	}
+	.col-name > * {
+		position: relative;
+		z-index: 1;
 	}
 	.row:hover {
 		background: var(--bg-hover);

@@ -46,6 +46,7 @@
 	>
 		<MenuItem
 			label="Open folder…"
+			icon="folder"
 			disabled={busy}
 			onclick={() => {
 				ui.openMenu = null;

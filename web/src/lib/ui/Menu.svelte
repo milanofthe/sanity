@@ -3,6 +3,7 @@
 	// outside click or Escape. One implementation for every toolbar menu, so
 	// they cannot drift apart in width, padding or dismiss behaviour.
 	import type { Snippet } from 'svelte';
+	import Icon from './Icon.svelte';
 
 	// `open` is controlled rather than bound: the toolbar keeps at most one
 	// menu open, and that rule belongs to whoever owns the set, not to each
@@ -39,7 +40,7 @@
 <div class="menu" bind:this={root}>
 	<button class="trigger" class:on={open} onclick={() => ontoggle?.()}>
 		{label}
-		<span class="caret" aria-hidden="true">▾</span>
+		<span class="caret" class:up={open}><Icon name="chevron-down" size={13} /></span>
 	</button>
 	{#if open}
 		<div class="sheet" style:width>
@@ -72,8 +73,13 @@
 		color: var(--text);
 	}
 	.caret {
-		font-size: 8px;
-		opacity: 0.7;
+		display: flex;
+		opacity: 0.65;
+		transition: transform 120ms ease-out;
+	}
+	.caret.up {
+		transform: rotate(180deg);
+		opacity: 1;
 	}
 	.sheet {
 		position: absolute;

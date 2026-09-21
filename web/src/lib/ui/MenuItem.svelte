@@ -6,12 +6,15 @@
 	// overlapping their neighbours, because whether a row contained a check
 	// mark changed its intrinsic height.
 	import type { Snippet } from 'svelte';
+	import Icon from './Icon.svelte';
+	import type { IconName } from './Icon.svelte';
 
 	let {
 		label = '',
 		hint = '',
 		checked = false,
 		disabled = false,
+		icon,
 		onclick,
 		children
 	}: {
@@ -19,13 +22,21 @@
 		hint?: string;
 		checked?: boolean;
 		disabled?: boolean;
+		/** Leading icon. Replaces the check mark's slot, so a row has one or
+		 *  the other and the labels still line up either way. */
+		icon?: IconName;
 		onclick?: () => void;
 		children?: Snippet;
 	} = $props();
 </script>
 
 <button class="item" class:checked {disabled} {onclick}>
-	<span class="mark" aria-hidden="true">{checked ? '\u00b7' : ''}</span>
+	<span class="mark">
+		{#if checked}<Icon name="check" size={11} width={2} />{:else if icon}<Icon
+				name={icon}
+				size={12}
+			/>{/if}
+	</span>
 	<span class="label">
 		{#if children}{@render children()}{:else}{label}{/if}
 	</span>
@@ -59,11 +70,15 @@
 		cursor: default;
 	}
 	.mark {
-		width: 6px;
+		width: 13px;
 		flex: none;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		color: var(--accent);
-		font-size: var(--fs-l);
-		line-height: 1;
+	}
+	.item:not(.checked) .mark {
+		color: var(--text-faint);
 	}
 	.label {
 		display: flex;
