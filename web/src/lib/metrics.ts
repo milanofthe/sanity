@@ -101,6 +101,13 @@ export const timing = {
    *  arriving as one block. Long enough to read as an arrival, short enough
    *  that nobody waits for it. */
   appearStagger: 0.45,
+  /** Seconds the lines that are going away take to fade out, before the new
+   *  content is put in. Short: it is the first half of one gesture. */
+  changeOut: 0.28,
+  /** Seconds the lines that arrived take to settle from the change colour down
+   *  to the standing band. Longer than the removal, so the thing that is now
+   *  there is what you end up looking at. */
+  changeIn: 0.5,
   /** Scale a panel starts at when it appears. Close to one: a panel is a
    *  rectangle in a grid of rectangles, and anything more than a nudge reads
    *  as a bounce rather than as settling. */

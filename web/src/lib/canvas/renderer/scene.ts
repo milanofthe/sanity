@@ -14,7 +14,9 @@ import {
   applyTo, finished, IDENTITY, same, settleIn, slideFrom, transformFor,
   type PanelAnim, type Rect as PanelRect, type Transform,
 } from '$lib/canvas/anim';
+import { diffLines, signatures, type Signature } from '$lib/canvas/linediff';
 import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
+import { bandColour, mixToward } from '$lib/canvas/colour';
 import { rgb, UiInk, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
 import {
@@ -63,6 +65,36 @@ export interface SceneFile {
    *  layer still holds the right picture. */
   wroteRows: number;
   wroteCols: number;
+  /** Per-line signatures of the content on screen, to diff the next version
+   *  against. */
+  sig: Signature;
+  /** A change being shown, or null. */
+  change: LineChangeAnim | null;
+}
+
+/**
+ * A change in progress on one file: take the old lines away, then put the new
+ * ones in.
+ *
+ * Both halves are needed and they are in different coordinate systems. The
+ * removed lines are indices into the version on screen, so they are drawn
+ * while that version is still up. The added lines are indices into the version
+ * that replaces it, so the content is swapped when the first phase ends and
+ * the second phase draws against the new rows.
+ */
+interface LineChangeAnim {
+  phase: 'remove' | 'add';
+  /** Seconds into the current phase. */
+  t: number;
+  /** Line indices in the version being replaced. */
+  removedRows: number[];
+  /** Line indices in the version replacing it. */
+  addedRows: number[];
+  /** The new payload, held until the removal has played. */
+  pending: FileData | null;
+  /** Set when the next version should also warm the panel: a write, not a
+   *  baseline moving. */
+  warm: boolean;
 }
 
 
@@ -97,6 +129,24 @@ const HAIRLINE_PX = 1;
  *  the baseline. Enough to pick out of a screen of panels, far enough from the
  *  full heat colour that a just-written file still stands out among them. */
 const DIRTY_TINT = 0.45;
+/**
+ * How far a changed line's band steps away from the panel's own brightness,
+ * towards the change colour's.
+ *
+ * A luminance step rather than a translucent wash over the text, and rather
+ * than a plain mix. A wash at any useful strength turned light code on a dark
+ * panel into light code on a light band, because `--added` is near white in
+ * the sanity theme. A plain mix has the same problem. Stepping the luminance
+ * keeps the contrast between the code and what it sits on bounded whatever the
+ * palette says, and works on a light theme without a second rule; see
+ * `bandColour`.
+ *
+ * `BAND` is the standing mark on a line that differs from the baseline, kept
+ * low because the code is what should be read. `CHANGE` is the strength at the
+ * start of a change, which settles back to `BAND`.
+ */
+const BAND_MIX = 0.12;
+const CHANGE_MIX = 0.4;
 
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
@@ -169,35 +219,6 @@ function aggregateState(data: FileData): LineState {
   return LineState.Unchanged;
 }
 
-function mixToward(base: number, target: number, amount: number): number {
-  if (amount <= 0) return base;
-  const [br, bg, bb] = rgb(base);
-  const [tr0, tg0, tb0] = rgb(target);
-  const lum = 0.2126 * br + 0.7152 * bg + 0.0722 * bb;
-  const tlum = 0.2126 * tr0 + 0.7152 * tg0 + 0.0722 * tb0;
-
-  let tr = tr0;
-  let tg = tg0;
-  let tb = tb0;
-  if (tlum <= 0) {
-    return base;
-  }
-  if (tlum < lum) {
-    const k = Math.min(1, (lum - tlum) / (1 - tlum));
-    tr += (1 - tr) * k;
-    tg += (1 - tg) * k;
-    tb += (1 - tb) * k;
-  } else {
-    const scale = lum / tlum;
-    tr *= scale;
-    tg *= scale;
-    tb *= scale;
-  }
-
-  const mix = (b: number, t: number) =>
-    Math.max(0, Math.min(255, Math.round(255 * (b * (1 - amount) + t * amount))));
-  return (mix(br, tr) << 16) | (mix(bg, tg) << 8) | mix(bb, tb);
-}
 
 
 export class Scene {
@@ -432,6 +453,8 @@ export class Scene {
         rows: new Uint32Array(1),
         heat: 0, state: aggregateState(data), anim: this.animFor(node),
         wroteRows: 0, wroteCols: 0,
+        sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
+        change: null,
       });
       return;
     }
@@ -445,6 +468,8 @@ export class Scene {
       node, data, slot, rows, heat: 0, state: aggregateState(data),
       anim: this.animFor(node),
       wroteRows: rows[data.lineCount], wroteCols: node.geom.cols,
+      sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
+      change: null,
     });
   }
 
@@ -464,6 +489,7 @@ export class Scene {
     f.node = node;
     f.data = data;
     f.state = aggregateState(data);
+    f.sig = signatures(data.lineCount, data.lineCols, data.spanStart, data.spans);
     if (node.stub) return;
     f.rows = wrapOffsets(data.lineCols, node.geom.cols);
     const rows = f.rows[data.lineCount];
@@ -491,17 +517,81 @@ export class Scene {
   touch(path: string, data?: FileData, warm = true): void {
     const f = this.files.get(path);
     if (!f) return;
-    if (data) {
-      f.data = data;
-      f.state = aggregateState(data);
-      if (!f.node.stub) {
-        f.rows = wrapOffsets(data.lineCols, f.node.geom.cols);
-        this.textures.write(f.slot, data, f.node.geom.cols, f.rows);
-        f.wroteRows = f.rows[data.lineCount];
-        f.wroteCols = f.node.geom.cols;
-      }
+    if (!data) {
+      if (warm) f.heat = 1;
+      return;
     }
+
+    // A change already playing is finished first, so the diff is against what
+    // the file will actually be showing rather than against a version that is
+    // on its way out. Two saves in quick succession are two changes, not a
+    // tangle.
+    if (f.change?.pending) this.applyData(f, f.change.pending);
+    f.change = null;
+
+    const next = signatures(data.lineCount, data.lineCols, data.spanStart, data.spans);
+    const diff = diffLines(f.sig, next);
+
+    // Nothing to play: identical content, or so much of it changed that
+    // animating each line individually would say less than replacing the
+    // panel. A checkout is the second case.
+    if (diff.wholesale || (diff.removed.length === 0 && diff.added.length === 0)) {
+      this.applyData(f, data);
+      if (warm) f.heat = 1;
+      return;
+    }
+
+    // The new content waits until the removal has played. Until then the panel
+    // keeps showing the version the removed lines belong to.
+    f.change = {
+      phase: 'remove',
+      t: 0,
+      removedRows: diff.removed,
+      addedRows: diff.added,
+      pending: data,
+      warm,
+    };
+    // The glow starts now rather than when the content lands: the file was
+    // written now.
     if (warm) f.heat = 1;
+  }
+
+  /** Put a new version of a file on screen. */
+  private applyData(f: SceneFile, data: FileData): void {
+    f.data = data;
+    f.state = aggregateState(data);
+    f.sig = signatures(data.lineCount, data.lineCols, data.spanStart, data.spans);
+    if (f.node.stub) return;
+    f.rows = wrapOffsets(data.lineCols, f.node.geom.cols);
+    this.textures.write(f.slot, data, f.node.geom.cols, f.rows);
+    f.wroteRows = f.rows[data.lineCount];
+    f.wroteCols = f.node.geom.cols;
+  }
+
+  /**
+   * Advance a change by `dt`, swapping the content when the removal is done.
+   *
+   * Returns true while there is still something to draw, so the frame loop
+   * knows the picture is changing on its own.
+   */
+  private advanceChange(f: SceneFile, dt: number): boolean {
+    const ch = f.change;
+    if (!ch) return false;
+    ch.t += dt;
+    if (ch.phase === 'remove') {
+      if (ch.t < timing.changeOut) return true;
+      // The old lines are gone; now the new ones arrive.
+      if (ch.pending) this.applyData(f, ch.pending);
+      ch.pending = null;
+      ch.phase = 'add';
+      ch.t = 0;
+      return true;
+    }
+    if (ch.t >= timing.changeIn) {
+      f.change = null;
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -614,6 +704,16 @@ export class Scene {
     }
     this.tf = IDENTITY;
 
+    // Per-file state that has to advance whether the file is on screen or not.
+    // Both of these were inside the draw loop, which meant a file edited while
+    // it was off screen kept its glow until you panned to it, and worse, the
+    // new content of a change never landed because the phase that swaps it in
+    // never ran.
+    for (const f of this.files.values()) {
+      if (f.heat > 0) f.heat = Math.max(0, f.heat - dt / timing.heatDecay);
+      if (f.change && this.advanceChange(f, dt)) stillAnimating = true;
+    }
+
     let visibleFiles = 0;
     for (const f of this.files.values()) {
       const n = f.node;
@@ -643,8 +743,6 @@ export class Scene {
       }
       visibleFiles++;
 
-      if (f.heat > 0) f.heat = Math.max(0, f.heat - dt / timing.heatDecay);
-
       // A stub is a frame and a hatch, at every zoom level. It says the file
       // is there and stops: no overview texture, no tokens, no glyphs, and no
       // area proportional to its size. That is the whole point of the mode.
@@ -663,7 +761,10 @@ export class Scene {
         this.pushGlyphs(f, glyphFade, vx0, vy0, vx1, vy1);
         this.pushLineNumbers(f, glyphFade, vx0, vy0, vx1, vy1);
       }
-      if (spanFade > 0.004 || glyphFade > 0.004) this.pushGutter(f, vy0, vy1);
+      if (spanFade > 0.004 || glyphFade > 0.004) {
+        this.pushGutter(f, vy0, vy1);
+        this.pushChangeBands(f, vy0, vy1);
+      }
     }
     this.tf = IDENTITY;
     this.animating = stillAnimating;
@@ -1250,29 +1351,101 @@ export class Scene {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.glyphs.count);
   }
 
-  /** A change marker in the left margin of every changed line. Visible from
-   *  the moment lines are resolvable at all, which is the point: you should be
-   *  able to see where the repo is moving without zooming in. */
+  /**
+   * Changed lines, as a band across the line plus a marker in the margin.
+   *
+   * The band is what says *which* lines: a marker in the margin tells you a
+   * line changed and a band tells you which of the lines in front of you it
+   * was, without having to look away from the code to the edge of the panel.
+   * It sits behind the text at low alpha so the code stays the readable thing.
+   *
+   * During a change the alpha is driven by the animation instead, and the
+   * rows come from the diff rather than from git: see `pushChangeBands`.
+   */
   private pushGutter(f: SceneFile, vy0: number, vy1: number): void {
     const w = Math.max(2, metrics.charWidth * 0.4);
     const [vx0, vx1] = [-Infinity, Infinity];
+    const colW = columnWidth(f.node.geom);
 
     for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
       for (let row = firstRow; row <= lastRow; row++) {
         const { line, wrap, y } = this.rowInfo(f, row, c);
+        const st = f.data.lineState[line];
+        if (st === LineState.Unchanged) continue;
+        const color = this.changeColour(st);
+
+        // The band covers every row a wrapped line occupies: the change is the
+        // whole line, however many rows it takes to show it.
+        this.pushRect(
+          this.bgRects, colX, y, colW, metrics.lineHeight,
+          bandColour(this.pal.surface.panelBg, color, BAND_MIX), 1, 0, 0,
+        );
+
         // One marker per source line, on its first row: a wrapped line is one
         // change, not three.
         if (wrap !== 0) continue;
-        const st = f.data.lineState[line];
-        if (st === LineState.Unchanged) continue;
-        const color =
-          st === LineState.Added ? this.pal.surface.added
-            : st === LineState.Modified ? this.pal.surface.modified
-              : this.pal.surface.deleted;
         this.pushRect(
           this.fgRects, colX - w - 1, y, w, metrics.lineHeight, color, 0.85, 0, 0,
         );
       }
     }
   }
+
+  /** The colour a line state is drawn in. */
+  private changeColour(st: number): number {
+    if (st === LineState.Added) return this.pal.surface.added;
+    if (st === LineState.Modified) return this.pal.surface.modified;
+    return this.pal.surface.deleted;
+  }
+
+  /**
+   * The bands of a change in progress, over the top of the persistent ones.
+   *
+   * Two phases, in order: the lines that are going away are shown in the
+   * deleted colour and fade out, then the content is swapped and the lines
+   * that arrived are shown in the added colour and fade down to their resting
+   * alpha. Taking away before putting back is what makes it read as an edit
+   * rather than as a flicker.
+   *
+   * The rows come from a diff of the two versions rather than from git,
+   * because git answers a different question: it says how the file differs
+   * from a baseline, which after a commit is nothing at all while the file on
+   * screen has just been rewritten.
+   */
+  private pushChangeBands(f: SceneFile, vy0: number, vy1: number): void {
+    const ch = f.change;
+    if (!ch) return;
+    const [vx0, vx1] = [-Infinity, Infinity];
+    const colW = columnWidth(f.node.geom);
+    const g = f.node.geom;
+
+    const removing = ch.phase === 'remove';
+    const rows = removing ? ch.removedRows : ch.addedRows;
+    if (rows.length === 0) return;
+    const colour = removing ? this.pal.surface.deleted : this.pal.surface.added;
+    const e = Math.min(1, ch.t / (removing ? timing.changeOut : timing.changeIn));
+    // Out: full strength back to the panel. In: full strength down to the
+    // standing band, so the line stays marked afterwards rather than going
+    // blank the moment it arrives.
+    const mix = removing
+      ? CHANGE_MIX * (1 - e)
+      : BAND_MIX + (CHANGE_MIX - BAND_MIX) * (1 - e);
+    const band = bandColour(this.pal.surface.panelBg, colour, mix);
+
+    for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
+      for (const line of rows) {
+        // Every screen row this source line occupies.
+        const from = f.rows[line];
+        const to = line + 1 <= f.data.lineCount ? f.rows[line + 1] : from + 1;
+        for (let row = from; row < to; row++) {
+          if (row < firstRow || row > lastRow) continue;
+          const y = f.node.y + textOriginY + (row - c * g.linesPerColumn) * metrics.lineHeight;
+          // Background, not foreground: the band belongs behind the code, and
+          // pushed after the standing bands so a change overrides one.
+          this.pushRect(this.bgRects, colX, y, colW, metrics.lineHeight, band, 1, 0, 0);
+        }
+      }
+    }
+  }
+
 }

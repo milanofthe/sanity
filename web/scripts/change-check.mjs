@@ -153,7 +153,9 @@ if (!focused) {
   } else {
     // One marker per changed line, several pixels each, so a file with a real
     // hunk in it moves far more than this.
-    await diffWithStateOff('gutter marks changed lines', 20);
+      // A band across the line and a marker in the margin, so a changed line is
+    // visible without looking away from the code to the edge of the panel.
+    await diffWithStateOff('changed lines are banded and marked', 20);
   }
 }
 
