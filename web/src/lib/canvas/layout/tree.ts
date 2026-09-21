@@ -4,8 +4,10 @@
 // squarified treemap, and each panel picks the column count that fits the slot
 // it was given. See treemap.ts for why nesting rules out a rectangle packer.
 
-import { metrics } from '../tokens';
-import { fitPanel, panelArea, panelGeometry, type PanelGeometry } from './panel';
+import { metrics } from '$lib/metrics';
+import {
+  fitPanel, panelArea, panelGeometry, stubArea, stubGeometry, type PanelGeometry,
+} from './panel';
 import { layoutTreemap, type Rect } from './treemap';
 
 /** Width over height the whole canvas aims for; screens are wide. */
@@ -15,6 +17,10 @@ export interface FileEntry {
   path: string;
   lineCount: number;
   maxCols: number;
+  /** When set, the file is laid out as a fixed-size stub: present in the
+   *  structure, not drawn. Files that should not appear at all are filtered
+   *  out before they get here. */
+  stub?: boolean;
 }
 
 export interface FileNode {
@@ -24,6 +30,8 @@ export interface FileNode {
   lineCount: number;
   maxCols: number;
   geom: PanelGeometry;
+  /** Laid out as a fixed-size placeholder rather than drawn. */
+  stub: boolean;
   /** Treemap weight: the area this file needs. Corrected by the fitting
    *  passes when the shape it was given turns out to need more. */
   area: number;
@@ -91,8 +99,9 @@ function buildTree(entries: FileEntry[]): DirNode {
       path: e.path,
       lineCount: e.lineCount,
       maxCols: e.maxCols,
-      geom: panelGeometry(e.lineCount, e.maxCols),
-      area: panelArea(e.lineCount, e.maxCols),
+      geom: e.stub ? stubGeometry() : panelGeometry(e.lineCount, e.maxCols),
+      stub: Boolean(e.stub),
+      area: e.stub ? stubArea() : panelArea(e.lineCount, e.maxCols),
       slotW: 0,
       slotH: 0,
       x: 0,
@@ -153,7 +162,8 @@ function sortChildren(dir: DirNode): void {
 function placeFile(f: FileNode, r: Rect): void {
   f.slotW = r.w;
   f.slotH = r.h;
-  f.geom = fitPanel(f.lineCount, f.maxCols, r.w, r.h);
+  // A stub never reshapes: its geometry is the point.
+  f.geom = f.stub ? stubGeometry() : fitPanel(f.lineCount, f.maxCols, r.w, r.h);
   f.w = f.geom.w;
   f.h = f.geom.h;
   // Centre in the slot, but never start outside it: a panel that could not be
@@ -250,7 +260,7 @@ export function computeLayout(entries: FileEntry[]): Layout {
   collect(root, files, dirs);
 
   let totalLines = 0;
-  for (const f of files) totalLines += f.lineCount;
+  for (const f of files) if (!f.stub) totalLines += f.lineCount;
 
   return {
     root,

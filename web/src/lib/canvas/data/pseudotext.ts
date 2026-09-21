@@ -3,7 +3,7 @@
 // like code so the readable zoom level is a fair test of the glyph pass.
 
 import { Kind, spanCol, spanKind, spanLen, type FileData } from './wire';
-import type { TextSource } from '../renderer/scene';
+import type { TextSource } from '$lib/canvas/renderer/scene';
 
 const WORDS: Record<number, string[]> = {
   [Kind.Keyword]: ['let', 'const', 'fn', 'pub', 'if', 'else', 'for', 'return', 'match', 'impl', 'async', 'await'],

@@ -18,9 +18,20 @@
     "types": [
       "node"
     ],
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "$lib": [
+        "./src/lib"
+      ],
+      "$lib/*": [
+        "./src/lib/*"
+      ]
+    },
+    "verbatimModuleSyntax": true
   },
   "include": [
-    "src"
+    "src",
+    "vite.config.ts",
+    "svelte.config.js"
   ]
 }

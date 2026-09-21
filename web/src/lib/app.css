@@ -1,0 +1,72 @@
+/* Global chrome styles. Everything references tokens.css; no literal colour,
+   size or font appears below this line. */
+
+@import './tokens.css';
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+	overflow: hidden;
+	background: var(--bg);
+	color: var(--text);
+	font: var(--fs-s) var(--font-ui);
+	-webkit-font-smoothing: antialiased;
+}
+
+#app {
+	display: grid;
+	grid-template-rows: var(--toolbar-h) 1fr var(--statusbar-h);
+	height: 100%;
+}
+
+/* --- canvas labels: pooled DOM over the WebGL surface -------------------- */
+
+.label {
+	position: absolute;
+	top: 0;
+	left: 0;
+	white-space: nowrap;
+	transform-origin: 0 0;
+	will-change: transform;
+	letter-spacing: 0.02em;
+	pointer-events: none;
+	font-family: var(--font-ui);
+	text-shadow: 0 1px 2px var(--bg);
+}
+.label-dir {
+	color: var(--dir-label);
+	font-weight: 600;
+}
+.label-file {
+	color: var(--panel-label);
+	font-weight: 500;
+}
+
+/* --- scrollbars: square, in border colour, matching the rest of the UI --- */
+
+@supports not selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--border) var(--bg);
+	}
+}
+*::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: var(--radius);
+}
+*::-webkit-scrollbar-thumb:hover {
+	background: var(--border-strong);
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+	background: var(--bg);
+}

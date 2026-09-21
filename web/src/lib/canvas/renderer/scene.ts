@@ -8,11 +8,12 @@
 // viewport and only a few hundred of their lines do, so the instance count
 // stays in the tens of thousands no matter how large the repository is.
 
-import { Camera } from '../camera';
-import { kindColors, lodThresholds, metrics, palette, rgb, timing } from '../tokens';
-import { LineState, spanCol, spanKind, spanLen, type FileData } from '../data/wire';
-import { COLUMN_GUTTER, textOriginX, textOriginY } from '../layout/panel';
-import type { DirNode, FileNode, Layout } from '../layout/tree';
+import { Camera } from '$lib/canvas/camera';
+import { lodThresholds, metrics, timing } from '$lib/metrics';
+import { rgb, type Palette } from '$lib/theme';
+import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
+import { COLUMN_GUTTER, textOriginX, textOriginY } from '$lib/canvas/layout/panel';
+import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { GlyphAtlas } from './glyphatlas';
 import { OverviewTextures, type Slot } from './codetex';
 import {
@@ -55,6 +56,9 @@ const OVERVIEW_STRIDE = 10;
 const SPAN_STRIDE = 6;
 const GLYPH_STRIDE = 6;
 
+/** On-screen floor for a stub panel, in CSS pixels. */
+const STUB_MIN_PX = 1.5;
+
 const smoothstep = (a: number, b: number, x: number): number => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -83,7 +87,7 @@ export class Scene {
   atlas: GlyphAtlas;
 
   private view = new Float32Array(9);
-  private kindFlat = new Float32Array(kindColors.length * 3);
+  private kindFlat: Float32Array;
 
   files = new Map<string, SceneFile>();
   stats: FrameStats = {
@@ -91,11 +95,12 @@ export class Scene {
     rectQuads: 0, pxPerLine: 0, cpuMs: 0,
   };
 
-  constructor(gl: GL, public layout: Layout, private text: TextSource) {
+  constructor(gl: GL, public layout: Layout, private text: TextSource, private pal: Palette) {
     this.gl = gl;
     this.quad = unitQuad(gl);
-    this.textures = new OverviewTextures(gl);
+    this.textures = new OverviewTextures(gl, pal.overview);
     this.atlas = new GlyphAtlas(gl);
+    this.kindFlat = new Float32Array(pal.token.length * 3);
 
     this.progRect = createProgram(gl, rectVS, rectFS, 'rect');
     this.progOverview = createProgram(gl, overviewVS, overviewFS, 'overview');
@@ -113,18 +118,51 @@ export class Scene {
     this.spans = new InstanceBuffer(gl, SPAN_STRIDE, 65536);
     this.glyphs = new InstanceBuffer(gl, GLYPH_STRIDE, 65536);
 
-    kindColors.forEach((hex, i) => {
-      const [r, g, b] = rgb(hex);
-      this.kindFlat[i * 3] = r;
-      this.kindFlat[i * 3 + 1] = g;
-      this.kindFlat[i * 3 + 2] = b;
-    });
+    this.writeKindFlat();
 
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   }
 
+  private writeKindFlat(): void {
+    this.pal.token.forEach((hex, i) => {
+      const [r, g, b] = rgb(hex);
+      this.kindFlat[i * 3] = r;
+      this.kindFlat[i * 3 + 1] = g;
+      this.kindFlat[i * 3 + 2] = b;
+    });
+  }
+
+  /**
+   * Adopt a new theme. Token and surface colours are uniforms and change for
+   * free, but the overview colours are baked into the texture layers, so every
+   * file has to be re-rasterised. At a few hundred files that is a visible
+   * blink, which is why it happens on an explicit theme switch and nowhere
+   * else.
+   */
+  setPalette(pal: Palette): void {
+    this.pal = pal;
+    this.kindFlat = new Float32Array(pal.token.length * 3);
+    this.writeKindFlat();
+    this.textures.setColors(pal.overview);
+    for (const f of this.files.values()) {
+      if (f.node.stub) continue;
+      this.textures.write(f.slot, f.data, f.node.geom.cols);
+    }
+    this.textures.finalize();
+  }
+
   addFile(node: FileNode, data: FileData): void {
+    // Stubs draw from geometry alone, so they get no texture layer. On a repo
+    // whose artefacts outweigh its source this is most of the memory saved.
+    if (node.stub) {
+      this.files.set(node.path, {
+        node, data,
+        slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0 },
+        heat: 0, state: LineState.Unchanged,
+      });
+      return;
+    }
     const slot = this.textures.allocate(data.lineCount);
     node.layer = slot.layer;
     let state: LineState = LineState.Unchanged;
@@ -144,7 +182,7 @@ export class Scene {
     if (!f) return;
     if (data) {
       f.data = data;
-      this.textures.write(f.slot, data, f.node.geom.cols);
+      if (!f.node.stub) this.textures.write(f.slot, data, f.node.geom.cols);
     }
     f.heat = 1;
   }
@@ -218,6 +256,14 @@ export class Scene {
 
       if (f.heat > 0) f.heat = Math.max(0, f.heat - dt / timing.heatDecay);
 
+      // A stub is a frame and a hatch, at every zoom level. It says the file
+      // is there and stops: no overview texture, no tokens, no glyphs, and no
+      // area proportional to its size. That is the whole point of the mode.
+      if (f.node.stub) {
+        this.pushStub(f, cam.zoom);
+        continue;
+      }
+
       this.pushPanel(f, pxPerLine);
       if (overviewFade > 0.004) this.pushOverview(f, overviewFade);
       if (spanFade > 0.004) this.pushSpans(f, spanFade, vx0, vy0, vx1, vy1);
@@ -226,7 +272,7 @@ export class Scene {
     }
 
     // Draw.
-    const [br, bg, bb] = rgb(palette.bg);
+    const [br, bg, bb] = rgb(this.pal.surface.bg);
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.clearColor(br, bg, bb, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -252,8 +298,38 @@ export class Scene {
   }
 
   private pushDir(d: DirNode): void {
-    const shade = d.depth % 2 === 0 ? palette.dirBg : palette.panelBgAlt;
-    this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, shade, 1, palette.border, 1);
+    const shade = d.depth % 2 === 0 ? this.pal.surface.dirBg : this.pal.surface.panelBgAlt;
+    this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, shade, 1, this.pal.surface.border, 1);
+  }
+
+  /**
+   * A stub panel: framed, filled flat, with a rule across it so it does not
+   * read as an empty file.
+   *
+   * Grown to a floor of a pixel and a half on screen. A stub exists to say the
+   * file is there, and a stub that vanishes when you zoom out has failed at
+   * exactly the moment the overview matters. The floor is deliberately small:
+   * any larger and stubs would out-shout the real files around them.
+   */
+  private pushStub(f: SceneFile, zoom: number): void {
+    const n = f.node;
+    const floor = STUB_MIN_PX / Math.max(zoom, 1e-6);
+    const w = Math.max(n.w, floor * 4);
+    const h = Math.max(n.h, floor);
+    const hot = f.heat > 0.02;
+    // Below a couple of pixels a border would be the whole panel.
+    const borderPx = h * zoom > 4 ? 1 : 0;
+    this.pushRect(
+      this.bgRects, n.x, n.y, w, h,
+      this.pal.surface.reducedBg, 1,
+      hot ? this.pal.surface.heat : this.pal.surface.border, borderPx,
+    );
+    if (h * zoom < 5) return;
+    const inset = metrics.panelPadX;
+    this.pushRect(
+      this.fgRects, n.x + inset, n.y + h / 2 - 0.5, Math.max(0, w - 2 * inset), 1,
+      this.pal.surface.reducedInk, 0.65, 0, 0,
+    );
   }
 
   private pushPanel(f: SceneFile, pxPerLine: number): void {
@@ -263,15 +339,15 @@ export class Scene {
     // lights up the whole canvas and carries no information. Where a change is
     // belongs in the gutter; how recent it is belongs on the border.
     const hot = f.heat > 0.02;
-    const border = hot ? palette.heat : palette.border;
+    const border = hot ? this.pal.surface.heat : this.pal.surface.border;
     const borderPx = hot ? 1 + 2 * f.heat : 1;
-    this.pushRect(this.bgRects, n.x, n.y, n.w, n.h, palette.panelBg, 1, border, borderPx);
+    this.pushRect(this.bgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 1, border, borderPx);
 
     // Title bar, only once it is tall enough to mean anything.
     if (pxPerLine >= lodThresholds.texture) {
       this.pushRect(
         this.bgRects, n.x, n.y, n.w, metrics.titleHeight,
-        palette.panelBgAlt, 1, palette.border, 0,
+        this.pal.surface.panelBgAlt, 1, this.pal.surface.border, 0,
       );
     }
   }
@@ -498,9 +574,9 @@ export class Scene {
         const st = f.data.lineState[i];
         if (st === LineState.Unchanged) continue;
         const color =
-          st === LineState.Added ? palette.added
-            : st === LineState.Modified ? palette.modified
-              : palette.deleted;
+          st === LineState.Added ? this.pal.surface.added
+            : st === LineState.Modified ? this.pal.surface.modified
+              : this.pal.surface.deleted;
         this.pushRect(
           this.fgRects, colX - w - 1, yBase + r * metrics.lineHeight,
           w, metrics.lineHeight, color, 0.85, 0, 0,

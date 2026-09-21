@@ -3,3 +3,5 @@ dist/
 target/
 .DS_Store
 *.log
+web/shots/
+artifacts/

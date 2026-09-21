@@ -3,7 +3,7 @@
 // exact same wire format the backend will, so nothing here is throwaway.
 
 import { Kind, LineState, encodeFile, packSpan, type FileData } from './wire';
-import type { FileEntry } from '../layout/tree';
+import type { FileEntry } from '$lib/canvas/layout/tree';
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;

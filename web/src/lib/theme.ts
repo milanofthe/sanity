@@ -1,0 +1,150 @@
+// Themes, and the bridge from CSS custom properties to the WebGL renderer.
+//
+// tokens.css is the only place colours are written down. The canvas cannot
+// read CSS, so it resolves the same variables at runtime and converts them to
+// floats. That keeps one source of truth: switching a theme recolours the
+// chrome and the canvas from the same override block, and a colour cannot
+// drift between the two.
+
+export type ThemeId = 'dark' | 'light' | 'paper' | 'onyx';
+
+export interface ThemeInfo {
+  id: ThemeId;
+  label: string;
+  /** Swatches for the picker, so it does not have to mount a theme to show it. */
+  bg: string;
+  panel: string;
+  accent: string;
+}
+
+export const THEMES: ThemeInfo[] = [
+  { id: 'dark', label: 'Dark', bg: '#0d1117', panel: '#151b23', accent: '#e63030' },
+  { id: 'light', label: 'Light', bg: '#ffffff', panel: '#f4f4f5', accent: '#e63030' },
+  { id: 'paper', label: 'Paper', bg: '#faf6ef', panel: '#f1ece1', accent: '#e63030' },
+  { id: 'onyx', label: 'Onyx', bg: '#08090b', panel: '#101317', accent: '#e63030' },
+];
+
+/** Token colours, in the order of `Kind` in the wire format. */
+const TOKEN_VARS = [
+  '--tok-plain', '--tok-comment', '--tok-doc-comment', '--tok-string',
+  '--tok-number', '--tok-keyword', '--tok-type', '--tok-function',
+  '--tok-variable', '--tok-punctuation', '--tok-constant', '--tok-attribute',
+] as const;
+
+/** Overview overrides, applied on top of the token colours. */
+const OVERVIEW_OVERRIDES: Partial<Record<number, string>> = {
+  0: '--ov-plain',
+  6: '--ov-type',
+  7: '--ov-function',
+  8: '--ov-variable',
+  9: '--ov-punctuation',
+};
+
+const SURFACE_VARS = {
+  bg: '--canvas-bg',
+  panelBg: '--panel-bg',
+  panelBgAlt: '--panel-bg-alt',
+  dirBg: '--dir-bg',
+  dirLabel: '--dir-label',
+  panelLabel: '--panel-label',
+  border: '--border',
+  borderStrong: '--border-strong',
+  ink: '--text',
+  inkDim: '--text-dim',
+  added: '--added',
+  modified: '--modified',
+  deleted: '--deleted',
+  heat: '--heat',
+  accent: '--accent',
+  reducedBg: '--reduced-bg',
+  reducedInk: '--reduced-ink',
+} as const;
+
+export type SurfaceKey = keyof typeof SURFACE_VARS;
+
+export interface Palette {
+  /** 0xRRGGBB per token kind, for readable text. */
+  token: number[];
+  /** Same, damped, for the overview textures. */
+  overview: number[];
+  surface: Record<SurfaceKey, number>;
+}
+
+/**
+ * Resolve CSS colour strings to 0xRRGGBB.
+ *
+ * Uses a canvas as the parser rather than picking apart the computed value:
+ * `color-mix()` resolves to `oklab(...)` or `color(srgb ...)` depending on the
+ * browser and the mixing space, and hand-written parsers for those go stale.
+ * A 2D context accepts every CSS colour there is and hands back bytes.
+ */
+function makeResolver(): (cssVar: string) => number {
+  const probe = document.createElement('span');
+  probe.style.display = 'none';
+  document.documentElement.appendChild(probe);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  const cache = new Map<string, number>();
+
+  return (cssVar: string): number => {
+    const hit = cache.get(cssVar);
+    if (hit !== undefined) return hit;
+
+    probe.style.color = `var(${cssVar})`;
+    const str = getComputedStyle(probe).color;
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = str || '#ff00ff';
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+    const packed = (r << 16) | (g << 8) | b;
+    cache.set(cssVar, packed);
+    return packed;
+  };
+}
+
+/** Read the palette of whatever theme is currently on `<html>`. */
+export function readPalette(): Palette {
+  const resolve = makeResolver();
+  const token = TOKEN_VARS.map(resolve);
+  const overview = token.slice();
+  for (const [i, v] of Object.entries(OVERVIEW_OVERRIDES)) {
+    overview[Number(i)] = resolve(v!);
+  }
+  const surface = {} as Record<SurfaceKey, number>;
+  for (const [key, v] of Object.entries(SURFACE_VARS)) {
+    surface[key as SurfaceKey] = resolve(v);
+  }
+  return { token, overview, surface };
+}
+
+export const rgb = (hex: number): [number, number, number] => [
+  ((hex >> 16) & 0xff) / 255,
+  ((hex >> 8) & 0xff) / 255,
+  (hex & 0xff) / 255,
+];
+
+export const css = (hex: number): string => `#${hex.toString(16).padStart(6, '0')}`;
+
+const STORAGE_KEY = 'sanity.theme';
+
+export function applyTheme(id: ThemeId): void {
+  document.documentElement.dataset.theme = id;
+  try {
+    localStorage.setItem(STORAGE_KEY, id);
+  } catch {
+    // Private browsing or a locked-down webview: the theme just does not stick.
+  }
+}
+
+export function storedTheme(): ThemeId {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY) as ThemeId | null;
+    if (v && THEMES.some((t) => t.id === v)) return v;
+  } catch {
+    // Fall through to the default.
+  }
+  return 'dark';
+}

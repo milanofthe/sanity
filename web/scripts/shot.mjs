@@ -56,14 +56,17 @@ const renderer = await page.evaluate(() => {
 });
 console.log(`renderer: ${renderer}`);
 
-// Wait for indexing to finish.
+// Wait for indexing to finish, which the status bar reports.
 await page.waitForFunction(
-  () => document.getElementById('progress')?.textContent === '',
+  () => {
+    const t = document.querySelector('footer')?.textContent ?? '';
+    return t.length > 0 && !t.includes('indexing');
+  },
   null,
   { timeout: 120000 },
 );
 
-const hud = () => page.evaluate(() => document.getElementById('hud').innerText.replace(/\n/g, ' | '));
+const hud = () => page.evaluate(() => (document.querySelector('footer')?.innerText ?? '').replace(/\n/g, ' | '));
 
 // One shot per level of detail, by setting the zoom directly.
 // The first stop fits the whole repository, which is the view the layout has
@@ -83,13 +86,7 @@ for (const [name, zoom] of stops) {
 }
 
 // Benchmark sweep through the whole zoom range.
-await page.keyboard.press('b');
-const line = await new Promise((resolve) => {
-  page.on('console', (m) => {
-    if (m.text().startsWith('bench over')) resolve(m.text());
-  });
-  setTimeout(() => resolve('bench timed out'), 40000);
-});
+const line = await page.evaluate(() => window.__sanity.bench(12));
 console.log(line);
 
 await browser.close();

@@ -7,7 +7,7 @@
 // single texture and is the obvious later upgrade; the interface here already
 // hides which of the two is in use.
 
-import { font } from '../tokens';
+import { font } from '$lib/metrics';
 
 /** First and last code point in the atlas. Printable ASCII covers essentially
  *  all of what code looks like at a glance; anything else renders as a box. */

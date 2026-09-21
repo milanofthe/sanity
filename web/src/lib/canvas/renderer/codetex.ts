@@ -10,8 +10,9 @@
 // 20k line file does not get the same texel budget as a 40 line one, and each
 // class is backed by as many array textures as the driver's layer limit needs.
 
-import { overview, overviewColors, rgb } from '../tokens';
-import { spanCol, spanKind, spanLen, type FileData } from '../data/wire';
+import { overview } from '$lib/metrics';
+import { rgb } from '$lib/theme';
+import { spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
 import type { GL } from './gl';
 
 /**
@@ -53,8 +54,6 @@ interface TexClass {
   chunks: Chunk[];
 }
 
-const kindRgb: [number, number, number][] = overviewColors.map(rgb);
-
 export class OverviewTextures {
   private classes: TexClass[];
   private maxLayers: number;
@@ -63,13 +62,24 @@ export class OverviewTextures {
   private cov: Float32Array;
   private out: Uint8Array;
 
-  constructor(private gl: GL) {
+  /** Damped token colours as floats, indexed by `Kind`. Held here rather
+   *  than imported so that a theme switch can replace them and re-rasterise. */
+  private kindRgb: [number, number, number][];
+
+  constructor(private gl: GL, overviewColors: number[]) {
+    this.kindRgb = overviewColors.map(rgb);
     this.maxLayers = Math.min(512, gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS) as number);
     this.classes = HEIGHT_CLASSES.map((texRows) => ({ texRows, chunks: [] }));
     const maxTexels = overview.texCols * HEIGHT_CLASSES[HEIGHT_CLASSES.length - 1];
     this.acc = new Float32Array(maxTexels * 3);
     this.cov = new Float32Array(maxTexels);
     this.out = new Uint8Array(maxTexels * 4);
+  }
+
+  /** Swap the palette. The caller has to rewrite every layer afterwards;
+   *  the colours are baked into the texels, so there is no shortcut. */
+  setColors(overviewColors: number[]): void {
+    this.kindRgb = overviewColors.map(rgb);
   }
 
   private classFor(lineCount: number): number {
@@ -158,7 +168,7 @@ export class OverviewTextures {
       for (let s = s0; s < s1; s++) {
         const packed = f.spans[s];
         const kind = spanKind(packed);
-        const c = kindRgb[kind] ?? kindRgb[0];
+        const c = this.kindRgb[kind] ?? this.kindRgb[0];
         const x0 = spanCol(packed) * scaleX;
         const x1 = Math.min(tw, x0 + spanLen(packed) * scaleX);
         if (x1 <= x0) continue;

@@ -1,0 +1,270 @@
+// Lifecycle of the canvas: context, camera, scene, input, frame loop.
+//
+// Owns everything that is not Svelte. The chrome talks to it through a small
+// surface (open a repo, switch theme, read stats) and never touches WebGL, and
+// this file never touches the DOM outside its own canvas and label host.
+
+import { Camera } from '$lib/canvas/camera';
+import { Labels } from '$lib/canvas/labels';
+import { computeLayout, layoutStats, type FileEntry, type Layout } from '$lib/canvas/layout/tree';
+import { decodeFile, type FileData } from '$lib/canvas/data/wire';
+import { createContext } from '$lib/canvas/renderer/gl';
+import { Scene, type TextSource } from '$lib/canvas/renderer/scene';
+import { lodThresholds, metrics } from '$lib/metrics';
+import { readPalette, type Palette } from '$lib/theme';
+
+export type LodName = 'structure' | 'overview' | 'tokens' | 'text';
+
+export interface CanvasStats {
+  files: number;
+  totalLines: number;
+  visibleFiles: number;
+  lod: LodName;
+  pxPerLine: number;
+  quads: number;
+  cpuMs: number;
+  frameMs: number;
+  vramMb: number;
+  /** Fraction of the canvas covered by panels, from the layout pass. */
+  fill: number;
+  indexing: number;
+}
+
+/** What the chrome has to supply to open a repository. */
+export interface RepoSource {
+  entries: FileEntry[];
+  /** Payload per path, in the wire format. */
+  payload(path: string): ArrayBuffer | undefined;
+  text: TextSource;
+}
+
+const UPLOAD_BUDGET_MS = 6;
+
+export class CanvasApp {
+  readonly cam = new Camera();
+  private gl: WebGL2RenderingContext;
+  private scene: Scene | null = null;
+  private labels: Labels | null = null;
+  private layout: Layout | null = null;
+  private pal: Palette;
+
+  private pending: string[] = [];
+  private decoded = new Map<string, FileData>();
+  private uploaded = 0;
+
+  private raf = 0;
+  private lastFrame = performance.now();
+  private observer: ResizeObserver;
+  private dragging = false;
+
+  private fill = 0;
+  private frameMs = 16.7;
+  stats: CanvasStats = {
+    files: 0, totalLines: 0, visibleFiles: 0, lod: 'structure', pxPerLine: 0,
+    quads: 0, cpuMs: 0, frameMs: 0, vramMb: 0, fill: 0, indexing: 0,
+  };
+
+  /** Called after each frame so the chrome can render the status bar. */
+  onStats: ((s: CanvasStats) => void) | null = null;
+
+  constructor(private canvas: HTMLCanvasElement, private labelHost: HTMLElement) {
+    this.gl = createContext(canvas);
+    this.pal = readPalette();
+    this.observer = new ResizeObserver(() => this.resize());
+    this.observer.observe(canvas);
+    this.resize();
+    this.attachInput();
+    this.raf = requestAnimationFrame(this.frame);
+
+    // Handle for scripts/shot.mjs, which captures one screenshot per level of
+    // detail and runs the frame benchmark. Keeping it on the shipping object
+    // means the thing measured is the thing that ships.
+    (window as unknown as { __sanity: unknown }).__sanity = {
+      app: this,
+      zoomTo: (zoom: number) => {
+        this.cam.zoom = zoom;
+        if (this.layout) {
+          this.cam.x = this.layout.root.w * 0.5;
+          this.cam.y = this.layout.root.h * 0.35;
+        }
+      },
+      bench: (seconds = 12) => this.bench(seconds),
+    };
+  }
+
+  private resize(): void {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    this.canvas.width = Math.round(w * dpr);
+    this.canvas.height = Math.round(h * dpr);
+    this.cam.vw = w;
+    this.cam.vh = h;
+    this.cam.dpr = dpr;
+  }
+
+  /** Replace the whole scene. Layout runs synchronously, texture upload is
+   *  spread across frames so opening a large repo does not lock the window. */
+  open(source: RepoSource): void {
+    this.scene = null;
+    this.labels?.destroy();
+    this.decoded.clear();
+
+    this.layout = computeLayout(source.entries);
+    this.fill = layoutStats(this.layout).fill;
+
+    for (const e of source.entries) {
+      const buf = source.payload(e.path);
+      if (buf) this.decoded.set(e.path, decodeFile(buf));
+    }
+
+    this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
+    this.labels = new Labels(this.labelHost, this.layout);
+    this.pending = this.layout.files.map((f) => f.path);
+    this.uploaded = 0;
+    this.fit();
+  }
+
+  fit(): void {
+    if (this.layout) this.cam.fit(...this.layout.bounds);
+  }
+
+  /** Re-read the palette from CSS and push it into the scene. */
+  refreshTheme(): void {
+    this.pal = readPalette();
+    this.scene?.setPalette(this.pal);
+  }
+
+  /** Mark a file as changed on disk; drives the recency glow. */
+  touch(path: string, data?: FileData): void {
+    this.scene?.touch(path, data);
+  }
+
+  private attachInput(): void {
+    const c = this.canvas;
+    c.addEventListener('pointerdown', (e) => {
+      this.dragging = true;
+      c.setPointerCapture(e.pointerId);
+    });
+    c.addEventListener('pointerup', (e) => {
+      this.dragging = false;
+      c.releasePointerCapture(e.pointerId);
+    });
+    c.addEventListener('pointermove', (e) => {
+      if (this.dragging) this.cam.panBy(e.movementX, e.movementY);
+    });
+    c.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        const r = c.getBoundingClientRect();
+        this.cam.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022));
+      },
+      { passive: false },
+    );
+  }
+
+  private uploadBudget(): void {
+    if (!this.scene || !this.layout || this.pending.length === 0) return;
+    const t0 = performance.now();
+    const byPath = new Map(this.layout.files.map((f) => [f.path, f]));
+    while (this.pending.length > 0 && performance.now() - t0 < UPLOAD_BUDGET_MS) {
+      const path = this.pending.pop()!;
+      const node = byPath.get(path);
+      const data = this.decoded.get(path);
+      if (node && data) this.scene.addFile(node, data);
+      this.uploaded++;
+    }
+    this.scene.finalizeTextures();
+  }
+
+  private lodName(pxPerLine: number): LodName {
+    if (pxPerLine >= lodThresholds.glyphs) return 'text';
+    if (pxPerLine >= lodThresholds.texture) return 'tokens';
+    if (pxPerLine >= lodThresholds.block) return 'overview';
+    return 'structure';
+  }
+
+  private frame = (now: number): void => {
+    const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
+    this.frameMs = (now - this.lastFrame) * 0.15 + this.frameMs * 0.85;
+    this.lastFrame = now;
+
+    this.uploadBudget();
+
+    const t0 = performance.now();
+    if (this.scene && this.layout) {
+      this.scene.render(this.cam, dt);
+      this.labels?.update(this.cam);
+      const s = this.scene.stats;
+      const tex = this.scene.textures.stats();
+      this.stats = {
+        files: this.layout.files.length,
+        totalLines: this.layout.totalLines,
+        visibleFiles: s.visibleFiles,
+        lod: this.lodName(s.pxPerLine),
+        pxPerLine: s.pxPerLine,
+        quads: s.overviewQuads + s.spanQuads + s.glyphQuads + s.rectQuads,
+        cpuMs: performance.now() - t0,
+        frameMs: this.frameMs,
+        vramMb: tex.bytes / 1048576,
+        fill: this.fill,
+        indexing: this.pending.length ? this.uploaded / this.layout.files.length : 0,
+      };
+      this.onStats?.(this.stats);
+    }
+    this.raf = requestAnimationFrame(this.frame);
+  };
+
+  /** World-space line height, for anything outside that needs the scale. */
+  get lineHeight(): number {
+    return metrics.lineHeight;
+  }
+
+  /** Sweep from fully zoomed out to readable text and back, reporting the
+   *  frame time distribution. Measured rather than eyeballed. */
+  bench(seconds = 12): Promise<string> {
+    return new Promise((resolve) => {
+      const cpu: number[] = [];
+      const wall: number[] = [];
+      const t0 = performance.now();
+      const fitZoom = this.layout
+        ? Math.min(this.cam.vw / this.layout.root.w, this.cam.vh / this.layout.root.h)
+        : 0.01;
+      const step = () => {
+        const t = (performance.now() - t0) / (seconds * 1000);
+        if (t >= 1) {
+          const pct = (xs: number[], q: number) => {
+            const f = xs.slice().sort((a, b) => a - b);
+            return f[Math.min(f.length - 1, Math.floor(f.length * q))];
+          };
+          const fmt = (xs: number[]) =>
+            `median ${pct(xs, 0.5).toFixed(2)} p95 ${pct(xs, 0.95).toFixed(2)} ` +
+            `p99 ${pct(xs, 0.99).toFixed(2)} max ${pct(xs, 1).toFixed(2)}`;
+          const line =
+            `bench over ${cpu.length} frames | cpu ms: ${fmt(cpu)} | frame ms: ${fmt(wall)}`;
+          console.log(line);
+          resolve(line);
+          return;
+        }
+        const s = Math.sin(t * Math.PI);
+        this.cam.zoom = fitZoom * (1 - s) + 1.6 * s;
+        if (this.layout) {
+          this.cam.x = this.layout.root.w * (0.15 + 0.7 * t);
+          this.cam.y = this.layout.root.h * (0.2 + 0.6 * Math.sin(t * Math.PI * 2) ** 2);
+        }
+        cpu.push(this.stats.cpuMs);
+        wall.push(this.stats.frameMs);
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+  }
+
+  destroy(): void {
+    cancelAnimationFrame(this.raf);
+    this.observer.disconnect();
+    this.labels?.destroy();
+  }
+}

@@ -6,7 +6,7 @@
 // zoom the columns read like facing pages, and when zoomed out the panel is a
 // compact block whose area is proportional to the size of the file.
 
-import { metrics } from '../tokens';
+import { metrics } from '$lib/metrics';
 
 /** Width divided by height a panel aims for when nothing constrains it.
  *  Treemap slots come out close to square, so that is what to aim at. */
@@ -46,6 +46,30 @@ export interface PanelGeometry {
   /** Outer size in world units, title bar and padding included. */
   w: number;
   h: number;
+}
+
+/**
+ * Size of a stub panel: a title bar and nothing else.
+ *
+ * Deliberately constant. A stub says "this file exists" and refuses to say
+ * anything about how large it is, because the whole reason a file gets stubbed
+ * is that its size would otherwise dominate the layout. Scaling stubs by line
+ * count would reintroduce exactly that problem.
+ */
+export function stubGeometry(): PanelGeometry {
+  return {
+    cols: MIN_PANEL_COLS,
+    columns: 1,
+    linesPerColumn: 0,
+    w: MIN_PANEL_COLS * metrics.charWidth + 2 * metrics.panelPadX,
+    h: metrics.titleHeight + 2 * metrics.panelPadY,
+  };
+}
+
+/** Treemap weight of a stub. */
+export function stubArea(): number {
+  const g = stubGeometry();
+  return g.w * g.h;
 }
 
 /** Text columns a file wants, quantized so small edits cannot change it. */

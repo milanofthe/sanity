@@ -1,0 +1,215 @@
+/* sanity design tokens — the single source for colour, type, spacing, chrome.
+   The palette follows the logo: one red accent, a hard frame, square corners.
+   The logo is a wordmark inside a box, so the box is the form language: every
+   surface in this app is a framed rectangle, and nothing is rounded.
+
+   Structure follows SANE's tokens.css. Six data hues carry every coloured
+   surface, so overriding those six recolours the whole app, canvas included:
+   the WebGL renderer resolves them at runtime rather than keeping a second
+   palette (see src/lib/theme.ts). */
+
+:root {
+	/* brand */
+	--sanity-red: #ff0000;
+	/* pure red vibrates on a dark ground; the UI uses a settled version and
+	   leaves #ff0000 to the logo itself */
+	--sanity-red-ui: #e63030;
+	--sanity-red-deep: #b81d1d;
+
+	/* THE data palette: the six hues of the theme. Token colours, change
+	   states and chart marks all derive from these, so a theme is a palette
+	   override and nothing else. */
+	--data-1: #6fa8c7; /* cool: types, structure */
+	--data-2: #b07fc7; /* violet: keywords */
+	--data-3: #8ab77b; /* green: strings, additions */
+	--data-4: #d6a06a; /* amber: numbers, modifications */
+	--data-5: #7f8794; /* grey: filler, punctuation */
+	--data-6: #d1493f; /* warm: deletions, errors */
+
+	/* neutrals: a dark ground by default, because the canvas is code */
+	--bg: #0d1117;
+	--bg-panel: #151b23;
+	--bg-inset: #11171f;
+	--bg-hover: #1c2430;
+	--bg-active: #232d3a;
+	--border: #232b36;
+	--border-strong: #3d4855;
+	--text: #c9d1d9;
+	--text-dim: #8b949e;
+	--text-faint: #6b7684;
+
+	/* interaction accent: buttons, active states, focus, the mark */
+	--accent: var(--sanity-red-ui);
+	--accent-deep: var(--sanity-red-deep);
+	/* text on an accent-filled surface */
+	--on-accent: #ffffff;
+
+	/* code token colours, one per wire-format Kind. The renderer reads these
+	   by name, so the order here is the order in wire.ts. */
+	--tok-plain: var(--text);
+	--tok-comment: #5c6773;
+	--tok-doc-comment: #6b8299;
+	--tok-string: var(--data-3);
+	--tok-number: var(--data-4);
+	--tok-keyword: var(--data-2);
+	--tok-type: var(--data-1);
+	--tok-function: color-mix(in srgb, var(--data-1) 70%, white);
+	--tok-variable: var(--text);
+	--tok-punctuation: var(--data-5);
+	--tok-constant: color-mix(in srgb, var(--data-6) 72%, white);
+	--tok-attribute: color-mix(in srgb, var(--data-4) 80%, white);
+
+	/* the same twelve, damped for the overview textures. Most of a line of
+	   code is identifiers and punctuation; at full strength they average down
+	   to a grey smear and every file looks alike. Comments, strings and
+	   keywords stay strong because they are the signature. */
+	--ov-plain: #6d7787;
+	--ov-variable: #7b8695;
+	--ov-punctuation: #4e5764;
+	--ov-type: color-mix(in srgb, var(--data-1) 82%, black);
+	--ov-function: color-mix(in srgb, var(--data-1) 92%, black);
+
+	/* change state */
+	--added: var(--data-3);
+	--modified: var(--data-4);
+	--deleted: var(--data-6);
+	/* recency glow on a panel that just changed */
+	--heat: #ffb86c;
+
+	/* canvas surfaces the renderer draws */
+	--canvas-bg: var(--bg);
+	--panel-bg: var(--bg-panel);
+	--panel-bg-alt: var(--bg-inset);
+	--dir-bg: #0a0e14;
+	--dir-label: var(--text-faint);
+	--panel-label: var(--text-dim);
+	/* a file kept only as a placeholder: present, deliberately not readable */
+	--reduced-bg: #10151c;
+	--reduced-ink: #4a525e;
+
+	/* semantic status */
+	--ok: var(--data-3);
+	--warn: var(--data-4);
+	--error: var(--data-6);
+
+	/* type */
+	--font-ui: -apple-system, system-ui, 'Segoe UI', sans-serif;
+	--font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+	--fs-xxs: 9px;
+	--fs-xs: 11px;
+	--fs-s: 12px;
+	--fs-m: 13px;
+	--fs-l: 15px;
+
+	/* spacing and geometry: square, like the logo's frame */
+	--sp-1: 4px;
+	--sp-2: 8px;
+	--sp-3: 12px;
+	--sp-4: 16px;
+	--radius: 0px;
+	--sep-w: 1px;
+
+	/* chrome dimensions: one bar height across toolbar and menus */
+	--toolbar-h: 34px;
+	--statusbar-h: 24px;
+	--menu-w: 280px;
+
+	/* stacking order, one scale for the whole app: every z-index references a
+	   token, so a new surface can be placed without hunting for the number it
+	   has to beat. Ascending = painted later. */
+	--z-canvas: 0;
+	--z-labels: 10; /* DOM labels over the canvas */
+	--z-chrome: 20; /* toolbar, status bar */
+	--z-menu: 40; /* dropdowns from the toolbar */
+	--z-backdrop: 50;
+	--z-sheet: 60; /* settings and project sheets */
+	--z-tooltip: 100;
+}
+
+/* --- themes: token overrides on <html data-theme="..."> ------------------- */
+
+[data-theme='light'] {
+	--bg: #ffffff;
+	--bg-panel: #f4f4f5;
+	--bg-inset: #eaeaec;
+	--bg-hover: #efefF1;
+	--bg-active: #e3e3e6;
+	--border: #d9d9dc;
+	--border-strong: #b5b5bc;
+	--text: #1d2126;
+	--text-dim: #5f646b;
+	--text-faint: #8f949c;
+	/* the canvas needs more separation than the chrome: a panel sits on a
+	   directory box, and on a light ground those two were a shade apart */
+	--panel-bg: #ffffff;
+	--dir-bg: #e2e2e6;
+	--panel-bg-alt: #f2f2f4;
+	--reduced-bg: #d7d7db;
+	--reduced-ink: #a9adb4;
+	/* the hues darken for legibility on a light ground */
+	--data-1: #3f7fa0;
+	--data-2: #8455a0;
+	--data-3: #5b8b4a;
+	--data-4: #a86f2c;
+	--data-5: #6c7076;
+	--data-6: #c0392b;
+	--tok-comment: #8a929c;
+	--tok-doc-comment: #5f7a8f;
+	--ov-plain: #9aa2ad;
+	--ov-variable: #8d95a1;
+	--ov-punctuation: #b4bac2;
+	--heat: #d97706;
+}
+
+[data-theme='paper'] {
+	--bg: #faf6ef;
+	--bg-panel: #f1ece1;
+	--bg-inset: #e7e0d2;
+	--bg-hover: #ece7da;
+	--bg-active: #e0d9c8;
+	--border: #d8d0c0;
+	--border-strong: #b3a992;
+	--text: #2a251c;
+	--text-dim: #6f6759;
+	--text-faint: #9b9280;
+	--panel-bg: #fdfbf6;
+	--dir-bg: #e3dccc;
+	--panel-bg-alt: #f3efe5;
+	--reduced-bg: #dcd4c2;
+	--reduced-ink: #aaa290;
+	--data-1: #3f7fa0;
+	--data-2: #8455a0;
+	--data-3: #5b8b4a;
+	--data-4: #a86f2c;
+	--data-5: #6f6759;
+	--data-6: #c0392b;
+	--tok-comment: #9b9280;
+	--tok-doc-comment: #6f7f8a;
+	--ov-plain: #a59c8a;
+	--ov-variable: #999080;
+	--ov-punctuation: #c0b8a6;
+	--heat: #c2700f;
+}
+
+[data-theme='onyx'] {
+	/* near-black, low chroma: the version for staring at all day */
+	--bg: #08090b;
+	--bg-panel: #101317;
+	--bg-inset: #0c0f12;
+	--bg-hover: #171c22;
+	--bg-active: #1f262e;
+	--border: #1c2127;
+	--border-strong: #343c45;
+	--text: #d6dbe0;
+	--text-dim: #8a929c;
+	--text-faint: #5d656e;
+	--dir-bg: #050607;
+	--reduced-bg: #0b0d10;
+	--reduced-ink: #3d444c;
+	--data-1: #6fc3e0;
+	--data-2: #b99ae0;
+	--data-3: #7fc98f;
+	--data-4: #e0b463;
+	--data-5: #7d858f;
+	--data-6: #e05050;
+}
