@@ -136,6 +136,8 @@
 	header {
 		display: flex;
 		align-items: stretch;
+		min-width: 0;
+		overflow: visible;
 		gap: 0;
 		background: var(--bg-panel);
 		border-bottom: var(--sep-w) solid var(--border);

@@ -16,7 +16,7 @@
 //   SANITY_SRC=fixture=fixture-self node scripts/change-check.mjs
 
 import { decodePng } from './png.mjs';
-import { base, openApp, pixelDiff } from './browser.mjs';
+import { base, openApp, pixelDiff, settled } from './browser.mjs';
 
 const source = process.env.SANITY_SRC ?? 'fixture=fixture-self';
 const name = source.split('=')[1];
@@ -121,6 +121,7 @@ async function diffWithStateOff(label, minPixels) {
 // Overview zoom: the whole project on screen, no line readable. Only the
 // border tint can carry the signal here.
 await page.evaluate(() => window.__sanity.app.fit(0));
+await settled(page);
 await page.waitForTimeout(500);
 // A tinted hairline around a handful of panels is a small number of pixels,
 // which is the point: enough to see, not enough to shout.
@@ -143,6 +144,7 @@ if (!focused) {
   fail('no drawn panel carries changes, so the gutter cannot be checked');
 } else {
   console.log(`focused ${focused}`);
+  await settled(page);
   await page.waitForTimeout(800);
   const pxPerLine = await page.evaluate(() => window.__sanity.app.stats.pxPerLine);
   console.log(`${pxPerLine.toFixed(1)} px per line`);

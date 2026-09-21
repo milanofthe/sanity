@@ -57,6 +57,11 @@ interface Chunk {
   layers: number;
   used: number;
   dirty: boolean;
+  /** Layers handed back by `release`, reused before any new one is taken.
+   *  Without this a relayout that moves a file into a different height class
+   *  leaks a layer every time, and a project being watched relayouts on every
+   *  save. */
+  free: number[];
 }
 
 interface TexClass {
@@ -122,24 +127,48 @@ export class OverviewTextures {
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    return { tex, layers, used: 0, dirty: false };
+    return { tex, layers, used: 0, dirty: false, free: [] };
   }
 
   allocate(lineCount: number): Slot {
     const classIdx = this.classFor(lineCount);
     const cls = this.classes[classIdx];
-    let chunkIdx = cls.chunks.findIndex((c) => c.used < c.layers);
+    const texRows = Math.min(cls.texRows, Math.max(1, lineCount));
+
+    // A released layer first, then a chunk with room, then a new chunk.
+    let chunkIdx = cls.chunks.findIndex((c) => c.free.length > 0);
+    if (chunkIdx >= 0) {
+      const chunk = cls.chunks[chunkIdx];
+      return { classIdx, chunkIdx, layer: chunk.free.pop()!, texRows };
+    }
+    chunkIdx = cls.chunks.findIndex((c) => c.used < c.layers);
     if (chunkIdx < 0) {
       cls.chunks.push(this.newChunk(cls.texRows));
       chunkIdx = cls.chunks.length - 1;
     }
     const chunk = cls.chunks[chunkIdx];
-    return {
-      classIdx,
-      chunkIdx,
-      layer: chunk.used++,
-      texRows: Math.min(cls.texRows, Math.max(1, lineCount)),
-    };
+    return { classIdx, chunkIdx, layer: chunk.used++, texRows };
+  }
+
+  /** Hand a layer back. The pixels are left alone; `write` clears a layer
+   *  before filling it, so a new occupant cannot see the old one. */
+  release(slot: Slot): void {
+    const chunk = this.classes[slot.classIdx]?.chunks[slot.chunkIdx];
+    if (!chunk) return;
+    if (chunk.free.includes(slot.layer)) return;
+    chunk.free.push(slot.layer);
+  }
+
+  /** Whether a file of this many rows still fits the slot it has, so a
+   *  relayout can keep the layer instead of taking another. */
+  fitsSlot(slot: Slot, lineCount: number): boolean {
+    return this.classFor(lineCount) === slot.classIdx;
+  }
+
+  /** Texel rows a file of this many rows covers in the slot's class. */
+  rowsFor(slot: Slot, lineCount: number): number {
+    const cls = this.classes[slot.classIdx];
+    return Math.min(cls.texRows, Math.max(1, lineCount));
   }
 
   /**

@@ -6,7 +6,7 @@
 // `misfits` is reported but not asserted: it counts panels narrower than the
 // preferred width, which is cosmetic.
 
-import { launch } from './browser.mjs';
+import { launch, settled } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 // Every panel and directory gives up one grid cell at its right and bottom
@@ -41,6 +41,7 @@ for (const cfg of CASES) {
   lastLine = null;
   await page.goto(`${base}/?${cfg}`, { waitUntil: 'load' });
   await page.waitForFunction(() => Boolean(window.__sanity), null, { timeout: 60000 });
+  await settled(page);
   await page.waitForTimeout(1200);
   if (!lastLine) {
     console.log(`${cfg.padEnd(24)} NO STATS`);

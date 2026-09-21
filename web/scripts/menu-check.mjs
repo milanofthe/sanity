@@ -6,7 +6,7 @@
 // a rendering bug and was a CSS height bug, so it is worth a check that says
 // which of the two it is.
 
-import { launch } from './browser.mjs';
+import { launch, settled } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const browser = await launch();
@@ -14,6 +14,7 @@ const page = await browser.newPage();
 page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
 await page.goto(`${base}/?files=60&lines=80`, { waitUntil: 'load' });
 await page.waitForFunction(() => Boolean(window.__sanity), null, { timeout: 60000 });
+await settled(page);
 await page.waitForTimeout(800);
 
 let failures = 0;

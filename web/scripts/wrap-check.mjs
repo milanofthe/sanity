@@ -10,7 +10,7 @@
 // own wrapped rows. This checks both, on whatever the page is showing, since
 // the real repositories are what exposed it.
 
-import { launch } from './browser.mjs';
+import { launch, settled } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const src = process.env.SANITY_SRC ?? 'fixture=fixture';
@@ -27,6 +27,7 @@ await page.waitForFunction(
   null,
   { timeout: 180000 },
 );
+await settled(page);
 await page.waitForTimeout(1200);
 
 const stats = await page.evaluate(() => {

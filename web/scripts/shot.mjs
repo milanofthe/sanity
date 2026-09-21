@@ -3,7 +3,7 @@
 // change gets verified without a human having to stare at it.
 
 import { mkdirSync } from 'node:fs';
-import { launch } from './browser.mjs';
+import { launch, settled } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const files = process.env.SANITY_FILES ?? '400';
@@ -38,6 +38,7 @@ await page.waitForFunction(
   null,
   { timeout: 120000 },
 );
+await settled(page);
 
 const hud = () => page.evaluate(() => (document.querySelector('footer')?.innerText ?? '').replace(/\n/g, ' | '));
 

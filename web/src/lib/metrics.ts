@@ -91,8 +91,20 @@ export const timing = {
   heatDecay: 90,
   /** Seconds for a level-of-detail crossfade. */
   lodFade: 0.18,
-  /** Seconds for a layout reflow animation. */
+  /** Seconds for a layout reflow animation: a panel sliding and scaling from
+   *  where it was to where it now belongs. */
   reflow: 0.45,
+  /** Seconds a panel takes to settle in when it first appears. */
+  appear: 0.32,
+  /** Seconds between the first panel appearing and the last, spread by
+   *  distance from the centre so a project blooms outward rather than
+   *  arriving as one block. Long enough to read as an arrival, short enough
+   *  that nobody waits for it. */
+  appearStagger: 0.45,
+  /** Scale a panel starts at when it appears. Close to one: a panel is a
+   *  rectangle in a grid of rectangles, and anything more than a nudge reads
+   *  as a bounce rather than as settling. */
+  appearScale: 0.93,
 } as const;
 
 export const font = {

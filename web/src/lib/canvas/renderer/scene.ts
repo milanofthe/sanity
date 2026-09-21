@@ -10,6 +10,10 @@
 
 import { Camera } from '$lib/canvas/camera';
 import { metrics, timing } from '$lib/metrics';
+import {
+  applyTo, finished, IDENTITY, same, settleIn, slideFrom, transformFor,
+  type PanelAnim, type Rect as PanelRect, type Transform,
+} from '$lib/canvas/anim';
 import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
 import { rgb, UiInk, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
@@ -52,7 +56,16 @@ export interface SceneFile {
   heat: number;
   /** Aggregate git state of the file, drives the panel border. */
   state: LineState;
+  /** Settle animation, or null once it has finished. */
+  anim: PanelAnim | null;
+  /** Screen rows the texture was last written for, and the column width it
+   *  was written at. A relayout compares against these to decide whether the
+   *  layer still holds the right picture. */
+  wroteRows: number;
+  wroteCols: number;
 }
+
+
 
 export interface FrameStats {
   visibleFiles: number;
@@ -215,6 +228,24 @@ export class Scene {
   files = new Map<string, SceneFile>();
   /** Path whose header the pointer is over, for the hover highlight. */
   hoveredPath: string | null = null;
+
+  /** Transform in force while the current panel's geometry is pushed. */
+  private tf: Transform = IDENTITY;
+  /** Longest distance from the layout centre, for the appearance stagger. */
+  private spread = 1;
+  /**
+   * Settle animations for the directory regions, by path.
+   *
+   * Kept apart from the files because a directory has no scene state of its
+   * own: it is read straight out of the layout every frame. Without these the
+   * frames jump to their new places while the panels inside them are still
+   * sliding, which reads as the regions tearing loose from their contents and
+   * was the largest part of what a relayout looked like.
+   */
+  private dirAnims = new Map<string, PanelAnim>();
+  /** True while at least one panel is still animating, so the frame loop can
+   *  tell whether the picture is still changing on its own. */
+  animating = false;
   stats: FrameStats = {
     visibleFiles: 0, overviewQuads: 0, spanQuads: 0, glyphQuads: 0,
     rectQuads: 0, pxPerLine: 0, cpuMs: 0,
@@ -244,9 +275,119 @@ export class Scene {
     this.glyphs = new InstanceBuffer(gl, GLYPH_STRIDE, 65536);
 
     this.writeKindFlat();
+    this.measureSpread();
 
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  /**
+   * Take a new layout without rebuilding the scene.
+   *
+   * Rebuilding is what `open` used to do on every relayout, and it costs what
+   * a first load costs: measured on a 989 file project, 1813 ms of which 1380
+   * was re-uploading textures that had not changed, with the canvas
+   * progressively refilling from empty the whole time. The reorder animation
+   * was invisible underneath it.
+   *
+   * What actually has to change depends on the edit, and the two regimes are
+   * far apart. Measured on the same project, adding five lines to one file:
+   *
+   * | case | panels keeping their rect | keeping their column geometry |
+   * |---|---|---|
+   * | the common edit | 100% | 100% |
+   * | one that reshuffles | 0% | 17.6% |
+   *
+   * So the common edit needs nothing at all, and even a reshuffle keeps a
+   * sixth of the textures. Returns the paths whose texture content has to be
+   * written again, for the caller to spread over frames; everything else is
+   * done by the time this returns.
+   */
+  relayout(layout: Layout): string[] {
+    const wasDir = new Map(
+      this.layout.dirs.map((d) => [d.path, { x: d.x, y: d.y, w: d.w, h: d.h }]),
+    );
+    this.layout = layout;
+    this.measureSpread();
+
+    // The regions move with their contents.
+    this.dirAnims.clear();
+    for (const d of layout.dirs) {
+      const was = wasDir.get(d.path);
+      if (was && !same(was, d)) this.dirAnims.set(d.path, slideFrom(was, d));
+    }
+
+    const byPath = new Map(layout.files.map((n) => [n.path, n]));
+
+    // Files that are gone give their texture layer back, or a watched project
+    // would leak one per save.
+    for (const [path, f] of [...this.files]) {
+      if (byPath.has(path)) continue;
+      if (!f.node.stub) this.textures.release(f.slot);
+      this.files.delete(path);
+    }
+
+    const rewrite: string[] = [];
+    for (const node of layout.files) {
+      const f = this.files.get(node.path);
+      if (!f) {
+        // New file. The caller adds it, which is where its texture comes from.
+        rewrite.push(node.path);
+        continue;
+      }
+
+      const was: PanelRect = { x: f.node.x, y: f.node.y, w: f.node.w, h: f.node.h };
+      const before = f.node.geom;
+      const moved = !same(was, node);
+      f.anim = moved ? slideFrom(was, node) : null;
+
+      if (node.stub) {
+        f.node = node;
+        continue;
+      }
+
+      // The wrap offsets follow the new column width immediately, even when
+      // the texture write is deferred: the draw passes walk screen rows, so
+      // leaving them disagreeing with the geometry would stretch the overview
+      // for however many frames the write takes to arrive.
+      const colsChanged = before.cols !== node.geom.cols;
+      if (colsChanged) f.rows = wrapOffsets(f.data.lineCols, node.geom.cols);
+      const rows = f.rows[f.data.lineCount];
+
+      // Only noted, not acted on: the layer is swapped in `ensure`, at the
+      // moment the new content is written. Releasing it here would blank the
+      // panel for however many frames the rewrite takes to arrive, which on a
+      // reshuffling edit is most of a second and most of the panels.
+      if (rows !== f.wroteRows || node.geom.cols !== f.wroteCols) {
+        rewrite.push(node.path);
+      }
+
+      f.node = node;
+      node.layer = f.slot.layer;
+    }
+    return rewrite;
+  }
+
+  /** Half the layout's diagonal, which the appearance stagger is spread over. */
+  private measureSpread(): void {
+    const [x0, y0, x1, y1] = this.layout.bounds;
+    this.spread = Math.max(1, Math.hypot(x1 - x0, y1 - y0) / 2);
+  }
+
+  /**
+   * How a panel that was not on screen before arrives: it settles into its
+   * slot, delayed by its distance from the centre so a project blooms outward
+   * rather than appearing as one block.
+   *
+   * A panel that was already here is handled by `relayout`, which knows where
+   * it was and slides it from there.
+   */
+  private animFor(node: FileNode): PanelAnim {
+    const [bx0, by0, bx1, by1] = this.layout.bounds;
+    const cx = (bx0 + bx1) / 2;
+    const cy = (by0 + by1) / 2;
+    const dist = Math.hypot(node.x + node.w / 2 - cx, node.y + node.h / 2 - cy);
+    return settleIn(node, Math.min(1, dist / this.spread) * timing.appearStagger);
   }
 
   private writeKindFlat(): void {
@@ -285,7 +426,8 @@ export class Scene {
         node, data,
         slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0 },
         rows: new Uint32Array(1),
-        heat: 0, state: aggregateState(data),
+        heat: 0, state: aggregateState(data), anim: this.animFor(node),
+        wroteRows: 0, wroteCols: 0,
       });
       return;
     }
@@ -297,7 +439,42 @@ export class Scene {
     this.textures.write(slot, data, node.geom.cols, rows);
     this.files.set(node.path, {
       node, data, slot, rows, heat: 0, state: aggregateState(data),
+      anim: this.animFor(node),
+      wroteRows: rows[data.lineCount], wroteCols: node.geom.cols,
     });
+  }
+
+  /**
+   * Add a file, or rewrite one already here whose column width changed.
+   *
+   * The caller works through a queue of paths and does not have to know which
+   * case each one is: after a relayout some are new panels and some are
+   * existing panels whose texture no longer matches their geometry.
+   */
+  ensure(node: FileNode, data: FileData): void {
+    const f = this.files.get(node.path);
+    if (!f) {
+      this.addFile(node, data);
+      return;
+    }
+    f.node = node;
+    f.data = data;
+    f.state = aggregateState(data);
+    if (node.stub) return;
+    f.rows = wrapOffsets(data.lineCols, node.geom.cols);
+    const rows = f.rows[data.lineCount];
+    if (!this.textures.fitsSlot(f.slot, rows)) {
+      // A different height class needs a different layer. Swapped here rather
+      // than when the relayout decided so, because until this point the old
+      // layer is what the panel is drawing.
+      this.textures.release(f.slot);
+      f.slot = this.textures.allocate(rows);
+    }
+    f.slot.texRows = this.textures.rowsFor(f.slot, rows);
+    this.textures.write(f.slot, data, node.geom.cols, f.rows);
+    f.wroteRows = f.rows[data.lineCount];
+    f.wroteCols = node.geom.cols;
+    node.layer = f.slot.layer;
   }
 
   /**
@@ -316,6 +493,8 @@ export class Scene {
       if (!f.node.stub) {
         f.rows = wrapOffsets(data.lineCols, f.node.geom.cols);
         this.textures.write(f.slot, data, f.node.geom.cols, f.rows);
+        f.wroteRows = f.rows[data.lineCount];
+        f.wroteCols = f.node.geom.cols;
       }
     }
     if (warm) f.heat = 1;
@@ -345,21 +524,6 @@ export class Scene {
     return n;
   }
 
-  /** Current heat per file, so a relayout does not throw the recency away. */
-  heatMap(): Map<string, number> {
-    const out = new Map<string, number>();
-    for (const [path, f] of this.files) if (f.heat > 0) out.set(path, f.heat);
-    return out;
-  }
-
-  /** Restore heat after a relayout. */
-  applyHeat(heat: Map<string, number>): void {
-    for (const [path, value] of heat) {
-      const f = this.files.get(path);
-      if (f) f.heat = value;
-    }
-  }
-
   finalizeTextures(): void {
     this.textures.finalize();
   }
@@ -370,10 +534,17 @@ export class Scene {
   ): void {
     const o = b.alloc();
     const d = b.data;
-    d[o] = x; d[o + 1] = y; d[o + 2] = w; d[o + 3] = h;
+    const tf = this.tf;
+    d[o] = x * tf.scale + tf.bx;
+    d[o + 1] = y * tf.scale + tf.by;
+    d[o + 2] = w * tf.scale;
+    d[o + 3] = h * tf.scale;
     const [fr, fg, fb] = rgb(fill);
-    d[o + 4] = fr; d[o + 5] = fg; d[o + 6] = fb; d[o + 7] = fillA;
+    d[o + 4] = fr; d[o + 5] = fg; d[o + 6] = fb; d[o + 7] = fillA * tf.alpha;
     const [br, bg, bb] = rgb(border);
+    // The border width is in device pixels, so it is the one thing that must
+    // not scale: a hairline is a hairline at every zoom, and that is what
+    // keeps it from shimmering.
     d[o + 8] = br; d[o + 9] = bg; d[o + 10] = bb; d[o + 11] = borderPx;
   }
 
@@ -413,17 +584,59 @@ export class Scene {
     this.glyphs.reset();
     for (const b of this.overviewByChunk.values()) b.reset();
 
+    let stillAnimating = false;
+
     // Directory boxes, outermost first so nesting reads correctly.
     const dirs = [...this.layout.dirs].sort((a, b) => a.depth - b.depth);
     for (const d of dirs) {
-      if (d.x > vx1 || d.y > vy1 || d.x + d.w < vx0 || d.y + d.h < vy0) continue;
+      this.tf = IDENTITY;
+      const anim = this.dirAnims.get(d.path);
+      if (anim) {
+        anim.t += dt;
+        if (finished(anim)) this.dirAnims.delete(d.path);
+        else {
+          stillAnimating = true;
+          this.tf = transformFor(d, anim);
+        }
+      }
+      const drawn = this.tf === IDENTITY ? d : applyTo(this.tf, d);
+      if (
+        drawn.x > vx1 || drawn.y > vy1
+        || drawn.x + drawn.w < vx0 || drawn.y + drawn.h < vy0
+      ) {
+        continue;
+      }
       this.pushDir(d, cam.zoom);
     }
+    this.tf = IDENTITY;
 
     let visibleFiles = 0;
     for (const f of this.files.values()) {
       const n = f.node;
-      if (n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0) continue;
+
+      // Advance the settle animation and work out the transform before
+      // culling, because a panel sliding in from off screen is visible at its
+      // animated position while its target is not yet in view, and the other
+      // way round on the way out.
+      this.tf = IDENTITY;
+      if (f.anim) {
+        f.anim.t += dt;
+        if (finished(f.anim)) {
+          f.anim = null;
+        } else {
+          stillAnimating = true;
+          this.tf = transformFor(n, f.anim);
+        }
+      }
+
+      // The rect as it will actually be drawn.
+      const drawn = this.tf === IDENTITY ? n : applyTo(this.tf, n);
+      if (
+        drawn.x > vx1 || drawn.y > vy1
+        || drawn.x + drawn.w < vx0 || drawn.y + drawn.h < vy0
+      ) {
+        continue;
+      }
       visibleFiles++;
 
       if (f.heat > 0) f.heat = Math.max(0, f.heat - dt / timing.heatDecay);
@@ -448,6 +661,8 @@ export class Scene {
       }
       if (spanFade > 0.004 || glyphFade > 0.004) this.pushGutter(f, vy0, vy1);
     }
+    this.tf = IDENTITY;
+    this.animating = stillAnimating;
 
     // Draw.
     const [br, bg, bb] = rgb(this.pal.surface.bg);
@@ -540,12 +755,13 @@ export class Scene {
       if (idx < 0) continue;
       const o = b.alloc();
       const d = b.data;
-      d[o] = x + i * metrics.charWidth;
-      d[o + 1] = y;
+      const tf = this.tf;
+      d[o] = (x + i * metrics.charWidth) * tf.scale + tf.bx;
+      d[o + 1] = y * tf.scale + tf.by;
       d[o + 2] = idx;
       d[o + 3] = ink;
-      d[o + 4] = em;
-      d[o + 5] = fade;
+      d[o + 4] = em * tf.scale;
+      d[o + 5] = fade * tf.alpha;
     }
     return n * metrics.charWidth;
   }
@@ -767,13 +983,14 @@ export class Scene {
 
       const o = b.alloc();
       const d = b.data;
-      d[o] = n.x + textOriginX + c * pitch + textIndent(g);
-      d[o + 1] = n.y + textOriginY;
-      d[o + 2] = colW;
-      d[o + 3] = h;
+      const tf = this.tf;
+      d[o] = (n.x + textOriginX + c * pitch + textIndent(g)) * tf.scale + tf.bx;
+      d[o + 1] = (n.y + textOriginY) * tf.scale + tf.by;
+      d[o + 2] = colW * tf.scale;
+      d[o + 3] = h * tf.scale;
       d[o + 4] = 0; d[o + 5] = v0; d[o + 6] = 1; d[o + 7] = v1;
       d[o + 8] = slot.layer;
-      d[o + 9] = fade;
+      d[o + 9] = fade * tf.alpha;
     }
   }
 
@@ -890,10 +1107,11 @@ export class Scene {
           const hi = Math.min(end, to);
           const o = b.alloc();
           const dd = b.data;
-          dd[o] = colX + (lo - from) * metrics.charWidth;
-          dd[o + 1] = y + yOff;
-          dd[o + 2] = (hi - lo) * metrics.charWidth;
-          dd[o + 3] = h;
+          const tf = this.tf;
+          dd[o] = (colX + (lo - from) * metrics.charWidth) * tf.scale + tf.bx;
+          dd[o + 1] = (y + yOff) * tf.scale + tf.by;
+          dd[o + 2] = (hi - lo) * metrics.charWidth * tf.scale;
+          dd[o + 3] = h * tf.scale;
           dd[o + 4] = spanKind(p);
           dd[o + 5] = fade;
         }
@@ -979,12 +1197,13 @@ export class Scene {
             if (idx < 0) continue;
             const o = b.alloc();
             const dd = b.data;
-            dd[o] = colX + (k - from) * metrics.charWidth;
-            dd[o + 1] = y;
+            const tf = this.tf;
+            dd[o] = (colX + (k - from) * metrics.charWidth) * tf.scale + tf.bx;
+            dd[o + 1] = y * tf.scale + tf.by;
             dd[o + 2] = idx;
             dd[o + 3] = kind;
-            dd[o + 4] = em;
-            dd[o + 5] = fade;
+            dd[o + 4] = em * tf.scale;
+            dd[o + 5] = fade * tf.alpha;
           }
         }
       }

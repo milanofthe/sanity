@@ -87,6 +87,10 @@
 	footer {
 		display: flex;
 		align-items: center;
+		/* Clips rather than pushes: the numbers are secondary, and letting them
+		   widen the grid made the canvas aspect follow the text. */
+		min-width: 0;
+		overflow: hidden;
 		gap: var(--sp-4);
 		padding: 0 var(--sp-3);
 		background: var(--bg-panel);

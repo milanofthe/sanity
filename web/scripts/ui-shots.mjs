@@ -5,7 +5,7 @@
 // rather than against whether it compiles.
 
 import { mkdirSync } from 'node:fs';
-import { launch } from './browser.mjs';
+import { launch, settled } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const outDir = process.env.SANITY_OUT ?? 'shots/ui';
@@ -27,6 +27,7 @@ await page.waitForFunction(
   null,
   { timeout: 120000 },
 );
+await settled(page);
 await page.evaluate(() => window.__sanity.zoomTo(0.1));
 await page.waitForTimeout(400);
 

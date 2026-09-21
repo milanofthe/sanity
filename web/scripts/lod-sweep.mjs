@@ -5,7 +5,7 @@
 // in level of detail.
 
 import { mkdirSync } from 'node:fs';
-import { launch } from './browser.mjs';
+import { launch, settled } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const src = process.env.SANITY_SRC ?? 'fixture=fixture';
@@ -24,6 +24,7 @@ await page.waitForFunction(
   null,
   { timeout: 180000 },
 );
+await settled(page);
 await page.waitForTimeout(800);
 
 // Pixels per line, walking through both bands.

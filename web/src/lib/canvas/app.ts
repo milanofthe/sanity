@@ -33,6 +33,13 @@ export interface CanvasStats {
   indexing: number;
   /** Active hand-over points, so the status bar can show what is in effect. */
   bands: string;
+  /** True while at least one panel is still settling into place.
+   *
+   *  Reported because the checks screenshot as soon as the scan is done, and
+   *  a frame caught mid-animation is a different picture. They wait on this.
+   *  It is also the signal an adaptive frame rate would need: a settled canvas
+   *  that nobody is panning has nothing to redraw. */
+  settling: boolean;
 }
 
 /** What the chrome has to supply to open a repository. */
@@ -75,6 +82,7 @@ export class CanvasApp {
   stats: CanvasStats = {
     files: 0, totalLines: 0, visibleFiles: 0, lod: 'structure', pxPerLine: 0,
     quads: 0, cpuMs: 0, frameMs: 0, vramMb: 0, fill: 0, indexing: 0, bands: '',
+    settling: false,
   };
 
   /** Called after each frame so the chrome can render the status bar. */
@@ -132,9 +140,12 @@ export class CanvasApp {
   /** Replace the whole scene. Layout runs synchronously, texture upload is
    *  spread across frames so opening a large repo does not lock the window. */
   open(source: RepoSource, keepView = false): void {
-    const heat = keepView ? (this.scene?.heatMap() ?? new Map()) : new Map<string, number>();
+    // Reusing the scene is the difference between a relayout being free and
+    // costing what a first load costs; see Scene.relayout. Only possible when
+    // the view is being kept, which is also the only time it matters.
+    const reuse = keepView && this.scene !== null;
     this.lastSource = source;
-    this.scene = null;
+    if (!reuse) this.scene = null;
     this.hovered = null;
     this.decoded.clear();
 
@@ -171,18 +182,20 @@ export class CanvasApp {
         : ''),
     );
 
-    this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
-    this.pending = this.layout.files.map((f) => f.path);
-    this.uploaded = 0;
-    if (keepView) {
-      // A relayout while someone is working must not move the view. The
-      // camera keeps its world coordinates, which is right as long as the
-      // layout barely changed, and a file growing by a few lines is the
-      // common case. Issue #8 covers anchoring on a file and animating.
-      this.scene.applyHeat(heat);
+    if (reuse && this.scene) {
+      // Only the panels whose texture content actually changed come back, and
+      // on the common edit that is none of them. A relayout while someone is
+      // working must not move the view either, so the camera keeps its world
+      // coordinates; issue #8 covers anchoring on a file.
+      this.pending = this.scene.relayout(this.layout);
     } else {
+      // Every panel settles in as it arrives, staggered outward from the
+      // centre. That is the load animation.
+      this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
+      this.pending = this.layout.files.map((f) => f.path);
       this.fit();
     }
+    this.uploaded = 0;
   }
 
   /**
@@ -195,6 +208,21 @@ export class CanvasApp {
   relayout(source?: RepoSource): void {
     const use = source ?? this.lastSource;
     if (use) this.open(use, true);
+  }
+
+  /**
+   * Whether the picture is still changing on its own.
+   *
+   * Live rather than read off the last frame's stats, because the moment that
+   * matters is right after `open`, when no frame has run yet and the stats
+   * still describe the previous scene. Three sources: panels still arriving,
+   * panels still settling into place, and the camera still flying.
+   *
+   * This is also the signal an adaptive frame rate needs: a settled canvas
+   * that nobody is touching has nothing to redraw.
+   */
+  settling(): boolean {
+    return this.pending.length > 0 || (this.scene?.animating ?? false) || this.cam.flying;
   }
 
   /** Files that differ from the baseline, as the scene has them. */
@@ -363,7 +391,9 @@ export class CanvasApp {
       const path = this.pending.pop()!;
       const node = byPath.get(path);
       const data = this.decoded.get(path);
-      if (node && data) this.scene.addFile(node, data);
+      // `ensure` rather than `addFile`: after a relayout the path may already
+      // be in the scene and only need its texture written again.
+      if (node && data) this.scene.ensure(node, data);
       this.uploaded++;
     }
     this.scene.finalizeTextures();
@@ -397,6 +427,7 @@ export class CanvasApp {
         bands:
           `${lodBands.tokensFrom}-${lodBands.tokensTo}/` +
           `${lodBands.textFrom}-${lodBands.textTo}`,
+        settling: this.settling(),
       };
       this.onStats?.(this.stats);
     }

@@ -11,7 +11,7 @@
 //   2. A horizontal slice through a border must contain no intermediate
 //      values between the border colour and what is on either side.
 
-import { launch, zoomForPanels } from './browser.mjs';
+import { launch, settled, zoomForPanels } from './browser.mjs';
 import { decodePng } from './png.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
@@ -29,6 +29,7 @@ await page.waitForFunction(
   null,
   { timeout: 180000 },
 );
+await settled(page);
 await page.waitForTimeout(600);
 
 // A zoom where a good number of panel and region borders are on screen. A

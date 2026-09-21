@@ -7,7 +7,7 @@
 // unnoticed until the watcher lands and then fail for reasons unrelated to it.
 
 import { decodePng } from './png.mjs';
-import { launch, pixelDiff, zoomForPanels } from './browser.mjs';
+import { launch, settled, pixelDiff, zoomForPanels } from './browser.mjs';
 
 const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 const src = process.env.SANITY_SRC ?? 'fixture=fixture';
@@ -24,6 +24,7 @@ await page.waitForFunction(
   null,
   { timeout: 180000 },
 );
+await settled(page);
 // A zoom where a good number of panels are on screen with visible borders.
 // Picking a fixed zoom made this brittle: panels grew when wrapping landed,
 // so the same zoom showed a handful of them and touching them moved almost no

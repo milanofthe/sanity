@@ -22,7 +22,17 @@ body {
 #app {
 	display: grid;
 	grid-template-rows: var(--toolbar-h) 1fr var(--statusbar-h);
+	/* The implicit column would otherwise be sized to max-content, and the
+	   status bar sets its groups to nowrap. So a longer number in the status
+	   bar widened the grid past the window, the canvas stretched with it, and
+	   the canvas aspect, which the layout follows, ended up depending on the
+	   length of a text string. Measured: the canvas went from 962 to 1051
+	   pixels wide across two relayouts of the same project, which relaid out
+	   every panel and re-uploaded 700 textures for nothing. */
+	grid-template-columns: minmax(0, 1fr);
+	width: 100%;
 	height: 100%;
+	overflow: hidden;
 }
 
 /* Panel and directory labels are drawn by the renderer in world space, so

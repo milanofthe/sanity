@@ -80,7 +80,30 @@ export async function openApp({
     null,
     { timeout: 180000 },
   );
+  await settled(page);
   return { browser, page };
+}
+
+/**
+ * Wait until no panel is still settling into place.
+ *
+ * Panels animate in when a scene opens, so a screenshot taken the moment the
+ * scan finishes catches a different picture every run. The canvas reports
+ * whether anything is still moving; waiting on that is exact where waiting a
+ * fixed number of milliseconds is a guess that goes stale the next time a
+ * duration changes.
+ */
+export async function settled(page, timeout = 30000) {
+  await page
+    // `app.settling()` and not `stats.settling`: the stats are written by the
+    // render loop, so right after a relayout they still describe the previous
+    // scene and would report a canvas at rest that has not drawn a frame yet.
+    .waitForFunction(() => window.__sanity?.app?.settling?.() === false, null, { timeout })
+    .catch(() => {});
+  // One more frame, so the frame that set it false has been presented.
+  await page.evaluate(
+    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+  );
 }
 
 /**
@@ -109,6 +132,21 @@ export async function zoomForPanels(page, min = 20, stops = [6, 4.5, 3, 2, 1.4, 
     },
     [min, stops],
   );
+}
+
+/**
+ * Wait for a frame to be on screen before screenshotting it.
+ *
+ * The canvas is drawn in a continuous requestAnimationFrame loop and its
+ * context does not preserve the drawing buffer, so a screenshot can land
+ * between the clear and the draw and come back empty. That is not a rendering
+ * bug, and it cost an afternoon to establish that once.
+ */
+export async function frameOnScreen(page) {
+  await page.evaluate(
+    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+  );
+  await page.waitForTimeout(40);
 }
 
 /** Number of pixels that differ between two PNG screenshots. */
