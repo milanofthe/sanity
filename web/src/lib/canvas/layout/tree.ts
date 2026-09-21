@@ -161,7 +161,41 @@ export interface DirNode {
   h: number;
 }
 
-export type Node = FileNode | DirNode;
+/**
+ * The placeholders of one directory, laid out as a grid rather than a treemap.
+ *
+ * A stub says "this file exists" and nothing else: it has a fixed size and
+ * carries no information about how large the file is, which is the whole point
+ * of the mode. A treemap over such items is meaningless and it looked it.
+ * Measured on pathsim with its 275 Python files and 34 notebooks reduced: the
+ * canvas dropped to 69 percent panel, the mean panel aspect went to 7.5, and
+ * one pair of siblings overlapped, because a subdivision was dividing area
+ * among items whose area is a constant and whose shape cannot bend.
+ *
+ * So they are collected per directory into one node the treemap sees as a
+ * single item, with the area of the grid they need and a shape a grid can
+ * take, and the chips are packed into whatever rectangle it gets. That fills
+ * densely, cannot overlap by construction, and reads as what it is: a block of
+ * files that are present and not being shown.
+ */
+export interface StubBlock {
+  kind: 'stubs';
+  /** The placeholders in this block, in the order they are packed. */
+  children: FileNode[];
+  area: number;
+  minW: number;
+  minH: number;
+  maxAspect: number;
+  /** Chips that did not fit in the rectangle the block was given, so the
+   *  fitting passes know to ask for more. */
+  hidden: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export type Node = FileNode | DirNode | StubBlock;
 
 export interface Layout {
   root: DirNode;
@@ -297,7 +331,7 @@ function computeAreas(dir: DirNode): number {
   let minH = 1;
   let wide = 0;
   for (const c of dir.children) {
-    inner += c.kind === 'file' ? c.area : computeAreas(c);
+    inner += c.kind === 'dir' ? computeAreas(c) : c.area;
     // A directory has to be able to hold its largest child, whatever else it
     // holds: below that, the child it cannot fit is the one that misfits, and
     // the correction would go to the child while the shortage is the parent's.
@@ -321,11 +355,114 @@ function computeAreas(dir: DirNode): number {
 function sortChildren(dir: DirNode): void {
   const files = dir.children.filter((c): c is FileNode => c.kind === 'file');
   const subs = dir.children.filter((c): c is DirNode => c.kind === 'dir');
-  const byName = (a: Node, b: Node) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const byName = (a: FileNode | DirNode, b: FileNode | DirNode) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   files.sort(byName);
   subs.sort(byName);
-  dir.children = [...files, ...subs];
+  const drawn = files.filter((f) => !f.stub);
+  const stubs = files.filter((f) => f.stub);
+  dir.children = stubs.length > 0
+    ? [...drawn, stubBlock(stubs), ...subs]
+    : [...drawn, ...subs];
   for (const sub of subs) sortChildren(sub);
+}
+
+/** One chip and the gap it gives up, in grid cells. */
+function chipCells(): { w: number; h: number } {
+  const g = stubGeometry();
+  return { w: cells(g.w) + PANEL_GAP_CELLS, h: cells(g.h) + PANEL_GAP_CELLS };
+}
+
+/** Wrap a directory's placeholders into a block the treemap can place. */
+function stubBlock(stubs: FileNode[]): StubBlock {
+  const chip = chipCells();
+  const n = stubs.length;
+  // Area in world units, from whole chips, so the weight it asks for is the
+  // space it will actually use. A weight below that is what made the treemap
+  // hand out slots the chips did not fit in.
+  const area = n * chip.w * chip.h * CELL * CELL;
+  // Shape: anything from one column of chips to one row of them. A grid can
+  // take any of it, and saying so keeps the treemap from correcting a block
+  // that was never in trouble.
+  return {
+    kind: 'stubs',
+    children: stubs,
+    area,
+    minW: chip.w,
+    minH: chip.h,
+    maxAspect: Math.max(1, (n * chip.w) / chip.h),
+    hidden: 0,
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+  };
+}
+
+/**
+ * Pack the chips into the rectangle the block was given.
+ *
+ * The columns come from the slot's width and then take all of it, the same way
+ * a panel is the slot it was given rather than a fixed box centred in one.
+ * That is what makes a block read as a block: with chips at a fixed width the
+ * grid left a ragged margin down its right side and, in a slot taller than the
+ * count needed, an empty half at the bottom.
+ *
+ * A chip's width carries no meaning, so stretching it costs nothing and buys
+ * something: the wider it is, the more of the file's name fits in it.
+ */
+function placeStubs(block: StubBlock, slot: IntRect): void {
+  const r = toWorld(slot);
+  block.x = r.x;
+  block.y = r.y;
+  block.w = r.w;
+  block.h = r.h;
+
+  const chip = chipCells();
+  const n = block.children.length;
+  const fit = Math.max(1, Math.floor(slot.w / chip.w));
+  const rows = Math.max(1, Math.floor(slot.h / chip.h));
+  // As few columns as the height allows, so the chips stay wide and their
+  // names readable, and never more than the width can hold.
+  const cols = Math.max(1, Math.min(fit, Math.ceil(n / rows)));
+  const colW = Math.max(chip.w, Math.floor(slot.w / cols));
+
+  const geom = stubGeometry();
+  block.hidden = 0;
+  for (let i = 0; i < n; i++) {
+    const f = block.children[i];
+    const cx = i % cols;
+    const cy = Math.floor(i / cols);
+    const at: IntRect = {
+      x: slot.x + cx * colW,
+      y: slot.y + cy * chip.h,
+      // The last column takes what the division left over, so the block's
+      // right edge is the slot's.
+      w: cx === cols - 1 ? Math.max(chip.w, slot.w - cx * colW) : colW,
+      h: chip.h,
+    };
+    const world = toWorld(at);
+    f.geom = geom;
+    f.slotW = world.w;
+    f.slotH = world.h;
+    f.x = world.x;
+    f.y = world.y;
+    // Minus the cell every panel gives up at its right and bottom edge, so
+    // two chips never draw their border along the same line.
+    f.w = Math.max(0, world.w - PANEL_GAP_CELLS * CELL);
+    f.h = Math.max(0, world.h - PANEL_GAP_CELLS * CELL);
+    f.fits = true;
+    f.usable = true;
+    f.holdsAll = true;
+    // Past the bottom of the block there is nowhere to go. Counted in the
+    // stats and asserted on, rather than quietly drawn over a sibling.
+    if (at.y + chip.h > slot.y + slot.h) {
+      f.w = 0;
+      f.h = 0;
+      f.usable = false;
+      block.hidden++;
+    }
+  }
 }
 
 function placeFile(f: FileNode, slot: IntRect): void {
@@ -414,15 +551,21 @@ function placeDir(dir: DirNode, slot: IntRect): void {
 
   layoutTreemap(dir.children, inner, (child, childSlot) => {
     if (child.kind === 'file') placeFile(child, childSlot);
+    else if (child.kind === 'stubs') placeStubs(child, childSlot);
     else placeDir(child, childSlot);
   });
 }
 
-function collect(dir: DirNode, files: FileNode[], dirs: DirNode[]): void {
+function collect(
+  dir: DirNode, files: FileNode[], dirs: DirNode[], blocks: StubBlock[],
+): void {
   dirs.push(dir);
   for (const c of dir.children) {
     if (c.kind === 'file') files.push(c);
-    else collect(c, files, dirs);
+    else if (c.kind === 'stubs') {
+      blocks.push(c);
+      files.push(...c.children);
+    } else collect(c, files, dirs, blocks);
   }
 }
 
@@ -482,7 +625,9 @@ const ASPECT_TRUST = 3;
  * percent change to a parent rectangle flips a row boundary, so that is where
  * a fix has to go. Tracked as issue #8.
  */
-function fitPasses(root: DirNode, files: FileNode[], aspect: number): number {
+function fitPasses(
+  root: DirNode, files: FileNode[], blocks: StubBlock[], aspect: number,
+): number {
   let remaining = 0;
   for (let pass = 0; pass < FIT_PASSES; pass++) {
     const area = computeAreas(root);
@@ -490,8 +635,23 @@ function fitPasses(root: DirNode, files: FileNode[], aspect: number): number {
     placeDir(root, { x: 0, y: 0, w: cells(w), h: cells(area / w) });
 
     remaining = 0;
+    // A block that could not fit all its chips asks for the area they need at
+    // the shape it was given. Same correction as a panel gets, for the same
+    // reason: the shape it will be handed is not known when the weight is set.
+    for (const b of blocks) {
+      if (b.hidden === 0) continue;
+      remaining++;
+      const chip = chipCells();
+      const raw = b.w / Math.max(1, b.h);
+      const a = Math.min(ASPECT_TRUST, Math.max(1 / ASPECT_TRUST, raw));
+      const minW = chip.w * CELL;
+      const minH = chip.h * CELL;
+      const grid = b.children.length * minW * minH;
+      const need = Math.max(grid, (minW * minW) / a, minH * minH * a);
+      b.area = Math.max(b.area, need) * 1.06;
+    }
     for (const f of files) {
-      if (f.fits) continue;
+      if (f.fits || f.stub) continue;
       remaining++;
       // Ask for the smallest slot of this aspect that the panel could fill in
       // *any* of the shapes it is allowed to take.
@@ -564,12 +724,14 @@ export function computeLayout(
 
   const allFiles: FileNode[] = [];
   const allDirs: DirNode[] = [];
-  collect(root, allFiles, allDirs);
-  fitPasses(root, allFiles, rootAspect(viewport));
+  const allBlocks: StubBlock[] = [];
+  collect(root, allFiles, allDirs, allBlocks);
+  fitPasses(root, allFiles, allBlocks, rootAspect(viewport));
 
   const files: FileNode[] = [];
   const dirs: DirNode[] = [];
-  collect(root, files, dirs);
+  const blocks: StubBlock[] = [];
+  collect(root, files, dirs, blocks);
   // Outermost first, so nesting reads correctly when they are drawn. Sorted
   // here rather than in the renderer, which was copying and sorting the whole
   // list on every frame to get the same order.
@@ -598,6 +760,9 @@ export interface LayoutStats {
   unusable: number;
   /** Panels too short for their own wrapped content. Also has to be zero. */
   overflowing: number;
+  /** Placeholders that did not fit in their block. Also has to be zero: a
+   *  file the mode exists to show as present must not go missing. */
+  hiddenStubs: number;
   /** Sibling pairs that overlap. Must be zero: the treemap tiles exactly, so
    *  anything here means the integer split lost or double-counted a cell. */
   overlaps: number;
@@ -644,14 +809,16 @@ export function layoutStats(l: Layout): LayoutStats {
   let misfits = 0;
   let unusable = 0;
   let overflowing = 0;
+  let hiddenStubs = 0;
   const bloat: number[] = [];
   for (const f of l.files) {
     panelArea += f.w * f.h;
     aspectSum += f.w / Math.max(1, f.h);
     colsSum += f.geom.cols;
     if (!f.fits) misfits++;
-    if (!f.usable) unusable++;
+    if (!f.usable && !f.stub) unusable++;
     if (!f.holdsAll) overflowing++;
+    if (f.stub && !f.usable) hiddenStubs++;
     if (!f.stub) bloat.push((f.w * f.h) / Math.max(1, panelArea_(f.lineCols, f.maxCols)));
   }
   bloat.sort((a, b) => a - b);
@@ -691,6 +858,7 @@ export function layoutStats(l: Layout): LayoutStats {
     misfits,
     unusable,
     overflowing,
+    hiddenStubs,
     overlaps,
     offGrid,
     dirCount: l.dirs.length,

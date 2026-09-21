@@ -1211,6 +1211,22 @@ export class Scene {
     }
     if (h * zoom < 5) return;
     const inset = metrics.panelPadX;
+    const room = Math.floor((w - 2 * inset) / metrics.charWidth);
+    // Its name, once there is room to read one. A chip used to be a box with a
+    // line through it at every zoom, which says "a file is here" and stops:
+    // with three hundred of them that is a striped field and no information.
+    // The name is what makes a placeholder worth drawing.
+    const px = metrics.titleHeight * zoom;
+    const fade = Math.min(1, Math.max(0, (px - 5) / 4));
+    if (fade > 0.004 && room >= 3) {
+      const name = n.name.length <= room
+        ? n.name
+        // From the end, so the extension survives: `solver_esdirk43.py` says
+        // more as `..dirk43.py` than as `solver_es..`.
+        : `..${n.name.slice(-(room - 2))}`;
+      this.pushText(name, n.x + inset, n.y, UiInk.Path, fade * 0.85, room);
+      return;
+    }
     this.pushRect(
       this.fgRects, n.x + inset, n.y + h / 2 - 0.5, Math.max(0, w - 2 * inset), 1,
       this.pal.surface.reducedInk, 0.65, 0, 0,

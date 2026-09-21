@@ -267,7 +267,7 @@ export class CanvasApp {
     console.log(
       `layout: fill ${(st.fill * 100).toFixed(1)}% · aspect ${st.aspect.toFixed(2)} · ` +
       `${st.dirCount} dirs · misfits ${st.misfits} · unusable ${st.unusable} · ` +
-      `overflowing ${st.overflowing} · ` +
+      `overflowing ${st.overflowing} · hidden ${st.hiddenStubs} · ` +
       `overlaps ${st.overlaps} · ` +
       `offgrid ${st.offGrid} · mean aspect ${st.meanAspect.toFixed(2)} · ` +
       `mean cols ${st.meanCols.toFixed(1)} · ` +

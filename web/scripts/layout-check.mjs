@@ -38,6 +38,12 @@ const CASES = [
   // everywhere else.
   { cfg: 'files=800&lines=12', fill: 0.81, bloat: 1.8 },
   { cfg: 'files=200&lines=4000', fill: 0.98, bloat: 1.1 },
+  // Two thirds of the files reduced to placeholders. Fill is structurally
+  // lower here and that is the mode working: a placeholder is one line tall
+  // whatever the file behind it, so a directory of them is mostly the space
+  // between them. What has to hold is that none of them goes missing and that
+  // the chips and the panels around them do not overlap.
+  { cfg: 'files=600&lines=200&stubs=0.66', fill: 0.9, bloat: 1.1 },
 ];
 
 const browser = await launch();
@@ -73,6 +79,9 @@ for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   // Lines with nowhere to go: the wrapping equivalent of clipping, and just
   // as much a loss of content.
   if (num('overflowing') !== 0) problems.push(`overflowing=${num('overflowing')}`);
+  // A placeholder with nowhere to go is a file the view claims to be showing
+  // and is not.
+  if (num('hidden') !== 0) problems.push(`hidden=${num('hidden')}`);
   if (fill < minFill) problems.push(`fill=${(fill * 100).toFixed(1)}% < ${minFill * 100}%`);
   const bloat = num('bloat p95');
   if (!(bloat <= maxBloat)) problems.push(`bloat p95=${bloat.toFixed(2)} > ${maxBloat}`);

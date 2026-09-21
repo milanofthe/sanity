@@ -43,7 +43,10 @@ agents work in the repository.
   to be held in memory: 11.6 MB in 5 to 6 milliseconds here, 18.6 MB in 7 to 8
   on a larger project.
 - **Four themes**: Mariana, Monokai, Breakers, and sanity's own. A file type
-  picker draws each extension in full, as a placeholder, or not at all.
+  picker draws each extension in full, as a placeholder, or not at all. The
+  placeholders of a directory are packed into a grid of named chips rather than
+  put through the treemap, since a placeholder has a fixed size and carries no
+  information about how large its file is.
 - Read-only. A panel's header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
   `$EDITOR`, or the platform handler.
 
@@ -106,7 +109,8 @@ subpixel pan, that the glow reacts to a change and fades, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
 animate and come to rest, that an idle canvas draws nothing, that the overview
 texture is not smeared vertically, that a change plays as remove then add, and
-that a search dims the project, lights its matches and flies to a line. Last, a
+that a search dims the project, lights its matches and flies to a line. The
+layout case list includes a project two thirds reduced to placeholders. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.
 

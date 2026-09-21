@@ -62,8 +62,21 @@ export function openSynthetic(app: CanvasApp, regenerate = false, keepView = fal
   }
   const repo = cached;
 
+  // `?stubs=<fraction>` reduces that share of the files to placeholders
+  // without going through the picker, so a check can exercise the mode. Taken
+  // by a hash of the path rather than at random, so the same query gives the
+  // same layout twice.
+  const stubbed = num('stubs', 0);
+  const reduced = (path: string): boolean => {
+    if (project.modeForPath(path) === 'reduced') return true;
+    if (stubbed <= 0) return false;
+    let h = 2166136261;
+    for (let i = 0; i < path.length; i++) h = ((h ^ path.charCodeAt(i)) * 16777619) >>> 0;
+    return (h % 1000) / 1000 < stubbed;
+  };
+
   const entries = repo.entries
-    .map((e) => ({ ...e, stub: project.modeForPath(e.path) === 'reduced' }))
+    .map((e) => ({ ...e, stub: reduced(e.path) }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
 
   app.open(
