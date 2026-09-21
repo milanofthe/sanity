@@ -111,9 +111,31 @@ if (Math.min(...edges) < 20) {
   console.log('FAIL  too few edges sampled for the result to mean anything');
   failures++;
 }
-// Glyph antialiasing is deliberate and shows up here too, so the budget is
-// not zero; a blended rectangle edge across this many rows runs to hundreds.
-const limit = Number(process.env.SANITY_BLEND_LIMIT ?? 120);
+// The property is that the image does not change as the camera pans by a
+// fraction of a pixel: with snapping, a quarter pixel rounds to the same grid
+// and renders identically. So what matters is how much the blended count
+// *varies* across the four offsets, not its absolute value.
+//
+// The absolute value is not a good test on its own. Glyph antialiasing is
+// deliberate and lands in the same count, and how much of it is on screen
+// depends on which zoom the search settled at and on whether the GPU backend
+// fell back under load: one run in a full suite reported 169 where the same
+// check reported 80 twice in a row on its own.
+const spread = Math.max(...blended) - Math.min(...blended);
+const varyLimit = Math.max(8, 0.15 * Math.max(...blended));
+if (spread > varyLimit) {
+  console.log(
+    `FAIL  blending changes by ${spread} across subpixel pans, over the ` +
+      `${varyLimit.toFixed(0)} allowed: an edge is moving with the camera`,
+  );
+  failures++;
+} else {
+  console.log(`ok    blending is constant under subpixel panning (spread ${spread})`);
+}
+
+// And a gross regression in the absolute count still matters: it would mean
+// every rectangle edge is being blended rather than snapped.
+const limit = Number(process.env.SANITY_BLEND_LIMIT ?? 400);
 if (Math.max(...blended) > limit) {
   console.log(`FAIL  ${Math.max(...blended)} blended edge pixels, over the ${limit} allowed`);
   failures++;

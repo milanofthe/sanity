@@ -190,16 +190,19 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
     }
 
     let text = String::from_utf8_lossy(&bytes);
-    // A grammar if one claims the extension, otherwise line metrics alone.
-    // Plain output still renders correctly: what the zoomed-out levels show is
+    // A grammar if one claims the extension, then the coarse lexer for the
+    // languages that have no usable grammar, then line metrics alone. Plain
+    // output still renders correctly: what the zoomed-out levels show is
     // indentation and line length, and only the colour is missing.
-    let data = match extension_of(rel).and_then(grammar_for_extension) {
-        Some(grammar) => tokenize(&text, grammar),
-        None => {
-            let mut d = plain_file_data(&text);
-            d.flags |= FLAG_NO_GRAMMAR;
-            d
-        }
+    let ext = extension_of(rel);
+    let data = if let Some(grammar) = ext.and_then(grammar_for_extension) {
+        tokenize(&text, grammar)
+    } else if let Some((id, _, syn)) = ext.and_then(crate::lang::syntax_for_extension) {
+        crate::simple::lex(&text, id, syn)
+    } else {
+        let mut d = plain_file_data(&text);
+        d.flags |= FLAG_NO_GRAMMAR;
+        d
     };
     let scanned = ScannedFile {
         path: rel.to_string(),

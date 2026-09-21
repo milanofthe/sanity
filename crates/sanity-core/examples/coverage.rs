@@ -33,6 +33,9 @@ const FLOOR: &[(&str, f64)] = &[
     ("markdown", 0.20),
 ];
 
+/// Below this many lines a language is reported but not judged.
+const MIN_LINES: usize = 200;
+
 #[derive(Default)]
 struct Tally {
     files: usize,
@@ -78,7 +81,11 @@ fn main() {
         };
 
         for (base, rel) in files {
-            let Some(grammar) = lang::extension_of(&rel).and_then(lang::grammar_for_extension) else {
+            let Some(ext) = lang::extension_of(&rel) else {
+                skipped += 1;
+                continue;
+            };
+            let Some(name) = lang::language_name_for_extension(ext) else {
                 skipped += 1;
                 continue;
             };
@@ -87,9 +94,17 @@ fn main() {
                 continue;
             }
             let text = String::from_utf8_lossy(&bytes);
-            let data = sanity_core::tokenize::tokenize(&text, grammar);
+            // The same dispatch read_file uses, so the report measures what
+            // ships rather than the grammar path alone.
+            let data = if let Some(g) = lang::grammar_for_extension(ext) {
+                sanity_core::tokenize::tokenize(&text, g)
+            } else if let Some((id, _, syn)) = lang::syntax_for_extension(ext) {
+                sanity_core::simple::lex(&text, id, syn)
+            } else {
+                continue;
+            };
 
-            let t = by_lang.entry(grammar.name).or_default();
+            let t = by_lang.entry(name).or_default();
             t.files += 1;
             for (i, line) in text.lines().enumerate() {
                 if i >= data.line_count() {
@@ -125,7 +140,7 @@ fn main() {
         "{:<12} {:>6} {:>9} {:>9} {:>9}  kinds",
         "language", "files", "lines", "in spans", "coloured"
     );
-    let mut worst: Vec<(&str, f64)> = Vec::new();
+    let mut worst: Vec<(&str, f64, usize)> = Vec::new();
     for (name, t) in &by_lang {
         let covered = t.covered as f64 / t.chars.max(1) as f64;
         let coloured = t.coloured as f64 / t.chars.max(1) as f64;
@@ -134,7 +149,7 @@ fn main() {
             "{:<12} {:>6} {:>9} {:>8.1}% {:>8.1}%  {kinds}/{KIND_COUNT}",
             name, t.files, t.lines, 100.0 * covered, 100.0 * coloured
         );
-        worst.push((name, coloured));
+        worst.push((name, coloured, t.lines));
     }
     if skipped > 0 {
         println!("\n{skipped} files had no grammar");
@@ -150,7 +165,14 @@ fn main() {
     // stay plain. Code languages all measure between 75 and 88 percent.
     println!();
     let mut failed = false;
-    for (name, share) in &worst {
+    for (name, share, lines) in &worst {
+        // A handful of lines says nothing about whether a query works. This
+        // repository has one markdown file of six lines, and judging the
+        // markdown query on it produced a failure that meant only that.
+        if *lines < MIN_LINES {
+            println!("{name}: {lines} lines is too little to judge");
+            continue;
+        }
         let floor = FLOOR.iter().find(|(n, _)| n == name).map(|(_, f)| *f).unwrap_or(0.5);
         if *share < floor {
             println!(

@@ -18,7 +18,12 @@ use crate::scan::TAB_WIDTH;
 use crate::wire::{pack_span, FileData, Kind, LineState, FLAG_TRUNCATED, MAX_COLS, MAX_SPAN_LEN};
 
 /// Accumulates spans and line metrics while walking the source.
-struct Builder {
+///
+/// Crate visible so `simple.rs` can feed it too: tab expansion, run merging,
+/// span splitting and the rule that whitespace never becomes a span are subtle
+/// enough that a second copy would drift, and any drift shows up as
+/// highlighting sitting a column off the text.
+pub(crate) struct Builder {
     f: FileData,
     /// Visual column of the next character.
     col: u32,
@@ -33,7 +38,7 @@ struct Builder {
 }
 
 impl Builder {
-    fn new(capacity_hint: usize) -> Self {
+    pub(crate) fn new(capacity_hint: usize) -> Self {
         let mut f = FileData::default();
         let lines = capacity_hint / 32 + 1;
         f.span_start.reserve(lines);
@@ -79,7 +84,7 @@ impl Builder {
         self.line_open = false;
     }
 
-    fn push_char(&mut self, ch: char, kind: Kind) {
+    pub(crate) fn push_char(&mut self, ch: char, kind: Kind) {
         if !self.line_open {
             self.begin_line();
         }
@@ -110,7 +115,7 @@ impl Builder {
         }
     }
 
-    fn finish(mut self, lang_id: u32, flags: u32) -> FileData {
+    pub(crate) fn finish(mut self, lang_id: u32, flags: u32) -> FileData {
         // A file not ending in a newline still has that last line, matching
         // how `str::lines` counts.
         if self.line_open {

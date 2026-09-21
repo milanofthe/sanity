@@ -8,5 +8,6 @@ pub mod filter;
 pub mod git;
 pub mod lang;
 pub mod scan;
+pub mod simple;
 pub mod tokenize;
 pub mod wire;

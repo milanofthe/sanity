@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use tree_sitter::Language;
 use tree_sitter_highlight::HighlightConfiguration;
 
+use crate::simple::Syntax;
 use crate::wire::Kind;
 
 /// Capture names requested from every grammar.
@@ -358,6 +359,40 @@ pub fn grammar_for_extension(ext: &str) -> Option<&'static Grammar> {
         .find(|e| e.extensions.contains(&lower.as_str()))
         .map(|e| e.id)?;
     grammars().iter().find(|g| g.id == id)
+}
+
+/// Languages handled by the coarse lexer rather than a grammar, with the
+/// language id written into their payloads.
+///
+/// Ids continue the registry's sequence, because a payload header carries one
+/// number and the frontend does not care which path produced it.
+const LEXED: &[(u32, &str, &[&str], &Syntax)] = &[
+    // `.include` is claimed by Verilog-A rather than SPICE because in
+    // practice that is what is in one: a file of `\`define` macros pulled into
+    // a model. `.inc` goes the other way, and both conventions are only
+    // conventions.
+    (18, "veriloga", &["va", "vams", "include"], &crate::simple::VERILOG_A),
+    (19, "spice", &["cir", "spice", "sp", "net", "ckt", "inc"], &crate::simple::SPICE),
+];
+
+/// The lexer for this extension, if no grammar claims it.
+///
+/// Verilog-A has no working tree-sitter grammar; see the note at the top of
+/// `simple.rs` for the measurements that settled it.
+pub fn syntax_for_extension(ext: &str) -> Option<(u32, &'static str, &'static Syntax)> {
+    let lower = ext.to_ascii_lowercase();
+    LEXED
+        .iter()
+        .find(|(_, _, exts, _)| exts.contains(&lower.as_str()))
+        .map(|(id, name, _, syn)| (*id, *name, *syn))
+}
+
+/// Registry name of whatever handles this extension, grammar or lexer. Used by
+/// the coverage report, which has to be able to name what it measured.
+pub fn language_name_for_extension(ext: &str) -> Option<&'static str> {
+    grammar_for_extension(ext)
+        .map(|g| g.name)
+        .or_else(|| syntax_for_extension(ext).map(|(_, name, _)| name))
 }
 
 /// Names an injection query may use for a language, mapped to a registry name.
