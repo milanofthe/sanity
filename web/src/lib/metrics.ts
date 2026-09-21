@@ -105,8 +105,18 @@ export const columns = {
 
 
 export const timing = {
-  /** Seconds over which a changed line cools back down to neutral. */
-  heatDecay: 90,
+  /**
+   * Seconds the panel flash lasts, and seconds the line marks are held and
+   * then faded.
+   *
+   * Short, all three of them, because what they report is an event. This was
+   * one number, a ninety second decay, and it was wrong in both directions at
+   * once: too long to read as something happening, and long enough that the
+   * canvas never stopped redrawing while an agent worked. See recency.ts.
+   */
+  flash: 0.5,
+  markHold: 4,
+  markFade: 1,
   /** Seconds for a level-of-detail crossfade. */
   lodFade: 0.18,
   /** Seconds for a layout reflow animation: a panel sliding and scaling from

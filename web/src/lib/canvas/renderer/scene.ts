@@ -16,6 +16,7 @@ import {
 } from '$lib/canvas/anim';
 import { diffLines, seams, signatures, type Seam, type Signature } from '$lib/canvas/linediff';
 import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
+import { flashAt, markStep, recent } from '$lib/canvas/recency';
 import { bandColour, lerp, mixToward } from '$lib/canvas/colour';
 import { rgb, UiInk, type Palette } from '$lib/theme';
 import { LineState, spanCol, spanKind, spanLen, type FileData } from '$lib/canvas/data/wire';
@@ -55,7 +56,18 @@ export interface SceneFile {
    */
   rows: Uint32Array;
   /** Recency of the last change, 1 right after an edit, decaying to 0. */
-  heat: number;
+  /**
+   * Seconds since this file last changed, or Infinity if it has not changed
+   * while the canvas has been open.
+   *
+   * One clock, read two ways: a bright flash over the panel for half a second,
+   * and bands on the changed lines for a few seconds. See recency.ts, for both
+   * and for what the ninety second glow this replaced got wrong.
+   */
+  since: number;
+  /** The mark strength as last drawn, quantised, so a frame is only spent
+   *  when it visibly moves. */
+  shownMark: number;
   /** Aggregate git state of the file, drives the panel border. */
   state: LineState;
   /** Settle animation, or null once it has finished. */
@@ -173,6 +185,16 @@ const SEARCH_DIM = 0.22;
  *  being asked right now. */
 const HIT_MIX = 0.22;
 const HIT_MIX_CURRENT = 0.55;
+
+/**
+ * How far a panel's background is washed towards the recency colour at the
+ * peak of its flash.
+ *
+ * Strong, unlike the standing tint this replaced, because it is over in half a
+ * second: what it has to do is catch the eye across a canvas of a thousand
+ * panels, and then get out of the way.
+ */
+const FLASH_WASH = 0.55;
 
 /** On-screen floor for a stub panel, in CSS pixels. */
 const STUB_MIN_PX = 1.5;
@@ -409,6 +431,8 @@ export class Scene {
   /** True while at least one panel is still animating, so the frame loop can
    *  tell whether the picture is still changing on its own. */
   animating = false;
+  /** True while a change is still playing out on some file. */
+  changing = false;
   stats: FrameStats = {
     visibleFiles: 0, overviewQuads: 0, spanQuads: 0, glyphQuads: 0,
     rectQuads: 0, pxPerLine: 0, cpuMs: 0,
@@ -628,7 +652,7 @@ export class Scene {
         node, data,
         slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0 },
         rows: new Uint32Array(1),
-        heat: 0, state: aggregateState(data), anim: this.animFor(node),
+        since: Infinity, shownMark: 0, state: aggregateState(data), anim: this.animFor(node),
         wroteRows: 0, wroteCols: 0,
         sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
         change: null,
@@ -642,7 +666,7 @@ export class Scene {
     node.layer = slot.layer;
     this.textures.write(slot, data, node.geom.cols, rows);
     this.add(node.path, {
-      node, data, slot, rows, heat: 0, state: aggregateState(data),
+      node, data, slot, rows, since: Infinity, shownMark: 0, state: aggregateState(data),
       anim: this.animFor(node),
       wroteRows: rows[data.lineCount], wroteCols: node.geom.cols,
       sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
@@ -695,7 +719,10 @@ export class Scene {
     const f = this.files.get(path);
     if (!f) return;
     if (!data) {
-      if (warm) f.heat = 1;
+      if (warm) {
+        f.since = 0;
+        f.shownMark = 1;
+      }
       return;
     }
 
@@ -714,7 +741,10 @@ export class Scene {
     // panel. A checkout is the second case.
     if (diff.wholesale || (diff.removed.length === 0 && diff.added.length === 0)) {
       this.applyData(f, data);
-      if (warm) f.heat = 1;
+      if (warm) {
+        f.since = 0;
+        f.shownMark = 1;
+      }
       return;
     }
 
@@ -731,7 +761,10 @@ export class Scene {
     };
     // The glow starts now rather than when the content lands: the file was
     // written now.
-    if (warm) f.heat = 1;
+    if (warm) {
+      f.since = 0;
+      f.shownMark = 1;
+    }
   }
 
   /** Put a new version of a file on screen. */
@@ -818,9 +851,42 @@ export class Scene {
   }
 
   /** Files that differ from the baseline, by their own drawn state. */
+  /** Whether a path has a panel in this scene. */
+  has(path: string): boolean {
+    return this.files.has(path);
+  }
+
+  /**
+   * Mark files that have just appeared: every line new, and glowing.
+   *
+   * A file an agent created is the most informative thing on the canvas and
+   * used to be the least visible: it arrived with the same neutral border as
+   * code nobody has touched in a year, because the glow is set when a change
+   * is applied and a new panel has no change to apply. Marking every line as
+   * added says what happened, and it fades with the heat like any other
+   * change rather than standing forever.
+   */
+  markCreated(paths: Iterable<string>): void {
+    for (const path of paths) {
+      const f = this.files.get(path);
+      if (!f) continue;
+      f.since = 0;
+      f.shownMark = 1;
+      f.data.lineState.fill(LineState.Added);
+      f.state = LineState.Added;
+    }
+  }
+
   changedCount(): number {
     let n = 0;
     for (const f of this.files.values()) if (f.state !== LineState.Unchanged) n++;
+    return n;
+  }
+
+  /** Files still inside their change window, flash or marks. */
+  recentCount(): number {
+    let n = 0;
+    for (const f of this.files.values()) if (recent(f.since)) n++;
     return n;
   }
 
@@ -875,6 +941,76 @@ export class Scene {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.count);
   }
 
+  /**
+   * Advance everything that moves on its own, and say what it costs.
+   *
+   * Apart from `render` because the two questions are different: this one is
+   * "has anything changed", which has to be asked on a clock whatever is on
+   * screen, and drawing is the expensive answer to it. A glow fades over
+   * ninety seconds and a frame costs 0.7 milliseconds, so asking and drawing
+   * in one place meant 5400 frames for one save and an app that never parked
+   * while an agent worked. Ticking is a few microseconds: one walk over the
+   * files, no GL.
+   *
+   * `redraw` says the picture would come out different, `ticking` says
+   * something is still in flight and the loop has to keep asking.
+   */
+  advance(dt: number): { redraw: boolean; ticking: boolean } {
+    let redraw = false;
+    let ticking = false;
+    let changing = false;
+    for (const f of this.fileList) {
+      // Gated on the clock existing at all, not on it being inside the
+      // window: a file whose window has passed still has marks to clear, and
+      // gating on the window meant it only ever got cleared by the one tick
+      // that happened to cross the boundary. Anything that set the clock
+      // another way kept its marks for good.
+      if (f.since !== Infinity) {
+        const wasFlash = flashAt(f.since);
+        f.since += dt;
+        // The flash is an animation: while it lasts, every frame differs.
+        if (wasFlash > 0 || flashAt(f.since) > 0) redraw = true;
+        // The marks sit still and then ramp out, so they are drawn in steps
+        // and cost a frame only when a step is crossed.
+        const step = markStep(f.since);
+        if (step !== f.shownMark) {
+          f.shownMark = step;
+          redraw = true;
+        }
+        if (recent(f.since)) {
+          ticking = true;
+        } else if (f.state !== LineState.Unchanged && !f.change) {
+          // The window is over, so the marks go. Without this a file touched
+          // an hour ago lights up its old lines the moment it is touched
+          // again, as if they had just changed.
+          f.data.lineState.fill(LineState.Unchanged);
+          f.state = LineState.Unchanged;
+          f.since = Infinity;
+          redraw = true;
+        }
+      }
+      if (f.change) {
+        // A change plays out over a fraction of a second and every frame of it
+        // is different, so it both ticks and redraws.
+        if (this.advanceChange(f, dt)) {
+          ticking = true;
+          changing = true;
+        }
+        redraw = true;
+      }
+    }
+    // Reported apart from the glow, which also ticks but for ninety seconds:
+    // `settling` means a motion is in progress, and something waiting for the
+    // canvas to come to rest must not wait for a fade.
+    this.changing = changing;
+    if (this.animating) {
+      ticking = true;
+      redraw = true;
+    }
+    this.wasMoving = redraw;
+    return { redraw, ticking };
+  }
+
   render(cam: Camera, dt: number): void {
     const t0 = performance.now();
     const { gl } = this;
@@ -924,30 +1060,6 @@ export class Scene {
       this.pushDir(d, cam.zoom);
     }
     this.tf = IDENTITY;
-
-    // Per-file state that has to advance whether the file is on screen or not.
-    // Both of these were inside the draw loop, which meant a file edited while
-    // it was off screen kept its glow until you panned to it, and worse, the
-    // new content of a change never landed because the phase that swaps it in
-    // never ran.
-    //
-    // This pass also answers `moving` for the next frame, so there is one walk
-    // over the files here rather than two.
-    let anyWarm = false;
-    for (const f of this.fileList) {
-      if (f.heat > 0) f.heat = Math.max(0, f.heat - dt / timing.heatDecay);
-      // Cold, so the marks go. Checked apart from the decay rather than as
-      // part of it: a panel that is already at zero still has to be cleared,
-      // and folding the two together left the marks on it forever. Without
-      // this a file touched an hour ago lights up its old lines the moment it
-      // is touched again, as if they had just changed.
-      if (f.heat <= 0 && f.state !== LineState.Unchanged && !f.change) {
-        f.data.lineState.fill(LineState.Unchanged);
-        f.state = LineState.Unchanged;
-      }
-      if (f.heat > 0) anyWarm = true;
-      if (f.change && this.advanceChange(f, dt)) stillAnimating = true;
-    }
 
     let visibleFiles = 0;
     for (const f of this.fileList) {
@@ -1007,7 +1119,6 @@ export class Scene {
     }
     this.tf = IDENTITY;
     this.animating = stillAnimating;
-    this.wasMoving = stillAnimating || anyWarm;
 
     // Draw.
     const [br, bg, bb] = rgb(this.pal.surface.bg);
@@ -1197,7 +1308,8 @@ export class Scene {
     const floor = STUB_MIN_PX / Math.max(zoom, 1e-6);
     const w = Math.max(n.w, floor * 4);
     const h = Math.max(n.h, floor);
-    const hot = f.heat > 0.02;
+    const flash = flashAt(f.since);
+    const hot = flash > 0.02;
     // Below a couple of pixels a border would be the whole panel.
     const borderPx = h * zoom > 4 ? 1 : 0;
     this.pushRect(this.bgRects, n.x, n.y, w, h, this.pal.surface.reducedBg, 1, 0, 0);
@@ -1268,7 +1380,20 @@ export class Scene {
   /** Panel background. The border is a separate pass; see `pushPanelBorder`. */
   private pushPanel(f: SceneFile): void {
     const n = f.node;
-    this.pushRect(this.bgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 1, 0, 0);
+    // A file written a moment ago gets its whole panel washed towards the
+    // recency colour, not only its border.
+    //
+    // The border alone was the signal, and out at the zoom where a project
+    // fits the window it is the *only* one, because the line bands come up
+    // with the token geometry at about two pixels a line. A ten pixel panel
+    // with a coloured outline reads as a box among a thousand boxes. The wash
+    // is what makes "something happened over there" visible from across the
+    // canvas, and it fades with the same glow.
+    const flash = flashAt(f.since);
+    const bg = flash > 0.004
+      ? bandColour(this.pal.surface.panelBg, this.pal.surface.heat, FLASH_WASH * flash)
+      : this.pal.surface.panelBg;
+    this.pushRect(this.bgRects, n.x, n.y, n.w, n.h, bg, 1, 0, 0);
   }
 
   /**
@@ -1302,11 +1427,12 @@ export class Scene {
     // query stands. It reads as one of the same family of signals rather than
     // a mode of its own, and it outranks recency while it is on: someone who
     // typed a name is looking for that file, not for the last thing written.
-    const hot = f.heat > 0.02;
+    const flash = flashAt(f.since);
+    const hot = flash > 0.02;
     const border = found
       ? this.pal.surface.accent
       : hot ? this.pal.surface.heat : this.pal.surface.border;
-    const borderPx = found ? HAIRLINE_PX + 2 : hot ? HAIRLINE_PX + 2 * f.heat : HAIRLINE_PX;
+    const borderPx = found ? HAIRLINE_PX + 2 : hot ? HAIRLINE_PX + 2 * flash : HAIRLINE_PX;
     // Transparent fill, so this draws only the outline over what is there.
     this.pushRect(this.fgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 0, border, borderPx);
   }
@@ -1697,7 +1823,7 @@ export class Scene {
     const colW = columnWidth(f.node.geom);
     // The marks fade out with the panel's glow rather than standing forever:
     // a change is worth seeing for a while after the save and not beyond it.
-    const fade = Math.min(1, f.heat * 1.5);
+    const fade = f.shownMark;
     if (fade <= 0.02) return;
 
     // A crack sits between two lines, so unlike a band it has no height of its

@@ -15,9 +15,14 @@
 //      nothing to draw and the input handlers are what start it again, so
 //      reaching past them would test the wrong thing and pass while dragging
 //      did nothing.
-//   4. A decaying glow keeps drawing. Heat moves a border colour a little every
-//      frame for ninety seconds, without anyone touching the mouse, and
-//      inferring "nothing changed" from the absence of input would freeze it.
+//   4. A decaying glow keeps time without drawing every frame. The glow fades
+//      over ninety seconds and nobody is touching the mouse, so the loop has
+//      to keep asking, or a fade measured in wall-clock time freezes at
+//      whatever it had reached. What it must not do is draw for all of it:
+//      that was 5400 frames for one save, at 0.7 milliseconds each, and an app
+//      meant to sit in the background while an agent works never parked. The
+//      glow is drawn in steps, so the frames are a few and the ticks are 4
+//      microseconds each.
 
 import { decodePng } from './png.mjs';
 import { base, frameOnScreen, launch, pixelDiff, settled, src } from './browser.mjs';
@@ -97,13 +102,58 @@ console.log(`drag:    ${panning.drawn} drawn over 30 pointer moves`);
 if (panning.drawn < 20) fail(`a drag drew only ${panning.drawn} frames`);
 else console.log('ok    a drag draws');
 
-const warm = await count(`
-  app.touch([...app.scene.files.keys()][0]);
-  for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r));
-`);
-console.log(`glowing: ${warm.drawn} drawn, ${warm.skipped} skipped`);
-if (warm.drawn < 55) fail(`a decaying glow drew only ${warm.drawn} of 60 frames`);
-else console.log('ok    a decaying glow keeps drawing');
+// A change over the window it lasts: the loop has to keep time, draw for the
+// flash, and then park again. The third part is the one that matters for an
+// app that sits in the background while an agent works.
+const warm = await page.evaluate(async () => {
+  const app = window.__sanity.app;
+  const f = app.scene.files.get([...app.scene.files.keys()][0]);
+  f.since = 0;
+  f.shownMark = 1;
+  app.invalidate();
+  app.drawn = 0;
+  app.skipped = 0;
+  const t0 = performance.now();
+  await new Promise((r) => setTimeout(r, 1500));
+  const flash = { drawn: app.drawn, ticked: app.skipped };
+  // Past the end of the mark window, where everything should be over.
+  await new Promise((r) => setTimeout(r, 4000));
+  const done = { drawn: app.drawn, ticked: app.skipped, since: f.since };
+  // And then: nothing at all.
+  await new Promise((r) => setTimeout(r, 1200));
+  return {
+    flash,
+    done,
+    after: { drawn: app.drawn - done.drawn, ticked: app.skipped - done.ticked },
+    seconds: (performance.now() - t0) / 1000,
+  };
+});
+console.log(
+  `a change: ${warm.flash.drawn} frames drawn in the first 1.5 s, ` +
+    `${warm.done.drawn} by the end of the window, ` +
+    `${warm.after.drawn} drawn and ${warm.after.ticked} ticked after it`,
+);
+
+if (warm.flash.drawn < 10) {
+  fail(`the flash drew ${warm.flash.drawn} frames, which is not an animation`);
+} else if (warm.flash.drawn > 70) {
+  fail(`the flash drew ${warm.flash.drawn} frames in 1.5 s, which is the old per-frame glow`);
+} else {
+  console.log(`ok    the flash is animated, ${warm.flash.drawn} frames for it`);
+}
+if (warm.flash.ticked + warm.flash.drawn < 30) {
+  fail('the loop is not keeping time, so a fade measured in seconds would freeze');
+} else {
+  console.log('ok    and the loop keeps time while the marks are held');
+}
+if (warm.after.drawn !== 0 || warm.after.ticked !== 0) {
+  fail(
+    `after the window the loop still ran: ${warm.after.drawn} drawn, ` +
+      `${warm.after.ticked} ticked`,
+  );
+} else {
+  console.log('ok    and stops completely once the change is over');
+}
 
 await browser.close();
 console.log(failures === 0 ? '\nthe renderer draws on demand' : `\n${failures} check(s) failed`);

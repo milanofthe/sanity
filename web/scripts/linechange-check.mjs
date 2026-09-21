@@ -221,9 +221,12 @@ const marked = await page.evaluate((path) => {
   const f = window.__sanity.app.scene.files.get(path);
   let n = 0;
   for (let i = 0; i < f.data.lineState.length; i++) if (f.data.lineState[i] !== 0) n++;
-  return { lines: n, state: f.state, heat: f.heat };
+  return { lines: n, state: f.state, since: f.since };
 }, target);
-console.log(`${marked.lines} lines marked, panel state ${marked.state}, heat ${marked.heat.toFixed(2)}`);
+console.log(
+  `${marked.lines} lines marked, panel state ${marked.state}, ` +
+    `${marked.since.toFixed(2)} s since the change`,
+);
 if (marked.lines === 0) {
   fail('the change left no mark, so a save is invisible a second later');
 } else {
@@ -313,24 +316,132 @@ const markPixels = pixelDiff(decodePng, withMarks, bare, 20, rect);
 if (markPixels < 200) fail(`the marks moved only ${markPixels} pixels inside the panel`);
 else console.log(`ok    the marks are on screen (${markPixels} pixels inside the panel)`);
 
-// They fade with the heat, and go when it runs out.
+// They are held for a few seconds and then go, so an old change cannot be
+// mistaken for a new one.
 const faded = await page.evaluate(async (path) => {
   const f = window.__sanity.app.scene.files.get(path);
-  f.heat = 0.0001;
+  // Past the end of the window, which recency.ts owns.
+  f.since = 1e6;
   // A few frames, because the decay is per frame and the clearing happens on
   // the frame that finds the panel cold.
-  for (let i = 0; i < 6 && f.heat > 0; i++) {
+  for (let i = 0; i < 6 && f.state !== 0; i++) {
     await new Promise((r) => requestAnimationFrame(r));
   }
   await new Promise((r) => requestAnimationFrame(r));
   let left = 0;
   for (let i = 0; i < f.data.lineState.length; i++) if (f.data.lineState[i] !== 0) left++;
-  return { left, state: f.state, heat: f.heat };
+  return { left, state: f.state };
 }, target);
 if (faded.left !== 0 || faded.state !== 0) {
   fail(`a cold panel still carries ${faded.left} marks: an old change would light up again`);
 } else {
   console.log('ok    the marks clear when the panel goes cold');
+}
+
+// --- a change big enough to force a relayout still shows ---
+//
+// The case that was silently broken. A file whose new content does not fit its
+// panel cannot be updated in place, so the treemap runs again, and the signal
+// used to be lost on the way: the glow is set when a change is applied and the
+// relayout path applied none. Measured on a real project, inserting eight
+// lines into a 2263 line file showed nothing at all, and so did an edit that
+// pushed one wrapped line over by four characters.
+const grown = await page.evaluate(async (path) => {
+  const app = window.__sanity.app;
+  const f = app.scene.files.get(path);
+  const d = f.data;
+  // Twice the file, which no panel sized for one copy can hold.
+  const n = d.lineCount;
+  const keep = [...Array(n).keys(), ...Array(n).keys()];
+  const spanStart = new Uint32Array(keep.length + 1);
+  const spans = [];
+  for (let k = 0; k < keep.length; k++) {
+    spanStart[k] = spans.length;
+    const i = keep[k];
+    for (let s = d.spanStart[i]; s < d.spanStart[i + 1]; s++) spans.push(d.spans[s]);
+  }
+  spanStart[keep.length] = spans.length;
+  const next = {
+    lineCount: keep.length,
+    langId: d.langId,
+    flags: d.flags,
+    spanStart,
+    lineCols: Uint16Array.from(keep.map((i) => d.lineCols[i])),
+    lineIndent: Uint8Array.from(keep.map((i) => d.lineIndent[i])),
+    lineState: new Uint8Array(keep.length),
+    spans: Uint32Array.from(spans),
+  };
+
+  const fits = app.fitsInPlace(path, next);
+  let relayouts = 0;
+  const structural = await app.applyBatch(
+    [[path, next]],
+    [],
+    async () => {
+      relayouts++;
+      // The app's own relayout, which keeps the scene and the camera. The
+      // `__sanity.relayout` helper builds a fresh scene instead, which is what
+      // scripts/stability-check.mjs wants and the opposite of what a save
+      // should do.
+      app.relayout();
+    },
+    true,
+  );
+  const after = app.scene.files.get(path);
+  return { fits, structural, relayouts, since: after.since };
+}, target);
+console.log(
+  `doubling the file: fits in place ${grown.fits}, relayouts ${grown.relayouts}, ` +
+    `${grown.since.toFixed(2)} s since the change`,
+);
+
+if (grown.fits) {
+  fail('the doubled file still fits its panel, so this does not test the relayout path');
+} else if (!grown.structural || grown.relayouts !== 1) {
+  fail(`the batch reported structural=${grown.structural} with ${grown.relayouts} relayouts`);
+} else if (!(grown.since < 0.5)) {
+  fail(`the panel came out of the relayout ${grown.since.toFixed(2)} s stale, so it never flashed`);
+} else {
+  console.log('ok    a change that forces a relayout still glows');
+}
+
+// And once the animation is over it leaves marks, the same as an in-place one.
+await page
+  .waitForFunction((p) => !window.__sanity.app.scene.files.get(p).change, target, { timeout: 30000 })
+  .catch(() => {});
+await settled(page);
+const marks = await page.evaluate((path) => {
+  const f = window.__sanity.app.scene.files.get(path);
+  let n = 0;
+  for (let i = 0; i < f.data.lineState.length; i++) if (f.data.lineState[i] !== 0) n++;
+  return { marked: n, state: f.state, changed: window.__sanity.app.changedCount() };
+}, target);
+console.log(`after the relayout: ${marks.marked} lines marked, panel state ${marks.state}`);
+if (marks.marked === 0 || marks.changed === 0) {
+  fail('a relayout swallowed the change: nothing is marked afterwards');
+} else {
+  console.log('ok    and it leaves the same line marks an in-place change would');
+}
+
+// A file that has just appeared arrives marked in full rather than neutral.
+const created = await page.evaluate((path) => {
+  const app = window.__sanity.app;
+  const f = app.scene.files.get(path);
+  f.data.lineState.fill(0);
+  f.state = 0;
+  f.since = Infinity;
+  app.scene.markCreated([path]);
+  let n = 0;
+  for (let i = 0; i < f.data.lineState.length; i++) if (f.data.lineState[i] !== 0) n++;
+  return { marked: n, of: f.data.lineCount, since: f.since, recent: app.recentCount() };
+}, target);
+if (created.marked !== created.of || created.since !== 0 || created.recent < 1) {
+  fail(
+    `a new file arrived with ${created.marked} of ${created.of} lines marked ` +
+      `and a clock at ${created.since}`,
+  );
+} else {
+  console.log(`ok    a new file arrives with all ${created.of} lines marked, and flashing`);
 }
 
 await browser.close();

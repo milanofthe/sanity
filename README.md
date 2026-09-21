@@ -24,10 +24,16 @@ agents work in the repository.
   textured quad per column, sampled from a saturation-weighted mip chain.
   From 1.8 to 3.2 it hands over to one quad per token. From 4 to 6 it hands
   over to text.
-- **Changes per save.** A line diff against the version on screen, not against
-  git: the lines that are going away are banded and fade out, then the new
-  content lands and the lines that arrived are banded and settle. The marks
-  fade with the panel's glow, which decays over 90 seconds.
+- **Changes per save**, as an event rather than a state. A line diff against
+  the version on screen, not against git: the lines that are going away are
+  banded and fade out, then the new content lands and the lines that arrived
+  are banded and settle. At the same moment the whole panel flashes for half a
+  second, which is what says *where* something happened when a file is a few
+  pixels tall, and the line bands are held for four seconds, which is what says
+  *what*. A file that appeared arrives with every line marked; one that grew
+  past its panel keeps its marks through the relayout. Then the canvas goes
+  quiet and the frame loop stops: 42 frames for a change, against the 5400 a
+  ninety second glow used to cost.
 - **16 languages** through tree-sitter, plus a coarse lexer for Verilog-A and
   SPICE, which have no grammar that fits them. A code language gets a colour on
   70 to 89 percent of its characters, prose markup on less because prose is
@@ -102,10 +108,10 @@ way to see them: a Tauri window has no console a terminal can read.
 npm run check-all
 ```
 
-Type checks, clippy with warnings denied, 99 TypeScript tests and 66 Rust
+Type checks, clippy with warnings denied, 106 TypeScript tests and 66 Rust
 tests, then eleven checks that drive a real browser and assert on pixels: the
 layout invariants, the dropdown geometry, that borders do not shimmer under a
-subpixel pan, that the glow reacts to a change and fades, that no source text
+subpixel pan, that a change flashes its panel and then stops, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
 animate and come to rest, that an idle canvas draws nothing, that the overview
 texture is not smeared vertically, that a change plays as remove then add, and

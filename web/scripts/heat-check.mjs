@@ -3,7 +3,7 @@
 //
 // Worth a check because the receiving half of live updates is finished while
 // the sending half is not: nothing in the app calls `touch` yet, so without
-// this the recency glow, the heat decay and the changed-line gutters could rot
+// this the panel flash, its clock and the changed-line gutters could rot
 // unnoticed until the watcher lands and then fail for reasons unrelated to it.
 
 import { decodePng } from './png.mjs';
@@ -44,6 +44,12 @@ console.log(`${visible} panels in view`);
 const before = await page.screenshot({ type: 'png' });
 // Only the panels actually on screen: touching one off screen cannot change a
 // pixel, and counting it would let the check pass on nothing.
+//
+// The flash is read inside the same evaluate as the touch, and the screenshot
+// is taken straight after. It has to be: the flash lasts half a second on
+// purpose, and an earlier version of this check sampled it 0.6 seconds later
+// and found nothing, which is the check being too slow rather than the flash
+// being absent.
 const touched = await page.evaluate(() => {
   const app = window.__sanity.app;
   const [vx0, vy0, vx1, vy1] = app.cam.visibleRect(0);
@@ -54,60 +60,89 @@ const touched = await page.evaluate(() => {
     paths.push(n.path);
   }
   for (const path of paths) app.touch(path);
-  return paths.length;
+  let flash = 0;
+  for (const p of paths) flash = Math.max(flash, window.__sanity.flashAt(app.scene.files.get(p).since));
+  return { count: paths.length, flash };
 });
-await page.waitForTimeout(400);
 const after = await page.screenshot({ type: 'png' });
 
 const changed = pixelDiff(decodePng, before, after);
-console.log(`touched ${touched} files, ${changed} pixels changed`);
+console.log(
+  `touched ${touched.count} files at flash ${touched.flash.toFixed(2)}, ` +
+    `${changed} pixels changed`,
+);
 
 let failures = 0;
-// Roughly a border's worth of pixels per touched panel; well under what a
-// real change produces, well over noise.
-if (changed < touched * 4) {
+if (!(touched.flash > 0.9)) {
+  console.log(`FAIL  the flash reads ${touched.flash.toFixed(2)} at the moment of the change`);
+  failures++;
+} else if (changed < touched.count * 4) {
   console.log('FAIL  marking files as changed produced no visible difference');
   failures++;
 } else {
-  console.log('ok    recency glow reacts to a change');
+  console.log(`ok    a change flashes its panel, ${Math.round(changed / touched.count)} pixels each`);
 }
 
-// The heat itself, on the panels that were touched rather than on whichever
+// The clock itself, on the panels that were touched rather than on whichever
 // file happens to be first in the map: only the visible ones were touched.
-const heat = await page.evaluate(() => {
+const clocks = await page.evaluate(() => {
   const app = window.__sanity.app;
   const [vx0, vy0, vx1, vy1] = app.cam.visibleRect(0);
-  let hot = 0;
-  let max = 0;
+  let fresh = 0;
+  let youngest = Infinity;
   for (const f of app.scene.files.values()) {
     const n = f.node;
     if (n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0) continue;
-    if (f.heat > 0) hot++;
-    max = Math.max(max, f.heat);
+    if (window.__sanity.markAt(f.since) > 0) fresh++;
+    youngest = Math.min(youngest, f.since);
   }
-  return { hot, max };
+  return { fresh, youngest, recent: app.recentCount() };
 });
-if (heat.hot === 0) {
-  console.log('FAIL  touch set no heat on any visible panel');
+if (clocks.fresh === 0) {
+  console.log('FAIL  touch started no change clock on any visible panel');
   failures++;
 } else {
-  console.log(`ok    ${heat.hot} visible panels are hot (max ${heat.max.toFixed(2)})`);
+  console.log(
+    `ok    ${clocks.fresh} visible panels just changed, youngest ${clocks.youngest.toFixed(2)} s`,
+  );
 }
 
-// And it has to fade, or the glow is a permanent highlight rather than a
-// recency signal. Heat decays per frame over timing.heatDecay seconds.
-const faded = await page.evaluate(async () => {
+// The flash is over quickly and the marks outlast it: an event, not a state.
+// Sampled from the page rather than computed here, since recency.ts owns the
+// curves and has its own tests.
+const shape = await page.evaluate(async () => {
   const app = window.__sanity.app;
-  const before = Math.max(...[...app.scene.files.values()].map((f) => f.heat));
+  const read = () => {
+    let flash = 0;
+    let mark = 0;
+    for (const f of app.scene.files.values()) {
+      flash = Math.max(flash, window.__sanity.flashAt(f.since));
+      mark = Math.max(mark, window.__sanity.markAt(f.since));
+    }
+    return { flash, mark };
+  };
+  const now = read();
   await new Promise((r) => setTimeout(r, 900));
-  const after = Math.max(...[...app.scene.files.values()].map((f) => f.heat));
-  return { before, after };
+  const soon = read();
+  await new Promise((r) => setTimeout(r, 3600));
+  const later = read();
+  return { now, soon, later };
 });
-if (faded.after >= faded.before) {
-  console.log(`FAIL  heat did not decay (${faded.before} -> ${faded.after})`);
+console.log(
+  `by now flash ${shape.now.flash.toFixed(2)}, after 0.9 s ${shape.soon.flash.toFixed(2)}; ` +
+    `marks ${shape.now.mark.toFixed(2)} -> ${shape.soon.mark.toFixed(2)} -> ${shape.later.mark.toFixed(2)}`,
+);
+if (shape.soon.flash !== 0) {
+  console.log(`FAIL  the flash is still ${shape.soon.flash.toFixed(2)} after 0.9 s, which is a glow`);
+  failures++;
+} else if (!(shape.soon.mark > 0.5)) {
+  console.log('FAIL  the line marks went with the flash, so nothing says which lines changed');
+  failures++;
+} else if (shape.later.mark !== 0) {
+  console.log(`FAIL  the marks are still ${shape.later.mark.toFixed(2)} after 4.5 s`);
   failures++;
 } else {
-  console.log(`ok    heat decays (${faded.before.toFixed(3)} -> ${faded.after.toFixed(3)})`);
+  console.log('ok    the flash is brief, the marks outlast it, and both end');
 }
 
 await browser.close();

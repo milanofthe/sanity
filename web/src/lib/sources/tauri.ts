@@ -205,38 +205,29 @@ export function loadedRoot(): string | null {
  * file that outgrew its panel, or one that appeared or disappeared, because
  * those change what the treemap has to divide up.
  */
-async function applyChanged(app: CanvasApp, paths: string[], warm: boolean): Promise<boolean> {
-  if (paths.length === 0) return false;
+async function readFresh(paths: string[]): Promise<Map<string, FileData>> {
+  const out = new Map<string, FileData>();
+  if (paths.length === 0) return out;
   const blob = await invoke<ArrayBuffer>('refresh_files', { paths });
-  const fresh = unpack(blob);
-  let structural = false;
-
-  for (const [path, buf] of fresh) {
-    const known = payloads.has(path);
+  for (const [path, buf] of unpack(blob)) {
     payloads.set(path, buf);
     const data = decodeFile(buf);
     decoded.set(path, data);
     text.invalidate(path);
-
-    if (!known || !app.fitsInPlace(path, data)) {
-      structural = true;
-      continue;
-    }
-    app.touch(path, data, warm);
+    out.set(path, data);
   }
-  return structural;
+  return out;
 }
 
 /** Forget files that are gone. Always structural: the treemap loses a leaf. */
-async function applyRemoved(paths: string[]): Promise<boolean> {
-  if (paths.length === 0) return false;
+async function forget(paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
   for (const path of paths) {
     payloads.delete(path);
     decoded.delete(path);
     text.invalidate(path);
   }
   await invoke('drop_files', { paths });
-  return true;
 }
 
 /**
@@ -267,18 +258,21 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
     const batch = event.payload;
     busy = busy
       .then(async () => {
-        let structural = await applyRemoved(batch.removed);
-        structural = (await applyChanged(app, batch.changed, true)) || structural;
+        await forget(batch.removed);
+        const fresh = await readFresh(batch.changed);
+        const structural = await app.applyBatch(
+          fresh, batch.removed, () => restructure(app), true,
+        );
 
-        if (structural) await restructure(app);
         // From the scene rather than from a local tally: the scene has every
         // drawn file's state, and counting only the files this session has
         // refreshed would report one when five differ.
-        else project.changed = app.changedCount();
+        project.changed = app.changedCount();
         project.sawChanges(project.changed);
         uiLog(
           `batch: ${batch.changed.length} changed, ${batch.removed.length} removed` +
-            `${structural ? ' (relayout)' : ' (in place)'} · ${project.changed} showing a change`,
+            `${structural ? ' (relayout)' : ' (in place)'} · ${project.changed} marked, ` +
+            `${app.recentCount()} just changed`,
         );
       })
       // A failed batch must not stop the ones after it, and the next save

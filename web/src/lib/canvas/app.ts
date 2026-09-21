@@ -17,6 +17,7 @@ import {
   bandsFromQuery, lodBands, lodName, lodWeights, setBands, type LodName,
 } from '$lib/canvas/lod';
 import { rank, type Ranked } from '$lib/canvas/search';
+import { flashAt, markAt } from '$lib/canvas/recency';
 import { countHits, type FileHits } from '$lib/canvas/content';
 import { readPalette, type Palette } from '$lib/theme';
 
@@ -111,7 +112,7 @@ export class CanvasApp {
    * second for the length of time the window is open, which is the whole day.
    *
    * Set explicitly by everything that changes the picture rather than inferred
-   * from input: heat decaying, a texture arriving, a watcher batch and a theme
+   * from input: a flash fading, a texture arriving, a watcher batch and a theme
    * switch all change it without anyone touching the mouse, and a missed one
    * shows up as a frozen canvas.
    */
@@ -215,6 +216,10 @@ export class CanvasApp {
       lodWeights,
       setBands,
       lodBands,
+      // The recency curves, so a check can read what the renderer draws from
+      // rather than restating them.
+      flashAt,
+      markAt,
     };
   }
 
@@ -297,6 +302,64 @@ export class CanvasApp {
   }
 
   /**
+   * Apply a batch of new file contents, and say whether the geometry moved.
+   *
+   * Per file there are three cases, and telling them apart is this method's
+   * whole job:
+   *
+   *   fits          rewrite one texture layer and play the change in place.
+   *                 A fraction of a millisecond, every other panel untouched.
+   *   outgrew it    the panel cannot hold the new content, so the treemap has
+   *                 to divide the canvas again. The change is *deferred* and
+   *                 replayed once the new geometry is in, so it still shows.
+   *   new file      no panel yet; after the relayout it arrives marked as
+   *                 added in full, and glowing.
+   *
+   * The middle case is why this exists. It used to be decided in the source,
+   * which had no way to replay anything, so a relayout swallowed the signal
+   * whole: measured on a real project, inserting eight lines into a 2263 line
+   * file, and even an edit that added four characters to one wrapped line,
+   * both went through the relayout path and showed nothing at all. Which is
+   * the opposite of the point: the changes that restructure a project are the
+   * ones worth seeing.
+   *
+   * `relayout` is a callback because only the source can produce the new file
+   * index. It is called at most once per batch, however many files moved.
+   */
+  async applyBatch(
+    fresh: Iterable<[string, FileData]>,
+    removed: string[],
+    relayout: () => Promise<void>,
+    warm = true,
+  ): Promise<boolean> {
+    const deferred: [string, FileData][] = [];
+    const created: string[] = [];
+
+    for (const [path, data] of fresh) {
+      if (!this.scene?.has(path)) {
+        created.push(path);
+        continue;
+      }
+      if (!this.fitsInPlace(path, data)) {
+        deferred.push([path, data]);
+        continue;
+      }
+      this.touch(path, data, warm);
+    }
+
+    const structural = created.length > 0 || deferred.length > 0 || removed.length > 0;
+    if (!structural) return false;
+
+    await relayout();
+    // The scene kept the version on screen through the relayout, so the diff
+    // these produce is the same one an in-place update would have made.
+    for (const [path, data] of deferred) this.touch(path, data, warm);
+    if (warm) this.scene?.markCreated(created);
+    this.invalidate();
+    return true;
+  }
+
+  /**
    * Re-lay out the current source without moving the view.
    *
    * Used when a watched file no longer fits its panel, or when a file
@@ -320,12 +383,24 @@ export class CanvasApp {
    * that nobody is touching has nothing to redraw.
    */
   settling(): boolean {
-    return this.pending.length > 0 || (this.scene?.animating ?? false) || this.cam.flying;
+    return (
+      this.pending.length > 0
+      || (this.scene?.animating ?? false)
+      || (this.scene?.changing ?? false)
+      || this.cam.flying
+    );
   }
 
   /** Files that differ from the baseline, as the scene has them. */
   changedCount(): number {
     return this.scene?.changedCount() ?? 0;
+  }
+
+  /** Files inside their change window: flashing, or still marked. Counted
+   *  apart from the marked ones because a file can be inside the window with
+   *  nothing marked, which is what a deletion at the end of a file leaves. */
+  recentCount(): number {
+    return this.scene?.recentCount() ?? 0;
   }
 
   /**
@@ -700,6 +775,11 @@ export class CanvasApp {
     const uploaded = this.pending.length;
     this.uploadBudget();
 
+    // Advance first, draw second, and only draw if that changed the picture.
+    // A fading glow ticks for ninety seconds and is worth drawing thirty
+    // times; the difference used to be 5400 frames.
+    const state = this.scene?.advance(dt) ?? { redraw: false, ticking: false };
+
     // Everything that can change the picture without anyone asking.
     if (
       this.dirty
@@ -707,13 +787,20 @@ export class CanvasApp {
       || this.cam.x !== this.shownAt.x
       || this.cam.y !== this.shownAt.y
       || this.cam.zoom !== this.shownAt.zoom
-      || (this.scene?.moving() ?? false)
+      || state.redraw
     ) {
       this.invalidate();
     }
 
     if (!this.dirty) {
       this.skipped++;
+      if (state.ticking) {
+        // Still in flight, so keep asking. A decay measured in wall-clock time
+        // needs a clock, and stopping here froze a ninety second fade at
+        // whatever it had reached: the loop parked, no frames, no dt.
+        this.raf = requestAnimationFrame(this.frame);
+        return;
+      }
       // Nothing to draw and nothing that will change on its own, so the loop
       // stops here. `invalidate` starts it again.
       this.running = false;
