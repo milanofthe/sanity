@@ -17,8 +17,17 @@ export const GLYPH_COUNT = LAST - FIRST + 1;
 const GRID_COLS = 16;
 const GRID_ROWS = Math.ceil(GLYPH_COUNT / GRID_COLS);
 
-/** Rasterisation sizes, in device pixels of em height. */
-const SIZES = [20, 44, 96] as const;
+/**
+ * Rasterisation sizes, in device pixels of em height.
+ *
+ * Close together, because the gap between them is blur. A glyph is drawn from
+ * the smallest level at least as large as it needs, so a level 2.2 times too
+ * big is a glyph minified by 2.2 and read through the mip chain. Measured at
+ * dpr 2 with three levels: at 6 pixels per line, 80 percent of the ink was
+ * half-tone, which is the softness you see. Each step here is about 1.4, so
+ * nothing is ever minified by more than that.
+ */
+const SIZES = [14, 20, 28, 40, 56, 80, 112] as const;
 
 interface Level {
   size: number;
@@ -86,7 +95,7 @@ export class GlyphAtlas {
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
     gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -94,11 +103,52 @@ export class GlyphAtlas {
     return { size, tex, cellW, cellH, texW: canvas.width, texH: canvas.height };
   }
 
-  /** Pick the smallest level at least as large as the on-screen em size, so
-   *  glyphs are minified rather than magnified wherever possible. */
-  pick(emPixels: number): Level {
+  /**
+   * The level to draw with.
+   *
+   * `exact` rasterises one at the size asked for, rounded to a whole pixel,
+   * and keeps a few of them. That is what makes text sharp: a glyph drawn from
+   * an atlas 1.4 times too large is read through bilinear filtering at every
+   * edge, and the difference is measurable, half the ink at an intermediate
+   * tone against a fifth of it.
+   *
+   * Without it, the smallest fixed level at least as large as the size asked
+   * for, so glyphs are minified rather than magnified. That is what a moving
+   * camera gets, since an atlas per zoom step is 95 glyphs rasterised per
+   * frame.
+   */
+  pick(emPixels: number, exact = false): Level {
+    const want = Math.max(8, Math.min(240, Math.round(emPixels)));
+    if (exact) {
+      const held = this.exact.get(want);
+      if (held) {
+        // Most recently used last, so `trim` can take from the front.
+        this.exact.delete(want);
+        this.exact.set(want, held);
+        return held;
+      }
+      const built = this.build(want);
+      this.exact.set(want, built);
+      this.trim();
+      return built;
+    }
     for (const l of this.levels) if (l.size >= emPixels) return l;
     return this.levels[this.levels.length - 1];
+  }
+
+  /** Atlases rasterised at an exact size, newest last. */
+  private exact = new Map<number, Level>();
+
+  /** How many of those to keep. Four covers a zoom that settles, comes back
+   *  and settles again, at a megabyte or two each. */
+  private static readonly EXACT_KEEP = 4;
+
+  private trim(): void {
+    while (this.exact.size > GlyphAtlas.EXACT_KEEP) {
+      const [size, level] = this.exact.entries().next().value as [number, Level];
+      this.gl.deleteTexture(level.tex);
+      this.exact.delete(size);
+    }
   }
 
   /** Index into the atlas for a code point, or -1 when it has no glyph. */

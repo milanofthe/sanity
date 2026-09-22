@@ -53,6 +53,15 @@ macOS, and More info then Run anyway on Windows. Building from source is
   texture is the cheap representation by two orders of magnitude. The bar
   height is set against `lod-check`, which measures how much the picture
   changes while the zoom is turned across both hand-overs.
+- **Text on the pixel grid.** Glyphs come from an atlas, and an atlas at the
+  wrong size or a glyph landing between pixels is read through bilinear
+  filtering at every edge. So the atlas is rasterised at exactly the size the
+  zoom asks for as soon as the camera stops, and every glyph is put on a whole
+  device pixel. Measured as the share of ink sitting at an intermediate tone,
+  which is what softness is: 32 percent before and 24.6 after at the readable
+  zoom, against the 14.3 the browser's own DOM text manages on the same
+  machine. Rasterising one costs 1 to 2 ms and four are kept, so a zoom sweep
+  stays at 2.9 ms of CPU a frame. `text-check` holds it.
 - **Three levels of detail**, weighted as a partition of one so nothing
   double-draws through a transition. Below 1.8 pixels per line a file is one
   textured quad per column, sampled from a saturation-weighted mip chain.

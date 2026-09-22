@@ -326,6 +326,10 @@ export class Scene {
   /** Where the camera was in the previous frame, to tell a moving view from a
    *  still one; see the call to `media.tick`. */
   private camWas = { x: 0, y: 0, zoom: 0 };
+  /** Set from that, and read by the glyph pass: an exact atlas is worth
+   *  rasterising for a view somebody is looking at, not for one being flown
+   *  through. */
+  private cameraStill = false;
   private progSpan: WebGLProgram;
   private progGlyph: WebGLProgram;
   private uRect: Record<string, WebGLUniformLocation | null>;
@@ -522,7 +526,8 @@ export class Scene {
     this.uImage = uniforms(gl, this.progImage, ['uView', 'uTex', 'uRect', 'uFade']);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
-      'uView', 'uKind[0]', 'uAtlas', 'uCell', 'uGlyphScale', 'uGridCols',
+      'uView', 'uKind[0]', 'uAtlas', 'uCell', 'uGridCols', 'uViewport', 'uBoxPx',
+      'uEmWorld',
     ]);
 
     this.bgRects = new InstanceBuffer(gl, RECT_STRIDE, 2048);
@@ -1135,6 +1140,7 @@ export class Scene {
     // the view to come to rest rather than chasing a pan.
     const moving =
       cam.x !== this.camWas.x || cam.y !== this.camWas.y || cam.zoom !== this.camWas.zoom;
+    this.cameraStill = !moving;
     this.camWas.x = cam.x;
     this.camWas.y = cam.y;
     this.camWas.zoom = cam.zoom;
@@ -2033,7 +2039,10 @@ export class Scene {
     if (this.glyphs.count === 0) return;
     const { gl } = this;
     const em = (metrics.charWidth / this.atlas.advanceRatio) * (pxPerLine / metrics.lineHeight);
-    const level = this.atlas.pick(em * dpr);
+    // While the camera is moving, one of the fixed levels: rasterising a new
+    // atlas per zoom step would be a canvas of 95 glyphs every frame. Once it
+    // is still, the exact size, which is what makes the text sharp.
+    const level = this.atlas.pick(em * dpr, this.cameraStill);
 
     gl.useProgram(this.progGlyph);
     gl.uniformMatrix3fv(this.uGlyph.uView, false, this.view);
@@ -2044,13 +2053,13 @@ export class Scene {
       level.cellW / level.texW,
       level.cellH / level.texH,
     );
-    // The glyph box in em units, matching how the atlas cells were laid out.
-    gl.uniform2f(
-      this.uGlyph.uGlyphScale,
-      level.cellW / level.size,
-      level.cellH / level.size,
-    );
+    // The cell in device pixels, and the world-space em it was rasterised
+    // for, so the shader can put a texel on a pixel.
+    const scalePx = (pxPerLine / metrics.lineHeight) * dpr;
+    gl.uniform2f(this.uGlyph.uBoxPx, level.cellW, level.cellH);
+    gl.uniform1f(this.uGlyph.uEmWorld, level.size / Math.max(1e-6, scalePx));
     gl.uniform1f(this.uGlyph.uGridCols, GlyphAtlas.gridCols);
+    gl.uniform2f(this.uGlyph.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, level.tex);
 

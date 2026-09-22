@@ -214,8 +214,11 @@ in vec2 aSizeFade;  // em size in world units, alpha
 uniform mat3 uView;
 uniform vec3 uKind[16];
 uniform vec2 uCell;      // cell size in atlas uv
-uniform vec2 uGlyphScale; // glyph box size relative to em (w, h)
+uniform vec2 uBoxPx;      // the atlas cell, in device pixels
+uniform float uEmWorld;   // the em size that cell was rasterised for, in world units
 uniform float uGridCols;
+// Drawing buffer size in device pixels, for putting a glyph on the pixel grid.
+uniform vec2 uViewport;
 out vec2 vUv;
 out vec4 vColor;
 void main() {
@@ -223,9 +226,39 @@ void main() {
   vec2 cell = vec2(mod(idx, uGridCols), floor(idx / uGridCols));
   vUv = (cell + aCorner) * uCell;
   vColor = vec4(uKind[int(aPosGlyph.w)], aSizeFade.y);
-  vec2 box = aSizeFade.x * uGlyphScale;
-  vec2 world = aPosGlyph.xy + aCorner * box;
-  gl_Position = vec4((uView * vec3(world, 1.0)).xy, 0.0, 1.0);
+
+  // The size comes from the instance, so a panel animating in scales its text
+  // with it. The position is put on a whole device pixel, and the atlas is
+  // rasterised at the size the zoom asks for once the camera is still, so at
+  // rest a texel lands on a pixel and the text is as sharp as the browser's
+  // own. A glyph landing on a half pixel is read through bilinear filtering
+  // at every edge: measured at 14 pixels per line, half the ink sat at an
+  // intermediate tone where DOM text puts 14 percent of it.
+  //
+  // The whole quad is shifted by one offset rather than each corner being
+  // rounded on its own: rounding corners changes a glyph's width by up to a
+  // pixel, which is a wobble rather than a sharpening.
+  // Size and position both on the pixel grid. The size still comes from the
+  // instance, so a panel animating in scales its text with it, but it is
+  // rounded to whole device pixels, and the atlas is rasterised at the size
+  // the zoom asks for once the camera is still. At rest a texel therefore
+  // lands on a pixel.
+  //
+  // The whole quad is shifted by one offset rather than each corner being
+  // rounded on its own: rounding corners changes a glyph's width by up to a
+  // pixel, which is a wobble rather than a sharpening.
+  // The atlas cell, scaled by what this instance asks for against what the
+  // cell was made for. A panel at rest asks for exactly that, so the quad is
+  // the cell and a texel is a pixel; a panel animating in asks for less and
+  // scales with it.
+  vec2 boxPx = max(vec2(1.0), floor(uBoxPx * (aSizeFade.x / uEmWorld) + 0.5));
+  vec2 originClip = (uView * vec3(aPosGlyph.xy, 1.0)).xy;
+  vec2 originPx = floor((originClip * 0.5 + 0.5) * uViewport + 0.5);
+  // Y flips between the two: world y grows downwards and uView turns that
+  // into clip space, where it grows upwards. Adding the box in pixels without
+  // that flip draws every glyph upside down.
+  vec2 px = originPx + vec2(aCorner.x, -aCorner.y) * boxPx;
+  gl_Position = vec4((px / uViewport) * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
 export const glyphFS = `${HEAD}
