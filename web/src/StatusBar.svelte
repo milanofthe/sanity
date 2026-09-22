@@ -155,7 +155,7 @@
 	.group {
 		display: inline-flex;
 		align-items: center;
-		gap: 5px;
+		gap: var(--sp-1);
 		white-space: nowrap;
 	}
 	b {
@@ -178,8 +178,8 @@
 	/* A watching indicator, not a decoration: filled while a change is fresh,
 	   outlined while the watch is simply up. */
 	.pip {
-		width: 6px;
-		height: 6px;
+		width: var(--sp-2);
+		height: var(--sp-2);
 		border-radius: 50%;
 		border: var(--sep-w) solid var(--text-faint);
 	}

@@ -59,13 +59,11 @@
 		font-weight: 500;
 		display: inline-flex;
 		align-items: center;
-		gap: 5px;
+		gap: var(--sp-1);
 		height: 100%;
 		padding: 0 var(--sp-3);
-		background: none;
 		border: none;
 		color: var(--text-dim);
-		cursor: pointer;
 	}
 	.trigger:hover,
 	.trigger.on {
@@ -75,7 +73,7 @@
 	.caret {
 		display: flex;
 		opacity: 0.65;
-		transition: transform 120ms ease-out;
+		transition: transform var(--dur-2) ease-out;
 	}
 	.caret.up {
 		transform: rotate(180deg);
@@ -89,7 +87,7 @@
 		background: var(--bg-panel);
 		border: var(--sep-w) solid var(--border-strong);
 		border-radius: var(--radius);
-		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+		box-shadow: var(--shadow-sheet);
 		padding: var(--sp-2) 0;
 		max-height: 70vh;
 		overflow-y: auto;

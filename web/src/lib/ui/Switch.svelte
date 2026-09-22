@@ -54,22 +54,23 @@
 	}
 	.track {
 		position: relative;
-		width: 26px;
-		height: 14px;
+		width: var(--w-switch);
+		height: var(--h-mark);
 		flex: none;
 		border: var(--sep-w) solid var(--border-strong);
 		border-radius: var(--radius);
 		background: var(--bg-inset);
-		transition: background 80ms, border-color 80ms;
+		transition: background var(--dur-1), border-color var(--dur-1);
 	}
 	.knob {
 		position: absolute;
-		top: 1px;
-		left: 1px;
-		width: 10px;
-		height: 10px;
+		top: var(--sep-w);
+		left: var(--sep-w);
+		/* The track less its border and the travel, so the knob is square. */
+		width: calc(var(--h-mark) - 4 * var(--sep-w));
+		height: calc(var(--h-mark) - 4 * var(--sep-w));
 		background: var(--text-faint);
-		transition: transform 80ms, background 80ms;
+		transition: transform var(--dur-1), background var(--dur-1);
 	}
 	.on .track {
 		background: var(--accent);
@@ -77,11 +78,11 @@
 	}
 	.on .knob {
 		background: var(--on-accent);
-		transform: translateX(12px);
+		transform: translateX(calc(var(--w-switch) - var(--h-mark) + 2 * var(--sep-w)));
 	}
 	input:focus-visible + .track {
 		outline: var(--sep-w) solid var(--accent);
-		outline-offset: 1px;
+		outline-offset: var(--sp-0);
 	}
 	.lbl {
 		font-family: var(--font-ui);

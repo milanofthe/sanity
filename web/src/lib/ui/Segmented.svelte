@@ -47,12 +47,10 @@
 		font-size: var(--fs-xs);
 		font-weight: 500;
 		line-height: 1;
-		background: none;
 		border: none;
 		border-left: var(--sep-w) solid var(--border);
 		color: var(--text-faint);
-		padding: 3px 8px;
-		cursor: pointer;
+		padding: 0 var(--sp-2);
 		white-space: nowrap;
 	}
 	button:first-child {
@@ -71,6 +69,6 @@
 	}
 	button:focus-visible {
 		outline: var(--sep-w) solid var(--accent);
-		outline-offset: -1px;
+		outline-offset: calc(-1 * var(--sep-w));
 	}
 </style>

@@ -124,32 +124,41 @@
 	   fixed width. It used to be `auto`, which resolved to the width of the
 	   segmented control in a row and to zero in the header, where that cell is
 	   empty: the column headings sat well left of the numbers they labelled. */
+	/* The switches at the bottom. One row each, at the same height and the
+	   same padding as every other row above them, so the sheet reads as one
+	   list rather than as a table with a panel bolted underneath. The rule
+	   above them is the same hairline that separates the header. */
 	.options {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: var(--sp-1);
-		padding-top: var(--sp-2);
-		padding-bottom: var(--sp-2);
-		min-height: var(--row-h);
-		padding: 0 var(--sp-3);
 		border-top: var(--sep-w) solid var(--border);
+		padding: var(--sp-1) 0;
 		color: var(--text-dim);
+	}
+	.options :global(.switch) {
+		min-height: var(--h-row);
+		padding: 0 var(--sp-3);
+	}
+	.options .why {
+		display: block;
+		padding: 0 var(--sp-3) var(--sp-1);
+		white-space: normal;
+		font-size: var(--fs-xs);
 	}
 	.head,
 	.row,
 	.foot {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) 52px 74px var(--mode-w);
+		grid-template-columns: minmax(0, 1fr) var(--w-count) var(--w-lines) var(--w-mode);
 		align-items: center;
 		gap: var(--sp-2);
 		min-height: var(--row-h);
 		padding: 0 var(--sp-3);
 	}
 	.picker {
-		/* Width of the Full / Stub / Off control, so the header can reserve
-		   the same column. */
-		--mode-w: 116px;
+		/* The two number columns. Wide enough for a six figure line count at
+		   the monospace size the numbers are set in, which is the widest
+		   thing either of them ever holds. */
+		--w-count: calc(5 * var(--sp-3));
+		--w-lines: calc(6 * var(--sp-3));
 	}
 	/* The column headings are one label each, so they share one style. The
 	   `.col-num` rule below also matched them, which put FILES and LINES in
@@ -170,7 +179,7 @@
 		font-family: var(--font-ui);
 		font-size: var(--fs-xxs);
 		font-weight: 600;
-		letter-spacing: 0.09em;
+		letter-spacing: var(--track-caps);
 		text-transform: uppercase;
 		color: var(--text-faint);
 		border-bottom: var(--sep-w) solid var(--border);
@@ -196,9 +205,9 @@
 	.col-name::before {
 		content: '';
 		position: absolute;
-		inset: 2px auto 2px -4px;
+		inset: var(--sp-0) auto var(--sp-0) calc(-1 * var(--sp-1));
 		width: var(--share);
-		max-width: calc(100% + 8px);
+		max-width: calc(100% + 2 * var(--sp-1));
 		background: var(--bg-active);
 		z-index: 0;
 	}

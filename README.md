@@ -53,6 +53,14 @@ macOS, and More info then Run anyway on Windows. Building from source is
   texture is the cheap representation by two orders of magnitude. The bar
   height is set against `lod-check`, which measures how much the picture
   changes while the zoom is turned across both hand-overs.
+- **One token set for the whole interface.** Three type sizes, five spacings,
+  four heights, five widths, two durations, one shadow, one letter spacing,
+  and no component writes a length of its own. That is enforced rather than
+  intended: `ui-check` reads every component's stylesheet and fails on a
+  hand-written px, then opens the menus and checks that every visible element
+  is on the type scale in one of the two families. It found eight the first
+  time it ran, among them three copies of the same shadow and three different
+  letter spacings for the same kind of label.
 - **What git ignores is a filter, not a wall.** A switch in the View menu
   brings those files in, off by default, with the count in front of it. They
   arrive as placeholders, listed and laid out but never read: reading them is

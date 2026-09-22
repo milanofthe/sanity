@@ -69,28 +69,28 @@
 	.dir {
 		display: block;
 		height: 100%;
-		padding: 3px;
+		padding: var(--sp-0);
 		background: var(--dir-bg);
 	}
 	.panel {
 		display: flex;
 		flex-direction: column;
-		gap: 2px;
+		gap: var(--sp-0);
 		height: 100%;
-		padding: 0 3px 3px;
+		padding: 0 var(--sp-0) var(--sp-0);
 		background: var(--bg-panel);
 		border: var(--sep-w) solid var(--border);
 	}
 	.head {
 		display: block;
-		height: 5px;
-		margin: 0 -3px 2px;
+		height: var(--sp-1);
+		margin: 0 calc(-1 * var(--sp-0)) var(--sp-0);
 		background: var(--bg-inset);
 		border-bottom: var(--sep-w) solid var(--border);
 	}
 	.line {
 		display: block;
-		height: 2px;
+		height: var(--sp-0);
 		flex: none;
 	}
 </style>

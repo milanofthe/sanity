@@ -56,7 +56,6 @@
 		width: 100%;
 		min-height: var(--row-h);
 		padding: 0 var(--sp-3);
-		background: none;
 		border: none;
 		color: var(--text-dim);
 		font-family: var(--font-ui);
@@ -64,7 +63,6 @@
 		font-weight: 500;
 		line-height: 1;
 		text-align: left;
-		cursor: pointer;
 	}
 	/* A row holding a picture rather than a line of text sizes itself, which
 	   the fixed height exists to prevent everywhere else. */
@@ -85,7 +83,7 @@
 		cursor: default;
 	}
 	.mark {
-		width: 13px;
+		width: var(--h-mark);
 		flex: none;
 		display: flex;
 		align-items: center;
@@ -98,7 +96,7 @@
 	.label {
 		display: flex;
 		align-items: center;
-		gap: 7px;
+		gap: var(--sp-2);
 		flex: 1;
 		min-width: 0;
 		overflow: hidden;

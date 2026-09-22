@@ -114,31 +114,68 @@
 	/* type */
 	--font-ui: -apple-system, system-ui, 'Segoe UI', sans-serif;
 	--font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+	/* Three sizes, which is what the interface turned out to need: a label,
+	   a number or a secondary line, and everything else. There were five;
+	   the two largest were used by nothing, and a size that exists but is
+	   never chosen is an invitation to choose it for the wrong reason. */
 	--fs-xxs: 9px;
 	--fs-xs: 11px;
 	--fs-s: 12px;
-	--fs-m: 13px;
-	--fs-l: 15px;
 
-	/* spacing and geometry: square, like the logo's frame */
+	/* --- spacing: five steps, and nothing between them -------------------
+	   Square, like the logo's frame. Every gap, padding and inset in the
+	   interface is one of these five: a component that picks 5px or 7px
+	   because it looked right is a component that lines up with nothing. */
+	--sp-0: 2px;
 	--sp-1: 4px;
 	--sp-2: 8px;
 	--sp-3: 12px;
 	--sp-4: 16px;
 	--radius: 0px;
-	/* Height of a single line control, so a field and a button in the same row
-	   line up without either of them setting a padding that happens to match. */
-	--field-h: 24px;
 	--sep-w: 1px;
+
+	/* --- heights: four, for the four kinds of box there are ---------------
+	   A mark is the little square a checkbox or an icon sits in, a control is
+	   a switch or a segmented button, a field is an input, a row is a line in
+	   a menu. Anything taller is a surface and sizes itself from its rows. */
+	--h-mark: 14px;
+	--h-ctl: 18px;
+	--h-field: 24px;
+	/* Fixed rather than derived from content: rows that size themselves do
+	   not line up, and one whose intrinsic height collapses takes its label
+	   out of its own box. */
+	--h-row: 26px;
+
+	/* --- widths: five, for the surfaces and the controls that have one ---- */
+	--w-switch: 26px;
+	--w-mode: 116px;
+	--w-menu-s: 190px;
+	--w-menu-m: 280px;
+	--w-menu-l: 440px;
+
+	/* Letter spacing, for the one place type is tracked out: a label set in
+	   capitals. Everything else is set as the font was drawn. */
+	--track-caps: 0.09em;
+
+	/* The shadow under a surface that floats over the canvas. One value, so a
+	   menu and a context menu cannot drift apart. */
+	--shadow-sheet: 0 var(--sp-2) calc(2 * var(--sp-3)) rgba(0, 0, 0, 0.35);
+
+	/* --- motion: two durations, because there are two kinds of change -----
+	   One for a control answering a click, one for something moving across
+	   the interface. Anything slower belongs to the canvas, which has its own
+	   timings in metrics.ts. */
+	--dur-1: 80ms;
+	--dur-2: 160ms;
 
 	/* chrome dimensions */
 	--toolbar-h: 34px;
 	--statusbar-h: 24px;
-	--menu-w: 280px;
-	/* One row in a menu or a picker. Fixed rather than derived from content:
-	   rows that size themselves do not line up, and one whose intrinsic
-	   height collapses takes its label out of its own box. */
-	--row-h: 26px;
+
+	/* Older names, kept so nothing breaks while the components move over. */
+	--field-h: var(--h-field);
+	--menu-w: var(--w-menu-m);
+	--row-h: var(--h-row);
 
 	/* how far a directory's frame rotates towards its own hue, and how much of
 	   that reaches its fill. A monochrome theme sets the first to zero. */

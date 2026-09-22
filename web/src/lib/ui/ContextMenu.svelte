@@ -61,11 +61,11 @@
 	.ctx {
 		position: fixed;
 		z-index: var(--z-tooltip);
-		min-width: 190px;
+		min-width: var(--w-menu-s);
 		background: var(--bg-panel);
 		border: var(--sep-w) solid var(--border-strong);
 		border-radius: var(--radius);
-		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+		box-shadow: var(--shadow-sheet);
 		padding: var(--sp-1) 0;
 	}
 </style>

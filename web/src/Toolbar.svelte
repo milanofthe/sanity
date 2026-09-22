@@ -217,7 +217,7 @@
 		font-family: var(--font-mono);
 		font-size: var(--fs-xs);
 		color: var(--text-faint);
-		padding: 2px var(--sp-3) var(--sp-1);
+		padding: var(--sp-0) var(--sp-3) var(--sp-1);
 		overflow-wrap: anywhere;
 	}
 	.path a {
@@ -233,11 +233,11 @@
 		font-family: var(--font-ui);
 		font-size: var(--fs-xxs);
 		font-weight: 600;
-		letter-spacing: 0.08em;
+		letter-spacing: var(--track-caps);
 		text-transform: uppercase;
 		color: var(--accent);
 		border: var(--sep-w) solid var(--accent);
-		padding: 2px 6px;
+		padding: var(--sp-0) var(--sp-2);
 		margin-right: var(--sp-2);
 	}
 	header :global(button) {

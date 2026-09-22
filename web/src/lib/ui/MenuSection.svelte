@@ -26,17 +26,17 @@
 		font-family: var(--font-ui);
 		font-size: var(--fs-xxs);
 		font-weight: 600;
-		letter-spacing: 0.09em;
+		letter-spacing: var(--track-caps);
 		text-transform: uppercase;
 		color: var(--text-faint);
-		padding: 2px var(--sp-3) var(--sp-1);
+		padding: var(--sp-0) var(--sp-3) var(--sp-1);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 	.title.verbatim {
 		text-transform: none;
-		letter-spacing: 0.01em;
+		letter-spacing: normal;
 		font-family: var(--font-mono);
 		font-size: var(--fs-xs);
 		color: var(--text-dim);

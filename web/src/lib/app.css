@@ -7,6 +7,27 @@
 	box-sizing: border-box;
 }
 
+/* Every button in the interface is a surface with text on it: a menu trigger,
+   a row in a menu, a segment of a control. None of them wants the browser's
+   button, so the reset lives here rather than three times over in the
+   components that were each undoing it. */
+button {
+	margin: 0;
+	padding: 0;
+	font: inherit;
+	color: inherit;
+	background: none;
+	border: 0;
+	border-radius: var(--radius);
+	cursor: pointer;
+	-webkit-appearance: none;
+	appearance: none;
+}
+
+button:disabled {
+	cursor: default;
+}
+
 html,
 body {
 	margin: 0;
