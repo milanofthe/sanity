@@ -2718,9 +2718,8 @@ dependencies = [
 
 [[package]]
 name = "sanity"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
- "core-graphics",
  "notify",
  "sanity-core",
  "serde",
@@ -2732,7 +2731,7 @@ dependencies = [
 
 [[package]]
 name = "sanity-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "codebook-tree-sitter-latex",
  "image",
