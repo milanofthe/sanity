@@ -31,6 +31,7 @@ import { BASELINE_RATIO, GlyphAtlas } from './glyphatlas';
 import { BASE_LEVEL, OverviewTextures, type Slot } from './codetex';
 import { MediaTextures } from './mediatex';
 import { SpatialGrid } from '$lib/canvas/spatial';
+import { TILE_GUTTER, TileCache, tileWorld } from './tiles';
 import {
   createProgram, instanceAttribs, quadAttrib, uniforms, unitQuad,
   InstanceBuffer, type GL,
@@ -156,6 +157,51 @@ const STREAM_BUDGET_MS = 4;
  * each panel to a whole level, and the axis that needs less.
  */
 const DETAIL_BYTES_PER_PIXEL = 64;
+
+/** How a view is drawn; see `drawView`. */
+interface ViewOpts {
+  /** Where to: a tile's framebuffer, or the canvas when null. */
+  target: { fbo: WebGLFramebuffer; w: number; h: number } | null;
+  /** Exactly these files rather than whatever the grid finds in view. */
+  only: Iterable<SceneFile> | null;
+  /** Files to leave out: in a tile, those drawn live over it instead. */
+  skip: ((f: SceneFile) => boolean) | null;
+  /** Directory boxes as well. */
+  dirs: boolean;
+  /** Clear to the background first. */
+  clear: boolean;
+  /** The canvas's own view, which advances and reports the animations. */
+  live: boolean;
+  /** Rendering into a tile: no hover, no exact glyph atlas. */
+  bake: boolean;
+}
+
+const LIVE: ViewOpts = {
+  target: null, only: null, skip: null, dirs: true, clear: true, live: true, bake: false,
+};
+
+/**
+ * Panels in view past which the canvas is drawn from tiles.
+ *
+ * Measured with the whole project in view: a frame of 1300 panels costs 0.9
+ * milliseconds, 10,000 cost 5.3 and 30,000 cost 16. Below a few thousand the
+ * live view is cheap and exactly current, and above it the tiles pay. Two
+ * numbers, so hovering around one of them does not switch every frame.
+ */
+const FAR_ENTER = 4000;
+const FAR_LEAVE = 3000;
+
+/** Time a frame may spend rendering tiles. */
+const TILE_BUDGET_MS = 6;
+
+/** How long a tile rendered without all its detail waits before it is
+ *  rendered again, and how many times it is. */
+const TILE_RETRY_MS = 400;
+const TILE_RETRIES = 3;
+
+/** Shortest time between two renders of the rest image for changes inside
+ *  it, as opposed to the view moving; see `renderFar`. */
+const REST_MIN_MS = 250;
 
 const RECT_STRIDE = 12;
 const OVERVIEW_STRIDE = 11;
@@ -435,6 +481,27 @@ export class Scene {
   private nearFiles: number[] = [];
   private nearDirs: number[] = [];
   private frameNo = 0;
+  /** Size of the target being drawn into, in device pixels. */
+  private viewW = 1;
+  private viewH = 1;
+
+  /** The far zoom, cached; see tiles.ts. */
+  private tiles: TileCache;
+  /** Whether the last frame was drawn from tiles, for the hysteresis. */
+  private far = false;
+  /** Tiles in view still missing or out of date, so the loop keeps going. */
+  private tilesPending = false;
+  /** Drawing into a tile; see `drawView`. */
+  private baking = false;
+  /** A panel in the tile being drawn lacked the detail it needed. */
+  private bakeLacking = false;
+  /** The tint as last drawn into the tiles. */
+  private tintWas = false;
+  /** Pictures, which are drawn live over the tiles rather than baked in:
+   *  their textures change with the zoom and fade in when they arrive. */
+  private mediaGrid = new SpatialGrid([]);
+  private mediaIdx: number[] = [];
+  private nearMedia: number[] = [];
 
   /** Files holding a detail level, for eviction. */
   private detailed = new Set<SceneFile>();
@@ -442,7 +509,7 @@ export class Scene {
   private detailBytes = 0;
   /** Panels this frame found needing a finer level than they hold, with the
    *  level and how large they are on screen, which decides who goes first. */
-  private wanted: { f: SceneFile; level: number; area: number }[] = [];
+  private wanted = new Map<SceneFile, { level: number; area: number }>();
   /** Set while there is streaming left to do or a layer was just written,
    *  so the loop draws another frame. */
   private streamPending = false;
@@ -459,6 +526,9 @@ export class Scene {
    *  worth: with it off, glyphs come from the nearest fixed level and are
    *  scaled, which is what text-check compares against. */
   exactGlyphAtlas = true;
+  /** Draw the far zoom from tiles. Off only for the measurement that
+   *  compares the two: far-check draws the same view both ways. */
+  tiled = true;
   /** Colour the overview by language family. Off by default: what the canvas
    *  is for is the shape of a project and what changed in it, and a second
    *  colour scheme on top of the syntax colours is a third thing competing for
@@ -499,6 +569,8 @@ export class Scene {
   setHits(hits: Map<string, number[]>, current: { path: string; line: number } | null): void {
     this.hits = hits;
     this.current = current;
+    this.tiles.invalidateAll();
+    if (this.rest) this.rest.dirty = true;
   }
 
   /**
@@ -525,6 +597,8 @@ export class Scene {
   setSearch(paths: Set<string> | null): void {
     this.matched = paths;
     this.matchedDirs.clear();
+    this.tiles.invalidateAll();
+    if (this.rest) this.rest.dirty = true;
     if (!paths) return;
     // Every directory on the way to a match, so the boxes around it stay lit.
     for (const path of paths) {
@@ -596,7 +670,7 @@ export class Scene {
       'uView', 'uTex', 'uTexRows', 'uSharp', 'uLangTint', 'uFamily[0]',
     ]);
     this.uImage = uniforms(gl, this.progImage, [
-      'uView', 'uTex', 'uRect', 'uFade', 'uViewport', 'uExact', 'uTexPx',
+      'uView', 'uTex', 'uRect', 'uFade', 'uViewport', 'uExact', 'uTexPx', 'uUv',
     ]);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
@@ -604,6 +678,7 @@ export class Scene {
       'uViewport', 'uBoxPx', 'uEmWorld',
     ]);
 
+    this.tiles = new TileCache(gl);
     this.bgRects = new InstanceBuffer(gl, RECT_STRIDE, 2048);
     this.fgRects = new InstanceBuffer(gl, RECT_STRIDE, 2048);
     this.spans = new InstanceBuffer(gl, SPAN_STRIDE, 65536);
@@ -728,6 +803,12 @@ export class Scene {
     }
     this.animated.clear();
     for (const f of this.files.values()) if (f.anim) this.animated.add(f);
+    this.mediaIdx = [];
+    files.forEach((n, i) => { if (n.media) this.mediaIdx.push(i); });
+    this.mediaGrid = new SpatialGrid(this.mediaIdx.map((i) => files[i]));
+    // Every position may have moved.
+    this.tiles.clear();
+    if (this.rest) this.rest.dirty = true;
   }
 
   /** Put a file in the map and where the grid's answers find it. */
@@ -757,7 +838,13 @@ export class Scene {
    * A panel that was already here is handled by `relayout`, which knows where
    * it was and slides it from there.
    */
-  private animFor(node: FileNode): PanelAnim {
+  private animFor(node: FileNode): PanelAnim | null {
+    // Not for a project large enough to open in the far view. A panel there
+    // is a few pixels across and the settling cannot be seen, and a panel
+    // animating keeps the view from being drawn from tiles: opening a hundred
+    // thousand files drew every one of them live on every frame until the
+    // last had arrived.
+    if (this.layout.files.length > FAR_ENTER) return null;
     const [bx0, by0, bx1, by1] = this.layout.bounds;
     const cx = (bx0 + bx1) / 2;
     const cy = (by0 + by1) / 2;
@@ -838,6 +925,8 @@ export class Scene {
       if (f.detail) this.textures.write(f.detail, f.data, f.node.geom.cols, f.rows);
     }
     this.textures.finalize();
+    this.tiles.invalidateAll();
+    if (this.rest) this.rest.dirty = true;
   }
 
   addFile(node: FileNode, data: FileData): void {
@@ -864,6 +953,8 @@ export class Scene {
     const slot = this.textures.allocate(rows[data.lineCount], BASE_LEVEL);
     node.layer = slot.layer;
     this.textures.write(slot, data, node.geom.cols, rows);
+    this.tiles.invalidate(node.x, node.y, node.w, node.h);
+    if (this.rest) this.rest.dirty = true;
     this.add(node.path, {
       node, data, slot, detail: null, rows, since: Infinity, shownMark: 0, state: aggregateState(data),
       family: familyOf(data.langId),
@@ -914,6 +1005,7 @@ export class Scene {
     f.wroteRows = f.rows[data.lineCount];
     f.wroteCols = node.geom.cols;
     node.layer = f.slot.layer;
+    this.invalidateTiles(f);
   }
 
   /**
@@ -987,6 +1079,7 @@ export class Scene {
     if (f.detail) this.textures.write(f.detail, data, f.node.geom.cols, f.rows);
     f.wroteRows = f.rows[data.lineCount];
     f.wroteCols = f.node.geom.cols;
+    this.invalidateTiles(f);
   }
 
   /**
@@ -1142,7 +1235,7 @@ export class Scene {
     const { gl } = this;
     gl.useProgram(this.progRect);
     gl.uniformMatrix3fv(this.uRect.uView, false, this.view);
-    gl.uniform2f(this.uRect.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.uniform2f(this.uRect.uViewport, this.viewW, this.viewH);
     b.upload();
     quadAttrib(gl, this.progRect, this.quad);
     gl.bindBuffer(gl.ARRAY_BUFFER, b.buf);
@@ -1212,13 +1305,18 @@ export class Scene {
       // Nothing left to run: the window is over, or the marks were cleared.
       // A touch puts it back. Deleting the current entry while iterating a
       // Set is defined: the iteration carries on with the next one.
-      if (!f.change && (f.since === Infinity || !recent(f.since))) this.active.delete(f);
+      if (!f.change && (f.since === Infinity || !recent(f.since))) {
+        this.active.delete(f);
+        // It was drawn live over the tiles while it ran; they have to show
+        // how it ended.
+        this.invalidateTiles(f);
+      }
     }
     // Reported apart from the glow, which also ticks but for ninety seconds:
     // `settling` means a motion is in progress, and something waiting for the
     // canvas to come to rest must not wait for a fade.
     this.changing = changing;
-    if (this.animating || this.streamPending || this.media?.fading()) {
+    if (this.animating || this.streamPending || this.tilesPending || this.media?.fading()) {
       ticking = true;
       redraw = true;
     }
@@ -1228,8 +1326,70 @@ export class Scene {
 
   render(cam: Camera, dt: number): void {
     const t0 = performance.now();
+    // The clock eviction order is measured in, and the device ratio the
+    // picture resolution is asked for in; both are per frame. Whether the
+    // camera moved into this frame goes with it: picture decoding waits for
+    // the view to come to rest rather than chasing a pan.
+    const moving =
+      cam.x !== this.camWas.x || cam.y !== this.camWas.y || cam.zoom !== this.camWas.zoom;
+    this.cameraStill = !moving;
+    this.camWas.x = cam.x;
+    this.camWas.y = cam.y;
+    this.camWas.zoom = cam.zoom;
+    this.media?.tick(moving);
+    this.camNow = cam;
+    this.dpr = cam.dpr;
+    // Asked for by a view that is no longer on screen.
+    if (moving) this.wanted.clear();
+    if (this.tintLanguages !== this.tintWas) {
+      this.tintWas = this.tintLanguages;
+      this.tiles.invalidateAll();
+    if (this.rest) this.rest.dirty = true;
+    }
+
+    let visibleFiles: number;
+    let overviewQuads = 0;
+    let rectQuads = 0;
+    if (this.farView(cam)) {
+      visibleFiles = this.renderFar(cam, dt);
+    } else {
+      this.tilesPending = false;
+      visibleFiles = this.drawView(cam, dt, LIVE);
+      for (const b of this.overviewByChunk.values()) overviewQuads += b.count;
+      rectQuads = this.bgRects.count + this.fgRects.count;
+    }
+
+    this.stats = {
+      visibleFiles,
+      overviewQuads,
+      spanQuads: this.spans.count,
+      glyphQuads: this.glyphs.count,
+      rectQuads,
+      pxPerLine: metrics.lineHeight * cam.zoom,
+      cpuMs: performance.now() - t0,
+      streamMs: 0,
+    };
+    // After the frame is drawn and measured: what it writes shows next frame.
+    const ts = performance.now();
+    this.stream(this.frameNo);
+    this.stats.streamMs = performance.now() - ts;
+  }
+
+  /**
+   * Draw the scene as seen by `cam` into a target: the canvas, or a tile.
+   *
+   * One pass for both, so a tile is exactly what the live view would have
+   * drawn there. Returns how many panels it drew.
+   */
+  private drawView(cam: Camera, dt: number, opts: ViewOpts): number {
     const { gl } = this;
     const pxPerLine = metrics.lineHeight * cam.zoom;
+    // A tile is not a view anybody holds still on: no exact glyph atlas for
+    // it, and no exact pictures, which are not in tiles anyway.
+    const stillWas = this.cameraStill;
+    if (opts.bake) this.cameraStill = false;
+    this.baking = opts.bake;
+    this.measureInk(cam.zoom, cam.dpr);
 
     // A partition of one across the three representations; see lod.ts for why
     // that property is worth having a module and a test for.
@@ -1247,20 +1407,6 @@ export class Scene {
     this.spans.reset();
     this.glyphs.reset();
     this.imageDraws.length = 0;
-    // The clock eviction order is measured in, and the device ratio the
-    // picture resolution is asked for in; both are per frame. Whether the
-    // camera moved into this frame goes with it: picture decoding waits for
-    // the view to come to rest rather than chasing a pan.
-    const moving =
-      cam.x !== this.camWas.x || cam.y !== this.camWas.y || cam.zoom !== this.camWas.zoom;
-    this.cameraStill = !moving;
-    this.camWas.x = cam.x;
-    this.camWas.y = cam.y;
-    this.camWas.zoom = cam.zoom;
-    this.media?.tick(moving);
-    this.camNow = cam;
-    this.dpr = cam.dpr;
-    this.measureInk(cam.zoom, cam.dpr);
     for (const b of this.overviewByChunk.values()) b.reset();
 
     let stillAnimating = false;
@@ -1269,8 +1415,8 @@ export class Scene {
     // drawn before its parent would be washed over by the parent's fill. So
     // the ones in view and the ones sliding are gathered by index and sorted.
     const dirs = this.layout.dirs;
-    const dirIdx = this.dirGrid.near(vx0, vy0, vx1, vy1, this.nearDirs);
-    if (this.dirAnims.size > 0) {
+    const dirIdx = opts.dirs ? this.dirGrid.near(vx0, vy0, vx1, vy1, this.nearDirs) : [];
+    if (opts.dirs && this.dirAnims.size > 0) {
       // A relayout can slide every directory at once, so not `includes`.
       const have = new Set(dirIdx);
       for (const path of this.dirAnims.keys()) {
@@ -1309,6 +1455,7 @@ export class Scene {
     let visibleFiles = 0;
     const draw = (f: SceneFile): void => {
       if (f.drawnAt === frame) return;
+      if (opts.skip?.(f)) return;
       const n = f.node;
 
       // Advance the settle animation and work out the transform before
@@ -1354,7 +1501,7 @@ export class Scene {
       this.pushPanel(f);
       if (f.node.media) this.pushMedia(f, cam.zoom);
       else this.pushColumnRules(f, cam.zoom);
-      this.pushHeader(f, cam.zoom, f.node.path === this.hoveredPath);
+      this.pushHeader(f, cam.zoom, !opts.bake && f.node.path === this.hoveredPath);
       this.pushPanelBorder(f, this.matched !== null && hit);
       if (overviewFade > 0.004) this.pushOverview(f, overviewFade, pxPerLine, cam.zoom);
       if (spanFade > 0.004) this.pushSpans(f, spanFade, pxPerLine, vx0, vy0, vx1, vy1);
@@ -1370,19 +1517,31 @@ export class Scene {
     };
     // Sliding panels first, from their own list, then whatever else is in
     // view. A panel in both is drawn once.
-    for (const f of this.animated) draw(f);
-    for (const i of this.fileGrid.near(vx0, vy0, vx1, vy1, this.nearFiles)) {
-      const f = this.byNode[i];
-      if (f) draw(f);
+    if (opts.only) {
+      for (const f of opts.only) draw(f);
+    } else {
+      for (const f of this.animated) draw(f);
+      for (const i of this.fileGrid.near(vx0, vy0, vx1, vy1, this.nearFiles)) {
+        const f = this.byNode[i];
+        if (f) draw(f);
+      }
     }
     this.tf = IDENTITY;
-    this.animating = stillAnimating;
+    if (opts.live) this.animating = stillAnimating;
+    this.cameraStill = stillWas;
+    this.baking = false;
 
     // Draw.
-    const [br, bg, bb] = rgb(this.pal.surface.bg);
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.clearColor(br, bg, bb, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    const target = opts.target;
+    this.viewW = target ? target.w : gl.drawingBufferWidth;
+    this.viewH = target ? target.h : gl.drawingBufferHeight;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fbo : null);
+    gl.viewport(0, 0, this.viewW, this.viewH);
+    if (opts.clear) {
+      const [br, bg, bb] = rgb(this.pal.surface.bg);
+      gl.clearColor(br, bg, bb, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
 
     this.drawRects(this.bgRects);
     this.drawOverview();
@@ -1392,22 +1551,8 @@ export class Scene {
     this.drawGlyphs(pxPerLine, cam.dpr);
     this.drawRects(this.fgRects);
 
-    let overviewQuads = 0;
-    for (const b of this.overviewByChunk.values()) overviewQuads += b.count;
-    this.stats = {
-      visibleFiles,
-      overviewQuads,
-      spanQuads: this.spans.count,
-      glyphQuads: this.glyphs.count,
-      rectQuads: this.bgRects.count + this.fgRects.count,
-      pxPerLine,
-      cpuMs: performance.now() - t0,
-      streamMs: 0,
-    };
-    // After the frame is drawn and measured: what it writes shows next frame.
-    const ts = performance.now();
-    this.stream(frame);
-    this.stats.streamMs = performance.now() - ts;
+    if (target) gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return visibleFiles;
   }
 
   /**
@@ -1751,7 +1896,8 @@ export class Scene {
     gl.uniform1i(this.uImage.uTex, 0);
     gl.activeTexture(gl.TEXTURE0);
     quadAttrib(gl, this.progImage, this.quad);
-    gl.uniform2f(this.uImage.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.uniform2f(this.uImage.uViewport, this.viewW, this.viewH);
+    gl.uniform4f(this.uImage.uUv, 0, 0, 1, 1);
     for (const d of this.imageDraws) {
       gl.uniform4f(this.uImage.uRect, d.x, d.y, d.w, d.h);
       // What it is fading from, underneath and scaled to the rect, then the
@@ -1943,8 +2089,9 @@ export class Scene {
     // for: it is still finer than the base.
     const need = this.levelNeeded(f, pxPerLine, zoom, f.rows[f.data.lineCount]);
     if (need < BASE_LEVEL && (!f.detail || f.detail.level > need)) {
+      if (this.baking || this.restDrawing) this.bakeLacking = true;
       const s = zoom * this.tf.scale;
-      this.wanted.push({ f, level: need, area: n.w * n.h * s * s });
+      this.wanted.set(f, { level: need, area: n.w * n.h * s * s });
     }
     const slot = f.detail ?? f.slot;
     const b = this.overviewBuffer(slot.classIdx, slot.chunkIdx);
@@ -1986,6 +2133,320 @@ export class Scene {
       d[o + 9] = fade * tf.alpha;
       d[o + 10] = f.family;
     }
+  }
+
+  /** Mark the tiles under a file as out of date. */
+  private invalidateTiles(f: SceneFile): void {
+    const n = f.node;
+    this.tiles.invalidate(n.x, n.y, n.w, n.h);
+    if (this.rest) this.rest.dirty = true;
+  }
+
+  /**
+   * The far view at rest: the view rendered once, exactly as the live frame
+   * would draw it, and drawn 1:1 while the camera holds still.
+   *
+   * The tiles are for moving. Drawn at rest they are soft, because they are
+   * resampled twice, once into the tile and once onto the screen, and at
+   * thirty thousand files they were 7.3 off the live picture per channel. A
+   * frame at rest still happens, for the pointer moving over panels and for a
+   * change being shown, and drawing thirty thousand panels for each of those
+   * is what this avoids: they are drawn live over the rest image instead.
+   */
+  private rest: {
+    tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number;
+    x: number; y: number; zoom: number; dirty: boolean;
+    lacking: boolean; renderedAt: number; retries: number;
+  } | null = null;
+
+  /** Whether the rest image still shows this view. */
+  private restFits(cam: Camera): boolean {
+    const r = this.rest;
+    const { gl } = this;
+    return r !== null && !r.dirty && r.x === cam.x && r.y === cam.y && r.zoom === cam.zoom
+      && r.w === gl.drawingBufferWidth && r.h === gl.drawingBufferHeight;
+  }
+
+  private renderRest(cam: Camera, skip: (f: SceneFile) => boolean): void {
+    const { gl } = this;
+    const w = gl.drawingBufferWidth;
+    const h = gl.drawingBufferHeight;
+    let r = this.rest;
+    if (!r || r.w !== w || r.h !== h) {
+      if (r) {
+        gl.deleteTexture(r.tex);
+        gl.deleteFramebuffer(r.fbo);
+      }
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const fbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      r = {
+        tex, fbo, w, h, x: 0, y: 0, zoom: 0, dirty: true,
+        lacking: false, renderedAt: 0, retries: 0,
+      };
+      this.rest = r;
+    }
+    const moved = r.x !== cam.x || r.y !== cam.y || r.zoom !== cam.zoom;
+    if (moved) r.retries = 0;
+    this.bakeLacking = false;
+    this.restDrawing = true;
+    this.drawView(cam, 0, {
+      target: { fbo: r.fbo, w, h }, only: null, skip, dirs: true, clear: true,
+      live: false, bake: false,
+    });
+    this.restDrawing = false;
+    r.x = cam.x;
+    r.y = cam.y;
+    r.zoom = cam.zoom;
+    r.dirty = false;
+    r.lacking = this.bakeLacking;
+    r.renderedAt = performance.now();
+  }
+  /** Set while the rest image is drawn, so missing detail is noted. */
+  private restDrawing = false;
+
+  /**
+   * Whether this frame is drawn from tiles.
+   *
+   * By how many panels are in view, estimated from the area of the layout
+   * the view covers rather than counted, since counting a hundred thousand
+   * panels is the cost this exists to avoid. Never while anything is
+   * sliding: a relayout moves panels between tiles every frame.
+   */
+  private farView(cam: Camera): boolean {
+    const inView = this.estimateInView(cam);
+    const sliding = this.animated.size > 0 || this.dirAnims.size > 0;
+    this.far = this.tiled && !sliding && inView > (this.far ? FAR_LEAVE : FAR_ENTER);
+    return this.far;
+  }
+
+  /** Camera for rendering one tile, gutter included. */
+  private tileCam = new Camera();
+
+  private renderTile(level: number, tx: number, ty: number, dpr: number): void {
+    const t = this.tiles.take(level, tx, ty, this.frameNo);
+    const size = tileWorld(level);
+    const texel = 2 ** level;
+    const cam = this.tileCam;
+    cam.dpr = dpr;
+    cam.vw = this.tiles.side / dpr;
+    cam.vh = this.tiles.side / dpr;
+    cam.zoom = 1 / (texel * dpr);
+    cam.x = tx * size + size / 2;
+    cam.y = ty * size + size / 2;
+    const { gl } = this;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.tiles.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+    this.bakeLacking = false;
+    this.drawView(cam, 0, {
+      target: { fbo: this.tiles.fbo, w: this.tiles.side, h: this.tiles.side },
+      only: null,
+      skip: (f) => Boolean(f.node.media) || this.active.has(f),
+      dirs: true,
+      clear: true,
+      live: false,
+      bake: true,
+    });
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    t.dirty = false;
+    t.lacking = this.bakeLacking;
+    t.renderedAt = performance.now();
+  }
+
+  /**
+   * A frame from tiles: the tiles in view, rendered or refreshed inside a
+   * time budget, then what is live drawn over them.
+   *
+   * Where a tile of the level in use is not there yet, the levels either
+   * side of it stand in, coarser first, so zooming through the far range is
+   * never a hole. Only if nothing at all covers the view is it drawn live,
+   * which is the frame this replaced, and then only until the tiles exist.
+   */
+  private renderFar(cam: Camera, dt: number): number {
+    const { gl } = this;
+    const frame = ++this.frameNo;
+    // Drawn live over the tiles or the rest image: what is changing, the
+    // panel under the pointer, and the pictures.
+    const [lx0, ly0, lx1, ly1] = cam.visibleRect(0);
+    const live = new Set<SceneFile>(this.active);
+    if (this.hoveredPath) {
+      const h = this.files.get(this.hoveredPath);
+      if (h) live.add(h);
+    }
+    for (const i of this.mediaGrid.near(lx0, ly0, lx1, ly1, this.nearMedia)) {
+      const f = this.byNode[this.mediaIdx[i]];
+      if (f) live.add(f);
+    }
+    const drawLive = () => {
+      if (live.size === 0) return;
+      this.drawView(cam, dt, {
+        target: null, only: live, skip: null, dirs: false, clear: false, live: false, bake: false,
+      });
+    };
+
+    if (this.cameraStill) {
+      const r = this.rest;
+      // Drawn again once the detail it lacked has had time to arrive, as the
+      // tiles are; see TILE_RETRY_MS.
+      const now = performance.now();
+      if (r && r.lacking && r.retries < TILE_RETRIES && !this.streamPending
+        && now - r.renderedAt >= TILE_RETRY_MS) {
+        r.retries++;
+        r.dirty = true;
+      }
+      // Out of date only because something in it changed, not because the
+      // view moved: kept a little longer. While a large project loads every
+      // frame adds panels to it, and drawing it again for each of them was a
+      // full live frame, 55 milliseconds at a hundred thousand files, every
+      // frame, for four minutes.
+      const stale = r !== null && r.dirty && r.x === cam.x && r.y === cam.y
+        && r.zoom === cam.zoom && now - r.renderedAt < REST_MIN_MS;
+      if (!stale && !this.restFits(cam)) this.renderRest(cam, (f) => live.has(f));
+      const rr = this.rest!;
+      this.tilesPending = stale || rr.dirty || (rr.lacking && rr.retries < TILE_RETRIES);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      this.viewW = gl.drawingBufferWidth;
+      this.viewH = gl.drawingBufferHeight;
+      gl.viewport(0, 0, this.viewW, this.viewH);
+      cam.writeMatrix(this.view);
+      gl.useProgram(this.progImage);
+      gl.uniformMatrix3fv(this.uImage.uView, false, this.view);
+      gl.uniform1i(this.uImage.uTex, 0);
+      gl.uniform2f(this.uImage.uViewport, this.viewW, this.viewH);
+      gl.uniform1f(this.uImage.uExact, 1);
+      gl.uniform2f(this.uImage.uTexPx, rr.w, rr.h);
+      gl.uniform1f(this.uImage.uFade, 1);
+      // Rendered with y up, so drawn with v flipped.
+      gl.uniform4f(this.uImage.uUv, 0, 1, 1, 0);
+      gl.uniform4f(this.uImage.uRect, lx0, ly0, lx1 - lx0, ly1 - ly0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, rr.tex);
+      quadAttrib(gl, this.progImage, this.quad);
+      gl.disable(gl.BLEND);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.enable(gl.BLEND);
+      gl.uniform4f(this.uImage.uUv, 0, 0, 1, 1);
+      drawLive();
+      return this.estimateInView(cam);
+    }
+    const px = cam.zoom * cam.dpr;
+    // Down, not to the nearest: a tile is then never drawn larger than it
+    // was rendered, only up to half its size through its mip chain. Rounded
+    // to the nearest level it was magnified by up to 1.41, and the far view
+    // came out visibly softer than the live one.
+    const level = Math.floor(Math.log2(1 / px));
+    const [vx0, vy0, vx1, vy1] = cam.visibleRect(0);
+    const range = (l: number) => {
+      const s = tileWorld(l);
+      return [Math.floor(vx0 / s), Math.floor(vy0 / s), Math.floor(vx1 / s), Math.floor(vy1 / s)];
+    };
+
+    // Render what is missing or out of date, nearest the middle first.
+    const [tx0, ty0, tx1, ty1] = range(level);
+    const todo: [number, number, number][] = [];
+    let missing = 0;
+    const cx = (tx0 + tx1) / 2;
+    const cy = (ty0 + ty1) / 2;
+    const now = performance.now();
+    let waiting = false;
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const t = this.tiles.get(level, tx, ty);
+        if (!t) missing++;
+        // A tile drawn before its panels' detail was in is drawn again once
+        // it has had time to arrive, a few times at most: detail arriving
+        // does not mark tiles out of date by itself, since that made every
+        // layer written a tile rendered, which fed itself for twenty seconds
+        // on thirty thousand files.
+        const retry = t !== undefined && t.lacking && t.retries < TILE_RETRIES
+          && !this.streamPending;
+        if (t?.lacking && t.retries < TILE_RETRIES) waiting = true;
+        if (retry && now - t.renderedAt >= TILE_RETRY_MS) {
+          t.retries++;
+          t.dirty = true;
+        }
+        if (!t || t.dirty) todo.push([tx, ty, (t ? 1e6 : 0) + Math.hypot(tx - cx, ty - cy)]);
+      }
+    }
+    todo.sort((a, b) => a[2] - b[2]);
+    const t0 = performance.now();
+    let done = 0;
+    for (const [tx, ty] of todo) {
+      if (performance.now() - t0 > TILE_BUDGET_MS && done > 0) break;
+      const had = this.tiles.get(level, tx, ty);
+      this.renderTile(level, tx, ty, cam.dpr);
+      if (!had) missing--;
+      done++;
+    }
+    this.tilesPending = done < todo.length || waiting;
+
+    // Nothing covers the view yet: this frame live, as before tiles.
+    if (missing > 0 && this.tiles.size <= done) {
+      this.tilesPending = true;
+      return this.drawView(cam, dt, LIVE);
+    }
+
+    // Tiles, coarse to fine, so a finer one covers what a coarser one only
+    // stood in for.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.viewW = gl.drawingBufferWidth;
+    this.viewH = gl.drawingBufferHeight;
+    gl.viewport(0, 0, this.viewW, this.viewH);
+    const [br, bg, bb] = rgb(this.pal.surface.bg);
+    gl.clearColor(br, bg, bb, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    cam.writeMatrix(this.view);
+    gl.useProgram(this.progImage);
+    gl.uniformMatrix3fv(this.uImage.uView, false, this.view);
+    gl.uniform1i(this.uImage.uTex, 0);
+    gl.uniform2f(this.uImage.uViewport, this.viewW, this.viewH);
+    gl.uniform1f(this.uImage.uExact, 0);
+    gl.uniform1f(this.uImage.uFade, 1);
+    // Rendered with y up, so drawn with v flipped; and only the inside of
+    // the gutter.
+    const g = TILE_GUTTER / this.tiles.side;
+    gl.uniform4f(this.uImage.uUv, g, 1 - g, 1 - g, g);
+    gl.activeTexture(gl.TEXTURE0);
+    quadAttrib(gl, this.progImage, this.quad);
+    const levels = missing > 0 ? [level + 2, level + 1, level - 1, level] : [level];
+    for (const l of levels) {
+      const s = tileWorld(l);
+      const [ax0, ay0, ax1, ay1] = range(l);
+      for (let ty = ay0; ty <= ay1; ty++) {
+        for (let tx = ax0; tx <= ax1; tx++) {
+          const t = this.tiles.get(l, tx, ty);
+          if (!t) continue;
+          t.seen = frame;
+          gl.bindTexture(gl.TEXTURE_2D, t.tex);
+          gl.uniform4f(this.uImage.uRect, tx * s, ty * s, s, s);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+      }
+    }
+    gl.uniform4f(this.uImage.uUv, 0, 0, 1, 1);
+
+    drawLive();
+    return this.estimateInView(cam);
+  }
+
+  /** Panels in view, estimated from the share of the layout it covers. */
+  private estimateInView(cam: Camera): number {
+    const [vx0, vy0, vx1, vy1] = cam.visibleRect(0);
+    const [bx0, by0, bx1, by1] = this.layout.bounds;
+    const ix = Math.max(0, Math.min(bx1, vx1) - Math.max(bx0, vx0));
+    const iy = Math.max(0, Math.min(by1, vy1) - Math.max(by0, vy0));
+    return Math.round(
+      (this.layout.files.length * ix * iy) / Math.max(1, (bx1 - bx0) * (by1 - by0)),
+    );
   }
 
   /** Detail held and allowed, in bytes, and how many panels hold it. */
@@ -2044,20 +2505,31 @@ export class Scene {
   private stream(frame: number): void {
     const wanted = this.wanted;
     this.streamPending = false;
-    if (wanted.length === 0) return;
-    wanted.sort((a, b) => b.area - a.area);
+    if (wanted.size === 0) return;
+    // Kept from one frame to the next until written, rather than rebuilt from
+    // what each frame drew: at rest the far view draws its rest image and no
+    // panels, so a list rebuilt per frame was empty after the first, and the
+    // detail stopped streaming after fifteen files out of ten thousand.
+    const order = [...wanted].sort((a, b) => b[1].area - a[1].area);
     const t0 = performance.now();
-    for (const { f, level } of wanted) {
+    for (const [f, { level }] of order) {
       if (performance.now() - t0 > STREAM_BUDGET_MS) {
         this.streamPending = true;
         break;
       }
-      // Gone or rewritten since it was asked for.
+      wanted.delete(f);
+      // Gone, or rewritten since it was asked for.
       if (this.files.get(f.node.path) !== f || f.node.stub) continue;
+      if (f.detail && f.detail.level <= level) continue;
       const rows = f.rows[f.data.lineCount];
       const bytes = this.textures.bytesFor(rows, level);
       const freed = f.detail ? this.textures.slotBytes(f.detail) : 0;
-      if (!this.evict(bytes - freed, frame)) break;
+      if (!this.evict(bytes - freed, frame)) {
+        // The budget is full of what is on screen; the rest waits for the
+        // view to change rather than being asked for every frame.
+        wanted.clear();
+        break;
+      }
       this.dropDetail(f);
       const slot = this.textures.allocate(rows, level);
       this.textures.write(slot, f.data, f.node.geom.cols, f.rows);
@@ -2066,7 +2538,6 @@ export class Scene {
       this.detailed.add(f);
       this.streamPending = true;
     }
-    wanted.length = 0;
   }
 
   private drawOverview(): void {
@@ -2418,7 +2889,7 @@ export class Scene {
     // Only a glyph drawn 1:1 lands where a phase can be chosen for it; a
     // scaled one is resampled anyway and takes the first grid.
     gl.uniform1f(this.uGlyph.uPhases, oneToOne ? level.phases : 1);
-    gl.uniform2f(this.uGlyph.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.uniform2f(this.uGlyph.uViewport, this.viewW, this.viewH);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, level.tex);
 

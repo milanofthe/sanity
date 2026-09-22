@@ -86,9 +86,12 @@ uniform vec2 uViewport;
 // pixel, the way glyphs are drawn. 0 scales it onto the rect.
 uniform float uExact;
 uniform vec2 uTexPx;
+// The part of the texture drawn, as u0, v0, u1, v1: all of it for a picture,
+// flipped and inside the gutter for a tile.
+uniform vec4 uUv;
 out vec2 vUv;
 void main() {
-  vUv = aCorner;
+  vUv = mix(uUv.xy, uUv.zw, aCorner);
   if (uExact > 0.5) {
     vec2 o = (uView * vec3(uRect.xy, 1.0)).xy;
     vec2 originPx = floor((o * 0.5 + 0.5) * uViewport + 0.5);
