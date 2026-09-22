@@ -82,18 +82,34 @@ export interface PanelGeometry {
  * count would reintroduce exactly that problem.
  */
 /**
- * How much canvas a picture is worth: this fraction of its own pixels, as
- * area.
+ * How much canvas a picture is worth.
  *
- * A quarter linear, so a sixteenth by area. A 4000 by 1500 render then asks
- * for about the room a 27 line file takes, and a 32 pixel icon for the
- * minimum. Sizing them 1:1 would give pathsim's 47 images a third of its
- * canvas; at a sixteenth they come to a few percent, which is what a picture
- * beside its code is worth.
+ * A third of its own pixels as area, and never more than a file of
+ * `MEDIA_MAX_LOC` lines takes. Both halves matter: the fraction keeps an icon
+ * small and a plot large, and the ceiling is what stops a 24 megapixel
+ * screenshot from taking a quarter of the canvas on its own. Sizing them 1:1
+ * would have given pathsim's 47 images more room than all of its code.
+ *
+ * The ceiling is expressed as a file rather than as a number of world units,
+ * because that is the comparison that means something on this canvas: a
+ * picture is worth about as much as a source file you would sit down and read.
  */
-const MEDIA_SCALE = 0.25;
+const MEDIA_PIXEL_SHARE = 1 / 3;
+const MEDIA_MAX_LOC = 500;
+const MEDIA_MAX_COLS = 70;
 const MEDIA_MIN_LINES = 3;
-const MEDIA_MAX_LINES = 60;
+const MEDIA_MAX_LINES = 400;
+
+/** Area of a file of `MEDIA_MAX_LOC` lines, computed through the same
+ *  geometry a text panel gets, and cached: it is the same answer every time. */
+let maxMediaArea = 0;
+function mediaCeiling(): number {
+  if (maxMediaArea === 0) {
+    const lines = new Uint16Array(MEDIA_MAX_LOC).fill(MEDIA_MAX_COLS);
+    maxMediaArea = panelArea(lines, MEDIA_MAX_COLS);
+  }
+  return maxMediaArea;
+}
 
 /**
  * Size of a panel that holds a picture rather than text.
@@ -110,7 +126,7 @@ export function mediaGeometry(aspect: number, pixels: number): PanelGeometry {
   // on the proportion: a 3927 by 697 plot asked for five times the room a
   // square image of the same pixel count did.
   const a = Math.max(0.1, Math.min(10, aspect));
-  const area = Math.max(1, pixels) * MEDIA_SCALE * MEDIA_SCALE;
+  const area = Math.min(mediaCeiling(), Math.max(1, pixels) * MEDIA_PIXEL_SHARE);
   const lines = Math.min(
     MEDIA_MAX_LINES,
     Math.max(MEDIA_MIN_LINES, Math.sqrt(area / a) / metrics.lineHeight),

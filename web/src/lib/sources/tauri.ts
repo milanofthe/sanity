@@ -214,8 +214,13 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       text,
       find,
       ready: () => text.ready(),
-      imageBytes: (path: string) =>
-        invoke<ArrayBuffer>('file_bytes', { path }).catch(() => null),
+      // An image is read as it is; a document is rasterised by the platform
+      // at the width the zoom asked for, first page only. See `pdf_page`.
+      imageBytes: (path: string, level: number) =>
+        (path.toLowerCase().endsWith('.pdf')
+          ? invoke<ArrayBuffer>('pdf_page', { path, width: level })
+          : invoke<ArrayBuffer>('file_bytes', { path })
+        ).catch(() => null),
     },
     keepView,
   );

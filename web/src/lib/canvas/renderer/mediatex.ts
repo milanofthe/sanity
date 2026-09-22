@@ -85,7 +85,7 @@ export class MediaTextures {
 
   constructor(
     private gl: WebGL2RenderingContext,
-    private fetchBytes: (path: string) => Promise<ArrayBuffer | null>,
+    private fetchBytes: (path: string, level: number) => Promise<ArrayBuffer | null>,
     /** Called when a picture has arrived, so the frame loop draws again: it
      *  parks when nothing moves, and an image that loaded into a parked canvas
      *  would appear on the next pan. */
@@ -138,7 +138,13 @@ export class MediaTextures {
     const slot = this.slots.get(path);
     if (slot) {
       slot.seen = this.clock;
-      if (slot.w >= level || slot.w >= MAX_LEVEL) return slot;
+      // Held larger than needed by more than two steps: decode it down. Zoom
+      // out of a directory of renders and the levels they were loaded at are
+      // sixteen times the pixels the panels now cover, which is memory held
+      // for a picture nobody is looking at closely any more. Two steps of
+      // slack, so a small pan does not re-decode anything.
+      const tooLarge = slot.w > level * 4 && slot.w > MIN_LEVEL;
+      if (!tooLarge && (slot.w >= level || slot.w >= MAX_LEVEL)) return slot;
     }
     this.request(path, level);
     return slot ?? null;
@@ -147,7 +153,7 @@ export class MediaTextures {
   private request(path: string, level: number): void {
     if (this.failed.has(path)) return;
     const already = this.loading.get(path);
-    if (already !== undefined && already >= level) return;
+    if (already === level) return;
     this.loading.set(path, level);
     this.queue = this.queue.filter((q) => q.path !== path);
     this.queue.push({ path, level });
@@ -170,7 +176,9 @@ export class MediaTextures {
   }
 
   private async decode(path: string, level: number): Promise<void> {
-    const bytes = await this.fetchBytes(path).catch(() => null);
+    // The level goes along: an image is resized while it is decoded, but a
+    // document has to be rasterised at a size, and only the source knows how.
+    const bytes = await this.fetchBytes(path, level).catch(() => null);
     if (!bytes || bytes.byteLength === 0) {
       this.failed.add(path);
       return;

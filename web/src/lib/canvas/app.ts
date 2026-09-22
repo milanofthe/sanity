@@ -81,7 +81,7 @@ export interface RepoSource {
    * follows the zoom, and only the renderer knows that. See
    * renderer/mediatex.ts.
    */
-  imageBytes?: (path: string) => Promise<ArrayBuffer | null>;
+  imageBytes?: (path: string, level: number) => Promise<ArrayBuffer | null>;
 }
 
 const UPLOAD_BUDGET_MS = 6;

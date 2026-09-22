@@ -14,7 +14,7 @@
 // that deploys the site runs this first, so the site is always built from the
 // heads of the four repositories rather than from whatever was checked in.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,6 +76,52 @@ function sourceFor(entry) {
   return dir;
 }
 
+/**
+ * Width a document's first page is rendered at for the demo.
+ *
+ * One size, unlike in the app, where the zoom picks it: the browser has no
+ * PDF renderer, so what the dump carries is what a visitor gets. 1000 pixels
+ * is legible at the zoom where a panel fills a third of the window and about
+ * 300 KB a page.
+ */
+const PAGE_WIDTH = 1000;
+
+/**
+ * Render the first page of every PDF the dump lists, next to the file's own
+ * name with `.png` after it.
+ *
+ * Through a separate process rather than a linked library: the renderers that
+ * are any good are AGPL or a ten megabyte binary, and calling a tool is not
+ * linking against it. `pdftoppm` on the build machine (poppler-utils), `sips`
+ * on macOS, and neither is required: without one, those panels keep their
+ * placeholder.
+ */
+function renderPages(dir, paths) {
+  if (paths.length === 0) return 0;
+  const has = (cmd) => spawnSync(cmd, ['--help'], { stdio: 'ignore' }).error === undefined;
+  const poppler = has('pdftoppm');
+  const sips = !poppler && has('sips');
+  if (!poppler && !sips) {
+    console.log(`  no pdftoppm or sips here, ${paths.length} documents keep their placeholder`);
+    return 0;
+  }
+  let done = 0;
+  for (const rel of paths) {
+    const src = join(dir, 'media', rel);
+    if (!existsSync(src)) continue;
+    const dst = `${src}.png`;
+    const run = poppler
+      // -singlefile writes <dst> without a page number suffix, and -scale-to-x
+      // takes the width while -1 keeps the page's own proportion.
+      ? ['pdftoppm', ['-png', '-r', '150', '-f', '1', '-l', '1', '-singlefile',
+        '-scale-to-x', String(PAGE_WIDTH), '-scale-to-y', '-1', src, dst.replace(/\.png$/, '')]]
+      : ['sips', ['-s', 'format', 'png', '--resampleWidth', String(PAGE_WIDTH), src, '--out', dst]];
+    const res = spawnSync(run[0], run[1], { stdio: 'ignore' });
+    if (res.status === 0 && existsSync(dst)) done++;
+  }
+  return done;
+}
+
 mkdirSync(out, { recursive: true });
 const index = [];
 
@@ -90,6 +136,11 @@ for (const entry of REPOS) {
   );
   const scan = JSON.parse(readFileSync(join(dir, 'scan.json'), 'utf8'));
   const lines = scan.files.reduce((n, f) => n + f.lineCount, 0);
+  const documents = scan.files
+    .filter((f) => f.media && f.media.kind === 'document')
+    .map((f) => f.path);
+  const pages = renderPages(dir, documents);
+  const pictures = scan.files.filter((f) => f.media).length;
   index.push({
     id: entry.id,
     label: entry.label,
@@ -99,6 +150,7 @@ for (const entry of REPOS) {
   });
   console.log(
     `${entry.id}: ${scan.files.length} files, ${lines.toLocaleString('en-US')} lines, ` +
+      `${pictures} pictures (${documents.length} documents, ${pages} rendered), ` +
       `${Math.round((Date.now() - t0) / 1000)} s`,
   );
 }

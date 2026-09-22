@@ -32,6 +32,9 @@ interface FixtureScan {
 let scan: FixtureScan | null = null;
 /** Which fixture is loaded, for the media URLs. */
 let loaded = '';
+/** Paths that are documents rather than images, which arrive as a rendered
+ *  page instead of as the file itself. */
+let documents = new Set<string>();
 let payloads = new Map<string, ArrayBuffer>();
 let texts: Record<string, string[]> = {};
 /** Resolves when texts.json has arrived, so anything that needs the text can
@@ -104,6 +107,9 @@ export async function loadFixture(
   ]);
   scan = s;
   payloads = unpack(blob);
+  documents = new Set(
+    s.files.filter((f) => f.media?.kind === 'document').map((f) => f.path),
+  );
   textsReady = fetch(`${base}/texts.json`)
     .then((r) => r.json() as Promise<Record<string, string>>)
     .then((t) => {
@@ -138,10 +144,15 @@ export function openFixture(app: CanvasApp, keepView = false): void {
     find,
     ready: () => textsReady,
     // The dump copies pictures in under media/, so a fetch is all it takes.
-    imageBytes: (path: string) =>
-      fetch(`${base(loaded)}/media/${path}`)
+    // A document is there as a pre-rendered first page, with `.png` after its
+    // own name: the browser has no PDF renderer and the dump was built on a
+    // machine that does. See scripts/demo.mjs.
+    imageBytes: (path: string) => {
+      const doc = documents.has(path);
+      return fetch(`${base(loaded)}/media/${path}${doc ? '.png' : ''}`)
         .then((r) => (r.ok ? r.arrayBuffer() : null))
-        .catch(() => null),
+        .catch(() => null);
+    },
   };
   app.open(source, keepView);
 }

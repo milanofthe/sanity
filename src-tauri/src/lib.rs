@@ -306,6 +306,68 @@ async fn file_bytes(path: String, state: State<'_, AppState>) -> Result<Response
     Ok(Response::new(bytes))
 }
 
+/// The first page of a PDF, rasterised, as PNG bytes.
+///
+/// Through the platform's own renderer rather than a PDF library: mupdf is
+/// AGPL and this is MIT, pdfium is a ten megabyte binary to carry, and what
+/// is needed here is one page. macOS has ImageIO behind `sips`, which reads
+/// the page at the width asked for in about 80 milliseconds.
+///
+/// Only the first page, deliberately. At the zoom this app is watched at, a
+/// document's cover is what tells you which document it is and when it was
+/// rebuilt, and everything past that is a reader, not a monitor.
+///
+/// Windows and Linux have no equivalent wired up yet, so the panel keeps its
+/// placeholder there; see issue #22.
+#[tauri::command]
+async fn pdf_page(path: String, width: u32, state: State<'_, AppState>) -> Result<Response, String> {
+    let root = {
+        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        repo.root.clone()
+    };
+    if root.as_os_str().is_empty() {
+        return Err("no folder open".into());
+    }
+    let full = root.join(&path);
+    let canonical = full.canonicalize().map_err(|e| e.to_string())?;
+    let root_canonical = root.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical.starts_with(&root_canonical) {
+        return Err("path outside the open folder".into());
+    }
+    let png = rasterise_first_page(&canonical, width.clamp(64, 2048))?;
+    Ok(Response::new(png))
+}
+
+#[cfg(target_os = "macos")]
+fn rasterise_first_page(path: &Path, width: u32) -> Result<Vec<u8>, String> {
+    // Into a temporary file rather than a pipe: sips writes images, not
+    // streams. Named by process and path so two windows cannot collide.
+    let mut hash: u64 = 1469598103934665603;
+    for b in path.as_os_str().as_encoded_bytes() {
+        hash = (hash ^ *b as u64).wrapping_mul(1099511628211);
+    }
+    let out = std::env::temp_dir().join(format!("sanity-page-{:x}-{width}.png", hash));
+    let status = Command::new("sips")
+        .args(["-s", "format", "png", "--resampleWidth"])
+        .arg(width.to_string())
+        .arg(path)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !status.status.success() {
+        return Err(String::from_utf8_lossy(&status.stderr).trim().to_string());
+    }
+    let bytes = std::fs::read(&out).map_err(|e| e.to_string())?;
+    std::fs::remove_file(&out).ok();
+    Ok(bytes)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn rasterise_first_page(_path: &Path, _width: u32) -> Result<Vec<u8>, String> {
+    Err("no PDF renderer on this platform yet".into())
+}
+
 /// Every payload concatenated, with an index, as raw bytes.
 ///
 /// Returned through `ipc::Response` rather than as JSON: the default IPC would
@@ -833,6 +895,7 @@ pub fn run() {
             repo_payloads,
             file_text,
             file_bytes,
+            pdf_page,
             find_text,
             startup,
             open_in_editor,

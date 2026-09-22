@@ -2648,6 +2648,7 @@ dependencies = [
 name = "sanity"
 version = "0.1.0"
 dependencies = [
+ "core-graphics",
  "notify",
  "sanity-core",
  "serde",

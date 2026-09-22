@@ -95,6 +95,11 @@ const MEDIA_FIT_SLACK = 0.95;
  *  worst that is ever paid for. */
 const MEDIA_MIN_EFFICIENCY = 0.1;
 
+/** How much larger than it asked for a picture's panel may come out, when the
+ *  slot allows. A quarter, so a row of pictures can use up a little slack
+ *  without any of them becoming the largest thing on the canvas. */
+const MEDIA_OVERSHOOT = 1.25;
+
 export interface FileEntry {
   path: string;
   lineCount: number;
@@ -625,8 +630,11 @@ function placeFile(f: FileNode, slot: IntRect): void {
     // makes up for it by asking for more area.
     const want = mediaWant(f.media);
     const a = want.w / Math.max(1, want.h);
-    const boxW = Math.min(w, h * a);
-    const boxH = Math.min(h, w / a);
+    // Never much larger than it asked for, however large the slot is. A
+    // picture has a size it is worth, and a slot that came out generous is
+    // not a reason to draw a diagram across a quarter of the canvas.
+    const boxW = Math.min(w, h * a, want.w * MEDIA_OVERSHOOT);
+    const boxH = Math.min(h, w / a, want.h * MEDIA_OVERSHOOT);
     f.geom = { ...want, w: boxW, h: boxH };
     f.w = boxW;
     f.h = boxH;
@@ -825,7 +833,12 @@ function fitPasses(
         // Hence the floor on the efficiency.
         const want = mediaWant(f.media);
         const a = want.w / Math.max(1, want.h);
-        const slot = f.slotW / Math.max(1, f.slotH);
+        // Before the first placement there is no slot, and taking one that
+        // does not exist as a proportion means dividing by the floor below:
+        // every picture asked for ten times its area on pass one and kept it,
+        // since the correction only ever grows. Which is how a 4122 by 1720
+        // plot ended up in a panel of 5418 by 2279.
+        const slot = f.slotH > 0 ? f.slotW / f.slotH : a;
         const efficiency = Math.max(MEDIA_MIN_EFFICIENCY, Math.min(a / slot, slot / a));
         f.area = Math.max(f.area, (want.w * want.h) / efficiency) * 1.06;
         continue;
