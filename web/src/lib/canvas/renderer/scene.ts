@@ -2077,7 +2077,8 @@ export class Scene {
     // While the camera is moving, one of the fixed levels: rasterising a new
     // atlas per zoom step would be a canvas of 95 glyphs every frame. Once it
     // is still, the exact size, which is what makes the text sharp.
-    const level = this.atlas.pick(em * dpr, this.cameraStill && this.exactGlyphAtlas);
+    const exact = this.cameraStill && this.exactGlyphAtlas;
+    const level = this.atlas.pick(em * dpr, exact);
 
     gl.useProgram(this.progGlyph);
     gl.uniformMatrix3fv(this.uGlyph.uView, false, this.view);
@@ -2088,11 +2089,32 @@ export class Scene {
       level.cellW / level.texW,
       level.cellH / level.texH,
     );
-    // The cell in device pixels, and the world-space em it was rasterised
-    // for, so the shader can put a texel on a pixel.
+    // The cell in device pixels, and the world-space em that stands for it:
+    // a glyph asking for that em is drawn as the cell, texel on pixel, and one
+    // asking for less, in a panel still animating in, is scaled down with it.
+    //
+    // For an exact atlas that em is the one every panel at rest asks for, not
+    // the size the atlas was built at. The two differ by the rounding to a
+    // whole pixel, and scaling by that difference is what made a third of all
+    // zoom levels soft: an atlas built at 12 for an em of 11.63 came out 16
+    // pixels tall from a cell of 17, so every row of every glyph was
+    // resampled. Rounded, the glyph is up to half a pixel larger or smaller
+    // than the em, which nobody can see; resampled, it is soft, which anybody
+    // can. Measured over twenty zoom levels from 8 to 29 pixels per line, as
+    // the share of edge pixels in mid-ramp, mean and worst:
+    //
+    //                                  dpr 1         dpr 2
+    //   scaled by the rounding       16.6  30.7    12.4  15.6
+    //   atlas at the fractional em   15.2  21.8    12.0  16.0
+    //   rounded, drawn 1:1           13.9  17.3    11.8  13.6
     const scalePx = (pxPerLine / metrics.lineHeight) * dpr;
     gl.uniform2f(this.uGlyph.uBoxPx, level.cellW, level.cellH);
-    gl.uniform1f(this.uGlyph.uEmWorld, level.size / Math.max(1e-6, scalePx));
+    gl.uniform1f(
+      this.uGlyph.uEmWorld,
+      exact
+        ? metrics.charWidth / this.atlas.advanceRatio
+        : level.size / Math.max(1e-6, scalePx),
+    );
     gl.uniform1f(this.uGlyph.uGridCols, GlyphAtlas.gridCols);
     gl.uniform2f(this.uGlyph.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.activeTexture(gl.TEXTURE0);

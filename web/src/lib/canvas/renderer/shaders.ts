@@ -67,7 +67,6 @@ void main() {
   oColor = vec4(mix(vFill.rgb, vBorder.rgb, onBorder), mix(vFill.a, 1.0, onBorder));
 }`;
 
-/** A file's overview texture, one quad per code column. */
 /**
  * A picture: one quad, one texture, one draw call.
  *
@@ -97,6 +96,7 @@ void main() {
   oColor = vec4(t.rgb, t.a * uFade);
 }`;
 
+/** A file's overview texture, one quad per code column. */
 export const overviewVS = `${HEAD}
 in vec2 aCorner;
 in vec4 aRect;
@@ -215,7 +215,7 @@ uniform mat3 uView;
 uniform vec3 uKind[16];
 uniform vec2 uCell;      // cell size in atlas uv
 uniform vec2 uBoxPx;      // the atlas cell, in device pixels
-uniform float uEmWorld;   // the em size that cell was rasterised for, in world units
+uniform float uEmWorld;   // the em that is drawn as exactly the cell, in world units
 uniform float uGridCols;
 // Drawing buffer size in device pixels, for putting a glyph on the pixel grid.
 uniform vec2 uViewport;
@@ -227,30 +227,17 @@ void main() {
   vUv = (cell + aCorner) * uCell;
   vColor = vec4(uKind[int(aPosGlyph.w)], aSizeFade.y);
 
-  // The size comes from the instance, so a panel animating in scales its text
-  // with it. The position is put on a whole device pixel, and the atlas is
-  // rasterised at the size the zoom asks for once the camera is still, so at
-  // rest a texel lands on a pixel and the text is as sharp as the browser's
-  // own. A glyph landing on a half pixel is read through bilinear filtering
-  // at every edge: measured at 14 pixels per line, half the ink sat at an
-  // intermediate tone where DOM text puts 14 percent of it.
+  // Size and position both on the pixel grid. The quad is the atlas cell,
+  // scaled by the em this instance asks for against the em that stands for
+  // the cell. A panel at rest asks for exactly that, so the quad is the cell
+  // and a texel lands on a pixel; a panel animating in asks for less and
+  // scales with it. A glyph landing on a half pixel is read through bilinear
+  // filtering at every edge: measured at 14 pixels per line, half the ink sat
+  // at an intermediate tone where DOM text puts 14 percent of it.
   //
   // The whole quad is shifted by one offset rather than each corner being
   // rounded on its own: rounding corners changes a glyph's width by up to a
   // pixel, which is a wobble rather than a sharpening.
-  // Size and position both on the pixel grid. The size still comes from the
-  // instance, so a panel animating in scales its text with it, but it is
-  // rounded to whole device pixels, and the atlas is rasterised at the size
-  // the zoom asks for once the camera is still. At rest a texel therefore
-  // lands on a pixel.
-  //
-  // The whole quad is shifted by one offset rather than each corner being
-  // rounded on its own: rounding corners changes a glyph's width by up to a
-  // pixel, which is a wobble rather than a sharpening.
-  // The atlas cell, scaled by what this instance asks for against what the
-  // cell was made for. A panel at rest asks for exactly that, so the quad is
-  // the cell and a texel is a pixel; a panel animating in asks for less and
-  // scales with it.
   vec2 boxPx = max(vec2(1.0), floor(uBoxPx * (aSizeFade.x / uEmWorld) + 0.5));
   vec2 originClip = (uView * vec3(aPosGlyph.xy, 1.0)).xy;
   vec2 originPx = floor((originClip * 0.5 + 0.5) * uViewport + 0.5);
