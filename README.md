@@ -10,6 +10,9 @@ the code. Saves are picked up live and the lines that changed are marked.
 It is meant to run in the background as a monitor, including while coding
 agents work in the repository.
 
+Try it on four public repositories, in the browser, no install:
+[sanity.milanrother.com](https://sanity.milanrother.com/).
+
 ![the whole project at once](assets/screenshot-project.png)
 
 ## What it does
@@ -58,6 +61,11 @@ agents work in the repository.
   placeholders of a directory are packed into a grid of named chips rather than
   put through the treemap, since a placeholder has a fixed size and carries no
   information about how large its file is.
+- **Export to PNG**, from the right click menu: the view, or the whole project,
+  at 3840 by 2160. Not a screenshot of the window, since level of detail
+  follows from pixels per line: the same rect rendered into a 4K frame draws at
+  1.5 pixels per line where the window had 0.5, so the image has three times
+  the detail in it rather than three times the pixels. Takes about 130 ms.
 - Read-only. A panel's header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
   `$EDITOR`, or the platform handler.
 
@@ -107,6 +115,25 @@ under the pointer.
 `SANITY_WATCH_LOG=1` puts the watcher's batches on stderr, which is the only
 way to see them: a Tauri window has no console a terminal can read.
 
+## The web demo
+
+```sh
+npm run demo           # clone the four repositories and dump them
+npm run dev            # http://localhost:5183
+```
+
+The site at [sanity.milanrother.com](https://sanity.milanrother.com/) is this
+app with four public repositories baked in, read over HTTP rather than from
+disk: pathsim, rslab, rapidfem and nanospice. Same scan format, same decode,
+same layout, same renderer. What it cannot do is watch, since a dump is a
+snapshot of a head and there is no folder behind it.
+
+The dumps are generated rather than committed, and `.github/workflows/pages.yml`
+runs that command before it builds, so the site is made from the heads of those
+four repositories and rebuilt weekly. The text of a repository is fetched after
+its structure: pathsim's canvas is up after 0.4 MB and 0.9 seconds, while the
+4 MB of text arrives behind it.
+
 ## Checks
 
 ```sh
@@ -114,7 +141,7 @@ npm run check-all
 ```
 
 Type checks, clippy with warnings denied, 106 TypeScript tests and 66 Rust
-tests, then thirteen checks that drive a real browser and assert on pixels: the
+tests, then fifteen checks that drive a real browser and assert on pixels: the
 layout invariants, the dropdown geometry, that borders do not shimmer under a
 subpixel pan, that a change flashes its panel and then stops, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
@@ -124,8 +151,10 @@ that a search dims the project, lights its matches and flies to a line, and
 that every theme is complete, legible and its own rather than falling back to
 Mariana for whatever its block forgot, and that the text on screen is the text
 in the file, character for character, compared against the bytes on disk rather
-than against the canvas's own copy of them. The
-layout case list includes a project two thirds reduced to placeholders. Last, a
+than against the canvas's own copy of them, and that the
+demo opens every repository it lists with its text in place, and that a PNG
+export is a 4K picture of the project that leaves the canvas as it found it.
+The layout case list includes a project two thirds reduced to placeholders. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.
 

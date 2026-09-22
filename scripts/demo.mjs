@@ -21,7 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'web', 'public', 'demo');
-const work = join(root, 'target', 'demo-src');
+// Not under target/: Swatinem/rust-cache walks that tree in the workflow and
+// reported a failure for every directory of a clone it had listed and then not
+// found, which is noise on a green run.
+const work = join(root, '.demo-src');
 
 /**
  * The four, in the order the menu shows them.
