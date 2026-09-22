@@ -79,8 +79,9 @@ Try it on four public repositories, in the browser, no install:
 
 ## Measured
 
-On [pathsim](https://github.com/pathsim/pathsim), 328 files and 71,278 lines
-over 11.6 MB, release build, Apple M3.
+On [pathsim](https://github.com/pathsim/pathsim), 328 files and 64,377 lines
+over 11.6 MB, release build, Apple M3. (It was 71,278 before notebooks were
+read as their cells; the difference was JSON and base64.)
 
 | | |
 |---|---|
