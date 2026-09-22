@@ -147,8 +147,10 @@ if (within < shapes.length * 0.8) {
   fail(`only ${within} of ${shapes.length} panels have their picture's proportion`);
 }
 
-// The resolution follows the zoom: zoomed out, the same picture is held at a
-// smaller level than it was up close.
+// What the cache holds across a zoom. Levels are not given back the moment a
+// panel shrinks: decoding a picture down costs a decode to save memory nobody
+// is short of, so it only happens under budget pressure, and the case that
+// matters is the one below, with everything on screen at once.
 const levels = await page.evaluate(async () => {
   const app = window.__sanity.app;
   const mediaOf = () => app.scene.media.stats().bytes;

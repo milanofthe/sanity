@@ -74,12 +74,12 @@ console.log(
     `opening   ${opening.long.length} long tasks, ${sum(opening.long)} ms held in total, ` +
     `worst ${Math.max(0, ...opening.long)} ms`,
 );
-console.log(
-  `decoded   ${opening.media.decodes} times, ` +
-    `${(opening.media.fetched / 1048576).toFixed(1)} MB of sources, ` +
-    `${Math.round(opening.media.decodeMs)} ms in decode, ` +
-    `${(opening.media.bytes / 1048576).toFixed(1)} MB held`,
-);
+const cost = (m) =>
+  `${m.decodes} decodes, ${(m.fetched / 1048576).toFixed(1)} MB read, ` +
+  `${Math.round(m.decodeMs)} ms decoding (worst ${m.worstDecode.toFixed(0)}), ` +
+  `${Math.round(m.uploadMs)} ms uploading (worst ${m.worstUpload.toFixed(0)}), ` +
+  `${(m.bytes / 1048576).toFixed(1)} MB held`;
+console.log(`opened    ${cost(opening.media)}`);
 
 /** The app's own zoom sweep, which pans and zooms across the whole project. */
 const sweep = async () => {
@@ -91,11 +91,7 @@ const sweep = async () => {
 const withPictures = await sweep();
 console.log(`pictures  ${withPictures.line.replace('bench over ', '')}`);
 const swept = withPictures.after;
-console.log(
-  `          ${swept.decodes - opening.media.decodes} decodes during the sweep, ` +
-    `${((swept.fetched - opening.media.fetched) / 1048576).toFixed(1)} MB read, ` +
-    `${Math.round(swept.decodeMs - opening.media.decodeMs)} ms in decode`,
-);
+console.log(`swept     ${cost(swept)} (running totals)`);
 
 // The same sweep with the cache detached: the panels keep their placeholders,
 // everything else about the scene is identical, so the difference between the

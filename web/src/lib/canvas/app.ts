@@ -1027,6 +1027,7 @@ export class CanvasApp {
       const cpu: number[] = [];
       const wall: number[] = [];
       let seen = this.drawn;
+      let last = 0;
       const t0 = performance.now();
       const fitZoom = this.layout
         ? Math.min(this.cam.vw / this.layout.root.w, this.cam.vh / this.layout.root.h)
@@ -1065,7 +1066,13 @@ export class CanvasApp {
         if (this.drawn !== seen) {
           seen = this.drawn;
           cpu.push(this.stats.cpuMs);
-          wall.push(this.stats.frameMs);
+          // The gap since the frame before, raw. `stats.frameMs` is smoothed
+          // over the last frames, so one long pause before the sweep starts
+          // decays through thirty of its samples and shows up as a p99 that
+          // never happened.
+          const now = performance.now();
+          if (last > 0) wall.push(now - last);
+          last = now;
         }
         requestAnimationFrame(step);
       };

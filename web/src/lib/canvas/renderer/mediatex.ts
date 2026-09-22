@@ -20,6 +20,12 @@
 //   off thread  `createImageBitmap` decodes and resizes without the main
 //               thread, and at most a couple run at once, so opening a
 //               project full of images does not stall the first frames.
+//   paced       and spaced out in time, largest on screen first, and not at
+//               all while the camera is moving. Measured on a folder of 119
+//               screenshots in the engine the desktop app ships (WKWebView,
+//               not Chromium): decoding them costs 4.6 seconds, which as a
+//               burst is the window not answering and spread out is pictures
+//               arriving one after another.
 
 /** Bytes held for image content, over all levels. 64 MB is about four full
  *  screen renders at 2048 wide, which is more than a canvas ever shows at
@@ -35,6 +41,17 @@ const MAX_LEVEL = 2048;
 /** Decodes in flight. Two, because a decode is off-thread but the upload that
  *  follows is not, and a burst of them shows up as dropped frames. */
 const MAX_IN_FLIGHT = 2;
+
+/** Bounds on the spacing between decode starts. The floor is a frame, so a
+ *  handful of small pictures still arrive at once; the ceiling keeps a folder
+ *  of very large ones from taking minutes to fill in. */
+const MIN_GAP_MS = 16;
+const MAX_GAP_MS = 200;
+
+/** How long the camera has to be still before decoding resumes. A tenth of a
+ *  second: long enough that a pan does not start work it will throw away,
+ *  short enough that letting go of the trackpad feels immediate. */
+const QUIET_MS = 100;
 
 interface Slot {
   tex: WebGLTexture;
@@ -93,13 +110,6 @@ function translucent(bitmap: ImageBitmap): boolean {
   }
 }
 
-/** Rounds a wanted width up to a level, inside the bounds: a picture should
- *  never be drawn from less than it needs. */
-export function levelFor(width: number): number {
-  const w = Math.max(MIN_LEVEL, Math.min(MAX_LEVEL, width));
-  return Math.min(MAX_LEVEL, 2 ** Math.ceil(Math.log2(w)));
-}
-
 /** And down, for a ceiling: rounding a budget *up* to the next power of two
  *  doubles the area it was supposed to cap, which put 84 MB in a 64 MB
  *  cache. */
@@ -108,11 +118,44 @@ export function levelUnder(width: number): number {
   return Math.max(MIN_LEVEL, 2 ** Math.floor(Math.log2(w)));
 }
 
+/** How far a picture may be drawn from under its own size before the next
+ *  level up is worth fetching. A panel 300 pixels wide reads the same from a
+ *  256 texture and a 512 one, and the smaller costs a quarter of the memory
+ *  and a quarter of the upload. */
+const DETAIL_SLACK = 1.25;
+
+/**
+ * The level to fetch for a panel this wide on screen.
+ *
+ * Rounding up meant a panel one pixel over a power of two paid for four times
+ * the texture it could show. Rounding down with slack puts a level between
+ * five eighths and one and a quarter of the panel's own width, which a mip
+ * chain resolves into softness rather than into aliasing, and costs a quarter
+ * of the memory and a quarter of the upload in the case that used to round up.
+ */
+export function levelAt(width: number): number {
+  return levelUnder(width * DETAIL_SLACK);
+}
+
 export class MediaTextures {
   private slots = new Map<string, Slot>();
   /** Level being decoded per path, so the same request is not queued twice. */
   private loading = new Map<string, number>();
-  private queue: { path: string; level: number }[] = [];
+  /** Asked for but not started, by path: the level wanted and how wide the
+   *  panel is on screen, which is the order they are started in. */
+  private queued = new Map<string, { level: number; width: number }>();
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private lastStart = 0;
+  /** Smoothed cost of a decode, which is what the spacing follows. Seeded at
+   *  a WebKit-ish value so the first few starts are already paced. */
+  private decodeEma = 40;
+  /** When the camera last moved. Nothing is started while it is, because a
+   *  decode that lands mid-pan is a stutter and its level is stale by the time
+   *  it arrives. */
+  private movedAt = 0;
+  /** Set while an export waits on the pictures: then the pacing is in the way
+   *  and everything outstanding should run as fast as it can. */
+  private hurry = false;
   private inFlight = 0;
   private held = 0;
   private clock = 0;
@@ -129,6 +172,9 @@ export class MediaTextures {
   private decodes = 0;
   private fetched = 0;
   private decodeMs = 0;
+  private uploadMs = 0;
+  private worstUpload = 0;
+  private worstDecode = 0;
 
   private gl: WebGL2RenderingContext;
   private fetchBytes: (path: string, level: number) => Promise<ArrayBuffer | null>;
@@ -153,12 +199,22 @@ export class MediaTextures {
     this.budget = budget;
   }
 
-  /** A new frame: the clock eviction order is measured in, and the count the
-   *  budget is divided between. */
-  tick(): void {
+  /**
+   * A new frame: the clock eviction order is measured in, the count the budget
+   * is divided between, and whether the camera moved into it.
+   *
+   * `moving` is the gate on starting work. The renderer asks for every picture
+   * on screen every frame, so a pan across a directory of renders would queue
+   * the whole directory at one level and then at the next; waiting for the
+   * camera to come to rest means a pan queues nothing it will not still want
+   * when it stops.
+   */
+  tick(moving = false): void {
     this.clock++;
     this.askedBefore = Math.max(1, this.askedNow);
     this.askedNow = 0;
+    if (moving) this.movedAt = performance.now();
+    this.schedule();
   }
 
   /**
@@ -190,49 +246,96 @@ export class MediaTextures {
    * rather than like loading.
    *
    * `aspect` is the picture's own width over height, used to turn the budget
-   * share into a level rather than assuming the picture is square.
+   * share into a level rather than assuming the picture is square. `sourceW`
+   * is how wide the file actually is, so a 48 pixel icon is never decoded to
+   * 256 and held as eight times its own size; a document leaves it out,
+   * because a page has no native resolution to be capped at.
    */
-  want(path: string, width: number, aspect = 1): Drawable | null {
+  want(path: string, width: number, aspect = 1, sourceW = Infinity): Drawable | null {
     this.askedNow++;
-    const level = Math.min(levelFor(width), this.cap(aspect));
+    const level = Math.min(levelAt(width), this.cap(aspect), Math.max(1, sourceW));
     const slot = this.slots.get(path);
     if (slot) {
       slot.seen = this.clock;
-      // Held larger than needed by more than two steps: decode it down. Zoom
-      // out of a directory of renders and the levels they were loaded at are
-      // sixteen times the pixels the panels now cover, which is memory held
-      // for a picture nobody is looking at closely any more. Two steps of
-      // slack, so a small pan does not re-decode anything.
-      const tooLarge = slot.w > level * 4 && slot.w > MIN_LEVEL;
+      // Decoding a picture back down is memory saved and a decode spent, so it
+      // only happens under pressure. Held four times too large used to be
+      // enough on its own, which meant zooming out of a directory re-read
+      // every picture in it to hold less of something nobody was looking at.
+      const tooLarge =
+        this.held > this.budget * 0.8 && slot.w > level * 4 && slot.w > MIN_LEVEL;
       if (!tooLarge && (slot.w >= level || slot.w >= MAX_LEVEL)) return slot;
     }
-    this.request(path, level);
+    this.request(path, level, width);
     return slot ?? null;
   }
 
-  private request(path: string, level: number): void {
+  private request(path: string, level: number, width: number): void {
     if (this.failed.has(path)) return;
-    const already = this.loading.get(path);
-    if (already === level) return;
-    this.loading.set(path, level);
-    this.queue = this.queue.filter((q) => q.path !== path);
-    this.queue.push({ path, level });
-    this.pump();
+    if (this.loading.get(path) === level) return;
+    this.queued.set(path, { level, width });
+    this.schedule();
+  }
+
+  /** Milliseconds to leave between decode starts: half again what the last
+   *  ones cost, so a folder of large screenshots paces itself wider than a
+   *  folder of icons does, inside fixed bounds. */
+  private gap(): number {
+    return Math.min(MAX_GAP_MS, Math.max(MIN_GAP_MS, this.decodeEma * 1.5));
+  }
+
+  /**
+   * Ask for the next start at the time it is due.
+   *
+   * On a timer rather than on the frame loop, because the frame loop parks
+   * when the picture holds still, and a queue drained by frames would stop
+   * with the canvas: the pictures that are left are exactly the ones nobody is
+   * moving the camera for.
+   */
+  private schedule(): void {
+    if (this.timer !== null) return;
+    if (this.queued.size === 0 || this.inFlight >= MAX_IN_FLIGHT) return;
+    const now = performance.now();
+    const quiet = this.hurry ? 0 : Math.max(0, this.movedAt + QUIET_MS - now);
+    const spaced = this.hurry ? 0 : Math.max(0, this.lastStart + this.gap() - now);
+    this.timer = setTimeout(
+      () => {
+        this.timer = null;
+        this.pump();
+      },
+      Math.max(quiet, spaced),
+    );
   }
 
   private pump(): void {
-    while (this.inFlight < MAX_IN_FLIGHT && this.queue.length > 0) {
-      // Newest request first: it is the one the viewer is looking at, and a
-      // queue drained in arrival order spends its time on panels that have
-      // since been panned away from.
-      const next = this.queue.pop()!;
-      this.inFlight++;
-      void this.decode(next.path, next.level).finally(() => {
-        this.inFlight--;
-        this.loading.delete(next.path);
-        this.pump();
-      });
+    const now = performance.now();
+    if (!this.hurry && (now - this.movedAt < QUIET_MS || now - this.lastStart < this.gap())) {
+      this.schedule();
+      return;
     }
+    while (this.inFlight < MAX_IN_FLIGHT && this.queued.size > 0) {
+      // Widest panel on screen first: that is the picture a viewer is most
+      // likely looking at, and the one whose placeholder is largest.
+      let path = '';
+      let best = -1;
+      for (const [p, q] of this.queued) {
+        if (q.width > best) {
+          best = q.width;
+          path = p;
+        }
+      }
+      const next = this.queued.get(path)!;
+      this.queued.delete(path);
+      this.loading.set(path, next.level);
+      this.inFlight++;
+      this.lastStart = performance.now();
+      void this.decode(path, next.level).finally(() => {
+        this.inFlight--;
+        this.loading.delete(path);
+        this.schedule();
+      });
+      if (!this.hurry) break;
+    }
+    this.schedule();
   }
 
   private async decode(path: string, level: number): Promise<void> {
@@ -258,8 +361,14 @@ export class MediaTextures {
       this.failed.add(path);
       return;
     }
-    this.decodeMs += performance.now() - started;
+    const took = performance.now() - started;
+    this.decodeMs += took;
+    this.decodeEma = this.decodeEma * 0.7 + took * 0.3;
+    this.worstDecode = Math.max(this.worstDecode, took);
+    const up = performance.now();
     this.upload(path, bitmap);
+    this.uploadMs += performance.now() - up;
+    this.worstUpload = Math.max(this.worstUpload, performance.now() - up);
     bitmap.close();
     this.onLoaded();
   }
@@ -340,26 +449,41 @@ export class MediaTextures {
     decodes: number;
     fetched: number;
     decodeMs: number;
+    uploadMs: number;
+    worstUpload: number;
+    worstDecode: number;
   } {
     return {
       count: this.slots.size,
       bytes: this.held,
-      loading: this.inFlight + this.queue.length,
+      loading: this.inFlight + this.queued.size,
       decodes: this.decodes,
       fetched: this.fetched,
       decodeMs: this.decodeMs,
+      uploadMs: this.uploadMs,
+      worstUpload: this.worstUpload,
+      worstDecode: this.worstDecode,
     };
   }
 
   /** Resolves when nothing is in flight, so an export waits for its pictures
    *  rather than writing the placeholders. */
   async settled(): Promise<void> {
-    while (this.inFlight > 0 || this.queue.length > 0) {
-      await new Promise((r) => setTimeout(r, 16));
+    this.hurry = true;
+    try {
+      while (this.inFlight > 0 || this.queued.size > 0) {
+        this.pump();
+        await new Promise((r) => setTimeout(r, 16));
+      }
+    } finally {
+      this.hurry = false;
     }
   }
 
   dispose(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.queued.clear();
     for (const slot of this.slots.values()) this.gl.deleteTexture(slot.tex);
     this.slots.clear();
     this.held = 0;

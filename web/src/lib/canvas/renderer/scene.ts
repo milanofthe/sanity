@@ -287,6 +287,9 @@ export class Scene {
   /** Pictures placed this frame, drawn after the panels so they sit on top of
    *  their own background. */
   private imageDraws: { tex: WebGLTexture; x: number; y: number; w: number; h: number; fade: number }[] = [];
+  /** Where the camera was in the previous frame, to tell a moving view from a
+   *  still one; see the call to `media.tick`. */
+  private camWas = { x: 0, y: 0, zoom: 0 };
   private progSpan: WebGLProgram;
   private progGlyph: WebGLProgram;
   private uRect: Record<string, WebGLUniformLocation | null>;
@@ -1047,8 +1050,15 @@ export class Scene {
     this.glyphs.reset();
     this.imageDraws.length = 0;
     // The clock eviction order is measured in, and the device ratio the
-    // picture resolution is asked for in; both are per frame.
-    this.media?.tick();
+    // picture resolution is asked for in; both are per frame. Whether the
+    // camera moved into this frame goes with it: picture decoding waits for
+    // the view to come to rest rather than chasing a pan.
+    const moving =
+      cam.x !== this.camWas.x || cam.y !== this.camWas.y || cam.zoom !== this.camWas.zoom;
+    this.camWas.x = cam.x;
+    this.camWas.y = cam.y;
+    this.camWas.zoom = cam.zoom;
+    this.media?.tick(moving);
     this.dpr = cam.dpr;
     for (const b of this.overviewByChunk.values()) b.reset();
 
@@ -1368,7 +1378,8 @@ export class Scene {
     // screen pixels, not by world units: the same panel needs eight times the
     // texture in a 4K export that it needs in the window.
     const onScreen = w * zoom * this.dpr;
-    const held = this.media?.want(n.path, onScreen, mw / mh) ?? null;
+    const held =
+      this.media?.want(n.path, onScreen, mw / mh, m.kind === 'image' ? mw : Infinity) ?? null;
 
     // What goes under it. Most of what a repository holds in pictures is ink
     // with nothing behind it: a PDF page comes out of ImageIO as black type on

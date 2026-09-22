@@ -30,6 +30,7 @@
 		"demo-check": "node web/scripts/demo-check.mjs",
 		"image-check": "node web/scripts/image-check.mjs",
 		"media-check": "node web/scripts/media-check.mjs",
+		"media-perf": "node web/scripts/media-perf.mjs",
 		"theme-check": "node web/scripts/theme-check.mjs",
 		"glyph-check": "node web/scripts/glyph-check.mjs",
 		"icons": "node web/scripts/make-icon.mjs && node web/scripts/render-svg.mjs web/public/favicon.svg web/public/favicon 32 && node web/scripts/render-svg.mjs assets/sanity-icon.svg /tmp/sanity-app-icon 1024 && npx tauri icon /tmp/sanity-app-icon.png -o src-tauri/icons && rm -rf src-tauri/icons/android src-tauri/icons/ios src-tauri/icons/Square*.png src-tauri/icons/StoreLogo.png"

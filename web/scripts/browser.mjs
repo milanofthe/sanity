@@ -5,7 +5,7 @@
 // has something on it. That preamble was copied into eight scripts, so a fix
 // to any of it reached one of them.
 
-import { chromium } from 'playwright';
+import { chromium, webkit } from 'playwright';
 import { existsSync, readdirSync } from 'node:fs';
 
 export const base = process.env.SANITY_URL ?? 'http://localhost:5183';
@@ -45,9 +45,16 @@ export function chromiumPath() {
  * SwiftShader and measures the CPU instead.
  */
 export async function launch({ args = [], headless } = {}) {
+  const head = headless ?? process.env.SANITY_HEADED !== '1';
+  // `SANITY_ENGINE=webkit` runs a check on the engine the desktop app
+  // actually ships: Tauri draws into WKWebView on macOS, while every check
+  // here defaults to Chromium. The two differ on things that matter, decode
+  // being the clearest: a picture resized while decoding costs two to four
+  // times as much in WebKit, and that is the app's number, not Chromium's.
+  if (process.env.SANITY_ENGINE === 'webkit') return webkit.launch({ headless: head });
   return chromium.launch({
     executablePath: chromiumPath(),
-    headless: headless ?? process.env.SANITY_HEADED !== '1',
+    headless: head,
     args: ['--use-gl=angle', '--use-angle=metal', ...args],
   });
 }

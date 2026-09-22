@@ -2,18 +2,28 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { levelFor, levelUnder } from './mediatex.ts';
+import { levelAt, levelUnder } from './mediatex.ts';
 
-// The two roundings, which are not the same rounding. A cache held 84 MB in a
-// 64 MB budget because one was used for both: a request rounds up, so a
-// picture is never drawn from less than it needs, and a ceiling rounds down,
-// or it doubles the area it was meant to cap.
-test('a request for a picture rounds up to a level', () => {
-  assert.equal(levelFor(1), 32);
-  assert.equal(levelFor(33), 64);
-  assert.equal(levelFor(256), 256);
-  assert.equal(levelFor(700), 1024);
-  assert.equal(levelFor(1e9), 2048);
+// What a panel of a given width on screen is fetched at. Rounding up meant a
+// panel one pixel past a power of two paid for four times the texture it could
+// show; rounding down with a quarter of slack means a picture is at worst a
+// fifth under its own resolution, which a mip chain turns into softness rather
+// than into aliasing.
+test('a panel is fetched at the level under its own width', () => {
+  assert.equal(levelAt(1), 32);
+  assert.equal(levelAt(300), 256);
+  assert.equal(levelAt(256), 256);
+  assert.equal(levelAt(700), 512);
+  assert.equal(levelAt(1e9), 2048);
+});
+
+// The floor that rounding down puts under picture quality. Levels are powers
+// of two and the slack is a quarter, so the worst case is a level 1.6 times
+// under its panel, which is five eighths of the panel's own resolution.
+test('a level is never under five eighths of the panel it is drawn in', () => {
+  for (let w = 32; w < 2048; w += 13) {
+    assert.ok(levelAt(w) * 1.6 >= Math.min(w, 2048), `${w}: ${levelAt(w)}`);
+  }
 });
 
 test('a ceiling on a picture rounds down to a level', () => {
@@ -23,9 +33,9 @@ test('a ceiling on a picture rounds down to a level', () => {
   assert.equal(levelUnder(1e9), 2048);
 });
 
-test('a ceiling is never above what the same width would request', () => {
+test('a ceiling is never above the level the same width is fetched at', () => {
   for (let w = 1; w < 4096; w += 7) {
-    assert.ok(levelUnder(w) <= levelFor(w), `${w}: ${levelUnder(w)} > ${levelFor(w)}`);
+    assert.ok(levelUnder(w) <= levelAt(w), `${w}: ${levelUnder(w)} > ${levelAt(w)}`);
   }
 });
 
