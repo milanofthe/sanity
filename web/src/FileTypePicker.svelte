@@ -89,11 +89,16 @@
 				<Switch
 					checked={project.includeIgnored}
 					disabled={project.demo || project.synthetic}
-					label="Include the {n(project.ignoredTotal)} files git ignores"
+					label="Show the {n(project.ignoredTotal)} files git ignores"
 					onchange={(on: boolean) => onignored?.(on)}
 				/>
-				{#if project.includeIgnored && project.ignoredShown < project.ignoredTotal}
-					<span class="why">taking the first {n(project.ignoredShown)}</span>
+				{#if project.includeIgnored}
+					<span class="why">
+						as placeholders, their contents are not read{project.ignoredShown <
+						project.ignoredTotal
+							? `, first ${n(project.ignoredShown)} of them`
+							: ''}
+					</span>
 				{/if}
 			{/if}
 		</div>

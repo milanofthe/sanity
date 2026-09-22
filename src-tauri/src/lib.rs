@@ -20,6 +20,10 @@ use tauri::{Emitter, Manager, State};
 #[derive(Debug, Clone, Serialize)]
 pub struct FileInfo {
     pub path: String,
+    /// Set when git ignores this file, which is how the frontend knows to
+    /// draw it as a placeholder: the contents were never read.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ignored: bool,
     #[serde(rename = "lineCount")]
     pub line_count: u32,
     /// 90th percentile of line widths: what the panel is *sized* for. The
@@ -203,7 +207,7 @@ async fn scan_repo(
         return Err(format!("not a directory: {path}"));
     }
 
-    let mut listed = scan::list_files(&root).map_err(|e| e.to_string())?;
+    let listed = scan::list_files(&root).map_err(|e| e.to_string())?;
     // What git ignores is a filter rather than a wall: counted always, taken
     // when asked for. Counting is one `ls-files`, 136 milliseconds on the
     // 83,014 files this repository ignores, against the hundreds the scan
@@ -214,7 +218,6 @@ async fn scan_repo(
         (Vec::new(), scan::git_ignored_files(&root, 0).1)
     };
     let ignored_shown = extra.len() as u32;
-    listed.extend(extra);
 
     let mut files = Vec::with_capacity(listed.len());
     let mut payloads = Vec::with_capacity(listed.len());
@@ -240,6 +243,12 @@ async fn scan_repo(
         line_counts.insert(rel.clone(), info.line_count);
         stamps.insert(rel.clone(), (info.mtime, info.byte_len));
         data.push((rel.clone(), data_one));
+    }
+
+    // The ignored ones go on the end as placeholders: no payload, no text, no
+    // read. See `ignored_info`.
+    for rel in &extra {
+        files.push(ignored_info(rel));
     }
 
     for (rel, data_one) in &data {
@@ -315,10 +324,31 @@ fn groups_from(files: &[FileInfo]) -> Vec<GroupInfo> {
 fn file_info(rel: &str, data: &FileData, info: &ScannedFile) -> FileInfo {
     FileInfo {
         path: rel.to_string(),
+        ignored: false,
         line_count: info.line_count,
         max_cols: width_percentile(&data.line_cols, 0.9),
         clip_cols: info.max_cols,
         media: info.media.map(MediaInfo::from),
+    }
+}
+
+/// A file git ignores: listed, never read.
+///
+/// The switch that brings these in has to be usable, and reading them is not:
+/// this repository's home folder ignores 8,680 files, and scanning them took
+/// 12 seconds and put two million lines of node_modules on the canvas against
+/// the twenty thousand the project itself has. Listed and stubbed instead, the
+/// same folder costs a `ls-files` and a `stat` each, and what you get is what
+/// the switch is for, which is seeing that they are there and how much room
+/// they take.
+fn ignored_info(rel: &str) -> FileInfo {
+    FileInfo {
+        path: rel.to_string(),
+        ignored: true,
+        line_count: 0,
+        max_cols: 0,
+        clip_cols: 0,
+        media: None,
     }
 }
 

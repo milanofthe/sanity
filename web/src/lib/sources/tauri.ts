@@ -24,6 +24,8 @@ export const inTauri = (): boolean =>
 
 interface ScanFile {
   path: string;
+  /** Set when git ignores it: listed, never read, drawn as a placeholder. */
+  ignored?: boolean;
   lineCount: number;
   maxCols: number;
   clipCols?: number;
@@ -237,7 +239,9 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       maxCols: f.maxCols,
       clipCols: f.clipCols,
       media: f.media,
-      stub: project.modeForPath(f.path) === 'reduced',
+      // A file git ignores is a placeholder whatever its type is set to: its
+      // contents were never read, so there is nothing to draw in it.
+      stub: f.ignored === true || project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
 

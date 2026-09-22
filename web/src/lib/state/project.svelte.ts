@@ -64,8 +64,14 @@ class ProjectState {
 	 * usually build output, and this repository's is 83,014 files and ten
 	 * gigabytes of it. But "usually" is not "always", and a folder you cannot
 	 * see because of a rule in a file somewhere is the kind of thing this app
-	 * exists to prevent. Switching it on rescans, since the files have to be
-	 * read before they can be drawn.
+	 * exists to prevent.
+	 *
+	 * On, they arrive as placeholders: listed and laid out, never read.
+	 * Reading them is what makes the switch unusable, measured on this
+	 * machine's home folder: 12 seconds and two million lines of node_modules
+	 * against the twenty thousand the project itself has. Listed only, the
+	 * same folder is a `git ls-files` and a layout, and 20,000 placeholders
+	 * lay out in 85 ms.
 	 */
 	includeIgnored = $state(storedFlag(IGNORED_KEY));
 	/** How many files git ignores in the open folder, and how many of them the

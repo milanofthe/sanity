@@ -53,6 +53,13 @@ macOS, and More info then Run anyway on Windows. Building from source is
   texture is the cheap representation by two orders of magnitude. The bar
   height is set against `lod-check`, which measures how much the picture
   changes while the zoom is turned across both hand-overs.
+- **What git ignores is a filter, not a wall.** A switch in the View menu
+  brings those files in, off by default, with the count in front of it. They
+  arrive as placeholders, listed and laid out but never read: reading them is
+  what makes the switch unusable, measured on a folder that ignores 8,680
+  files, 12 seconds and two million lines of node_modules against the twenty
+  thousand the project itself has. Listed only, it is a `git ls-files` and a
+  layout, and 20,000 placeholders lay out in 85 ms.
 - **Text on the pixel grid.** Glyphs come from an atlas, and an atlas at the
   wrong size or a glyph landing between pixels is read through bilinear
   filtering at every edge. So the atlas is rasterised at exactly the size the
