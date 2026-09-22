@@ -219,20 +219,6 @@
 	/** Set while the GPU has taken the WebGL context away; see `watchContext`. */
 	let contextLost = $state(false);
 
-	/** What this machine draws with, on the clipboard, so a rendering fault on
-	 *  a screen nobody here has can be reported as facts. */
-	async function copyDiagnostics() {
-		if (!app) return;
-		const text = app.diagnostics();
-		try {
-			await navigator.clipboard.writeText(text);
-			notice = 'graphics diagnostics copied';
-		} catch {
-			// Clipboard permission is not a given; the console always works.
-			console.log(text);
-			notice = 'graphics diagnostics written to the console';
-		}
-	}
 
 	let started = false;
 	$effect(() => {
@@ -363,7 +349,6 @@
 	onreload={(path) => openFolder(path)}
 	ondemo={(id) => openDemo(id)}
 	onignored={(on) => setIgnored(on)}
-	ondiagnostics={copyDiagnostics}
 	{demos}
 	onsearch={onSearch}
 	onnext={() => step(1)}

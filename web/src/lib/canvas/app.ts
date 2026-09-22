@@ -713,6 +713,10 @@ export class CanvasApp {
    * have. Everything here has been the cause of a rendering difference at
    * some point: the ANGLE backend, the device pixel ratio, the size of the
    * drawing buffer, and the limits a layered texture has to fit inside.
+   *
+   * Reached from the console as `__sanity.app.diagnostics()`. It had a button
+   * in the View menu for a while, which is one more thing in a menu than a
+   * once-in-a-while question is worth.
    */
   diagnostics(): string {
     const gl = this.gl;

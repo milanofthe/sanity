@@ -12,7 +12,7 @@
 	// stubbed. The rows are the same control either way, and one list the user
 	// sets is better than two where half of them were set for him.
 	import Segmented from '$lib/ui/Segmented.svelte';
-	import Toggle from '$lib/ui/Toggle.svelte';
+	import Switch from '$lib/ui/Switch.svelte';
 	import { project, VIEW_MODES, type ViewMode } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 
@@ -20,12 +20,7 @@
 
 	/** Switching the ignored files on or off means another scan, which only
 	 *  the app knows how to run. */
-	let { onignored, ondiagnostics }: {
-		onignored?: (on: boolean) => void;
-		/** Copy what this machine is drawing with, for a report from a screen
-		 *  the author does not have. */
-		ondiagnostics?: () => void;
-	} = $props();
+	let { onignored }: { onignored?: (on: boolean) => void } = $props();
 
 	/** The mode a set of rows agrees on, or '' when they differ. A control
 	 *  showing one of several states as selected would be a lie. */
@@ -69,28 +64,6 @@
 			</div>
 		{/each}
 
-		<div class="options">
-			<Toggle
-				checked={ui.tintLanguages}
-				label="Tint by language at the outermost zoom"
-				onchange={() => ui.setTintLanguages(!ui.tintLanguages)}
-			/>
-			{#if project.ignoredTotal > 0 || project.includeIgnored}
-				<Toggle
-					checked={project.includeIgnored}
-					disabled={project.demo || project.synthetic}
-					label="Include the {n(project.ignoredTotal)} files git ignores"
-					onchange={(on: boolean) => onignored?.(on)}
-				/>
-				{#if project.includeIgnored && project.ignoredShown < project.ignoredTotal}
-					<span class="why">taking the first {n(project.ignoredShown)}</span>
-				{/if}
-			{/if}
-			<button class="diag" type="button" onclick={() => ondiagnostics?.()}>
-				Copy graphics diagnostics
-			</button>
-		</div>
-
 		<div class="foot">
 			<!-- A sentence, not a label, so it spans the three columns the rows
 			     use for a type and its counts. -->
@@ -104,6 +77,25 @@
 					onchange={(m: ViewMode) => project.setAll(m)}
 				/>
 			</span>
+		</div>
+
+		<div class="options">
+			<Switch
+				checked={ui.tintLanguages}
+				label="Tint by language at the outermost zoom"
+				onchange={() => ui.setTintLanguages(!ui.tintLanguages)}
+			/>
+			{#if project.ignoredTotal > 0 || project.includeIgnored}
+				<Switch
+					checked={project.includeIgnored}
+					disabled={project.demo || project.synthetic}
+					label="Include the {n(project.ignoredTotal)} files git ignores"
+					onchange={(on: boolean) => onignored?.(on)}
+				/>
+				{#if project.includeIgnored && project.ignoredShown < project.ignoredTotal}
+					<span class="why">taking the first {n(project.ignoredShown)}</span>
+				{/if}
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -127,19 +119,6 @@
 	   fixed width. It used to be `auto`, which resolved to the width of the
 	   segmented control in a row and to zero in the header, where that cell is
 	   empty: the column headings sat well left of the numbers they labelled. */
-	.diag {
-		font: inherit;
-		color: var(--text-dim);
-		background: none;
-		border: none;
-		padding: 0;
-		cursor: pointer;
-		text-decoration: underline;
-		text-underline-offset: 3px;
-	}
-	.diag:hover {
-		color: var(--text);
-	}
 	.options {
 		display: flex;
 		flex-direction: column;
