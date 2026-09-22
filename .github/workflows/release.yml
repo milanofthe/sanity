@@ -20,11 +20,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `universal-apple-darwin` is a Tauri target, not a rustup one: the
+          # two real architectures have to be installed and Tauri lipos the
+          # results together.
           - platform: macos-latest
             target: universal-apple-darwin
+            toolchains: aarch64-apple-darwin,x86_64-apple-darwin
             name: macOS
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            toolchains: x86_64-pc-windows-msvc
             name: Windows
     runs-on: ${{ matrix.platform }}
     steps:
@@ -34,7 +39,7 @@ jobs:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.toolchains }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: '. -> target'
