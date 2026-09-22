@@ -34,6 +34,10 @@
 //               burst is the window not answering and spread out is pictures
 //               arriving one after another.
 
+// With the extension: this module is imported by its unit tests, which run
+// in Node without a bundler to resolve it.
+import { decodeHere, ImageDecoder, isVector, rasteriseSvg, type Pixels } from './imagedecode.ts';
+
 // Every picture texture holds premultiplied colour. A mip chain and the
 // resampling both average neighbouring texels, and a plot is mostly clear
 // pixels holding whatever colour the exporter left in them, usually black.
@@ -701,27 +705,25 @@ export class MediaTextures {
   private async decodeExact(
     path: string, w: number, h: number, sourceW: number, exact = true,
   ): Promise<void> {
+    const vector = isVector(path);
     // Enough to resample from: as large as the target, or the picture's own
-    // size when that is smaller. A level has no height of its own; it takes
-    // the source's proportion.
+    // size when that is smaller. A drawing has no size of its own and is
+    // drawn at the target. A level has no height of its own; it takes the
+    // source's proportion.
     const enough = (sw: number, sh: number) =>
-      (sw >= w && sh >= h) || sw >= sourceW - 1;
+      (sw >= w && sh >= h) || (!vector && sw >= sourceW - 1);
     let src = this.sources.get(path) ?? null;
     if (src && !enough(src.w, src.h)) src = null;
     if (!src) {
-      let bitmap = await this.fetchBitmap(path, w);
+      let px = await this.fetchPixels(path, w, h, w);
       // A thumbnail where the source was needed: ask for the source, which is
       // what anything past a thumbnail's size gets.
-      if (bitmap && !enough(bitmap.width, bitmap.height)) {
-        bitmap.close();
-        bitmap = await this.fetchBitmap(path, Math.max(w, h, 4096));
-      }
-      if (!bitmap) return;
+      if (px && !enough(px.w, px.h)) px = await this.fetchPixels(path, w, h, Math.max(w, h, 4096));
+      if (!px) return;
       const up = performance.now();
-      const tex = this.uploadSource(bitmap);
-      if (!this.slots.has(path)) this.probed.set(path, translucent(bitmap));
-      src = { tex, w: bitmap.width, h: bitmap.height, bytes: Math.round(bitmap.width * bitmap.height * 4 * 1.34) };
-      bitmap.close();
+      const tex = this.uploadSource(px);
+      if (!this.slots.has(path)) this.probed.set(path, px.clear > TRANSLUCENT_SHARE);
+      src = { tex, w: px.w, h: px.h, bytes: Math.round(px.w * px.h * 4 * 1.34) };
       this.keepSource(path, src);
       const took = performance.now() - up;
       this.uploadMs += took;
@@ -731,11 +733,15 @@ export class MediaTextures {
     const isTranslucent = this.slots.get(path)?.translucent ?? this.probed.get(path) ?? false;
     const t0 = performance.now();
     if (!exact) h = Math.max(1, Math.round((w * src.h) / src.w));
-    if (src.w <= w && src.h <= h) {
+    if (src.w === w && src.h === h) {
+      // Already the size asked for, which is what a drawing is.
+      const tex = this.resampler!.resample(src.tex, src.w, src.h, w, h);
+      this.install(path, tex, w, h, exact, false, isTranslucent);
+    } else if (src.w <= w && src.h <= h) {
       // No larger than the panel: the source as it is, drawn magnified.
       // Copied, since the source cache may let go of the original.
       const tex = this.resampler!.resample(src.tex, src.w, src.h, src.w, src.h);
-      this.install(path, tex, src.w, src.h, false, true, isTranslucent);
+      this.install(path, tex, src.w, src.h, false, !vector, isTranslucent);
     } else {
       const tex = this.resampler!.resample(src.tex, src.w, src.h, w, h);
       this.install(path, tex, w, h, exact, false, isTranslucent);
@@ -744,8 +750,12 @@ export class MediaTextures {
     this.onLoaded();
   }
 
-  /** Fetch and decode at the source's own size, or null, marking it failed. */
-  private async fetchBitmap(path: string, level: number): Promise<ImageBitmap | null> {
+  /**
+   * A picture's pixels: a raster picture decoded at its own size on a worker,
+   * a drawing drawn at `w` by `h` here. Null, and marked failed, when it
+   * cannot be read.
+   */
+  private async fetchPixels(path: string, w: number, h: number, level: number): Promise<Pixels | null> {
     const started = performance.now();
     const bytes = await this.fetchBytes(path, level).catch(() => null);
     this.fetchMs += performance.now() - started;
@@ -755,35 +765,30 @@ export class MediaTextures {
     }
     this.decodes++;
     this.fetched += bytes.byteLength;
-    try {
-      const bitmap = await createImageBitmap(new Blob([bytes]), {
-        premultiplyAlpha: 'premultiply',
-        colorSpaceConversion: 'none',
-      });
-      const took = performance.now() - started;
-      this.decodeMs += took;
-      this.decodeEma = this.decodeEma * 0.7 + took * 0.3;
-      this.worstDecode = Math.max(this.worstDecode, took);
-      return bitmap;
-    } catch {
-      this.failed.add(path);
-      return null;
+    let px: Pixels | null;
+    if (isVector(path)) {
+      px = await rasteriseSvg(bytes, w, h);
+    } else {
+      const r = await this.decoder.decode(bytes, this.maxSource);
+      px = r === 'unsupported' ? await decodeHere(bytes, this.maxSource) : r === 'failed' ? null : r;
     }
+    const took = performance.now() - started;
+    this.decodeMs += took;
+    this.decodeEma = this.decodeEma * 0.7 + took * 0.3;
+    this.worstDecode = Math.max(this.worstDecode, took);
+    if (!px) this.failed.add(path);
+    return px;
   }
 
-  /** A source on the GPU at its own size, with a mip chain for the rare
-   *  target sixteen times smaller than it. */
-  private uploadSource(bitmap: ImageBitmap): WebGLTexture {
+  /** A source on the GPU at its own size, from premultiplied pixels, with a
+   *  mip chain for the rare target sixteen times smaller than it. */
+  private uploadSource(px: Pixels): WebGLTexture {
     const { gl } = this;
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-    // Global state, and set back at once: WebGL2 refuses a 3D upload from an
-    // array while it is on, which is how the overview textures stopped being
-    // written the moment the first picture arrived.
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, px.w, px.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, px.data);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -791,6 +796,9 @@ export class MediaTextures {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return tex;
   }
+
+  /** Decodes raster pictures off the main thread; see imagedecode.ts. */
+  private decoder = new ImageDecoder();
 
   /** Translucency measured on a source before its path had a slot. */
   private probed = new Map<string, boolean>();

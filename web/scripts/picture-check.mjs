@@ -154,8 +154,48 @@ for (const frac of [0.5, 0.25]) {
   }
 }
 
+// A drawing: an SVG has no pixels of its own, so it is drawn at exactly the
+// size it is shown at rather than scaled from some resolution. Before, it was
+// handed to the browser's image decoder like a PNG, which cannot read one, and
+// every SVG in a project stayed an empty placeholder.
+await page.goto(`${base}/?demo=home`, { waitUntil: 'load' });
+await page.waitForFunction(() => (document.querySelector('footer')?.textContent ?? '').includes('files'), null, { timeout: 60000 });
+await settled(page);
+for (const frac of [0.05, 0.3]) {
+  const v = await page.evaluate(async (frac) => {
+    const app = window.__sanity.app;
+    const m = app.scene.media;
+    const f = app.layout.files.find((x) => x.path.endsWith('.svg'));
+    if (!f) return null;
+    app.cam.zoom = (app.cam.vw * frac) / f.w;
+    app.cam.x = f.x + f.w / 2;
+    app.cam.y = f.y + f.h / 2;
+    app.invalidate();
+    // Until what is drawn is made for this size and has faded in: the one
+    // from the zoom before is exact too, for the size it was.
+    const mine = () => app.scene.imageDraws.find(
+      (d) => d.x >= f.x - 1 && d.x < f.x + f.w && d.y >= f.y - 1 && d.y < f.y + f.h,
+    );
+    for (let t = 0; t < 100; t++) {
+      app.invalidate();
+      await new Promise((q) => requestAnimationFrame(() => requestAnimationFrame(q)));
+      const d = mine();
+      if (d?.exact && d.mix >= 1 && !m.fading()) break;
+      await new Promise((q) => setTimeout(q, 50));
+    }
+    const d = mine();
+    return {
+      path: f.path, held: d ? `${d.tw}x${d.th}` : null, exact: d?.exact ?? false,
+      failed: m.failed.has(f.path),
+    };
+  }, frac);
+  const ok = v !== null && v.held !== null && v.exact && !v.failed;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  ${String(frac).padEnd(4)} ${v?.path ?? 'no svg'} drawn at ${v?.held ?? 'nothing'}${v?.exact ? ', exactly its size on screen' : ''}`);
+  if (!ok) failures++;
+}
+
 await browser.close();
 console.log(failures === 0
-  ? '\npictures at rest are their source averaged onto the pixels they cover'
+  ? '\npictures at rest are their source averaged onto the pixels they cover, drawings drawn at them'
   : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

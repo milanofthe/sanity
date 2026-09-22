@@ -30,6 +30,7 @@ import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { BASELINE_RATIO, GlyphAtlas } from './glyphatlas';
 import { BASE_LEVEL, OverviewTextures, type Slot } from './codetex';
 import { MediaTextures } from './mediatex';
+import { isVector } from './imagedecode';
 import { SpatialGrid } from '$lib/canvas/spatial';
 import { TILE_GUTTER, TileCache, tileWorld } from './tiles';
 import { sharedPool, type RasterPool } from './rasterpool';
@@ -1887,7 +1888,10 @@ export class Scene {
     // seconds of them, for 119 smudges. Whatever is already decoded keeps
     // being drawn, so zooming out never costs anything.
     const onScreen = w * zoom * this.dpr;
-    const sourceW = m.kind === 'image' ? mw : Infinity;
+    // A drawing has no resolution of its own: it is drawn at whatever size
+    // it is wanted, like a document page, rather than capped at the size its
+    // header claims.
+    const sourceW = m.kind === 'image' && !isVector(n.path) ? mw : Infinity;
     // At rest, and not mid-animation, the picture is made for exactly the
     // pixels it covers: from where its edges land on the pixel grid, the same
     // rounding the panel's own rectangle gets, so the two meet exactly.
