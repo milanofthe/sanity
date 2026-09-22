@@ -90,6 +90,11 @@ const MEDIA_ASPECT_CAP = 6;
  *  a reason to run another pass. */
 const MEDIA_FIT_SLACK = 0.95;
 
+/** Floor under how badly a slot's shape can be counted against a picture, so
+ *  one bad pass cannot ask for a canvas. A tenth means a 10:1 mismatch is the
+ *  worst that is ever paid for. */
+const MEDIA_MIN_EFFICIENCY = 0.1;
+
 export interface FileEntry {
   path: string;
   lineCount: number;
@@ -326,9 +331,15 @@ function buildTree(entries: FileEntry[]): DirNode {
         minW: cells(MIN_PANEL_COLS * metrics.charWidth + 2 * metrics.panelPadX) + PANEL_GAP_CELLS,
         minH: cells(metrics.titleHeight + 2 * metrics.panelPadY + metrics.lineHeight)
           + PANEL_GAP_CELLS,
-        // The same bound a text panel gets, rather than the image's own
-        // proportion: a hard aspect here is a fixed box by another name.
-        maxAspect: MEDIA_ASPECT_CAP,
+        // Up to the picture's own proportion, never below a square-ish
+        // bound: a hard aspect here would be a fixed box by another name, and
+        // fixed boxes are what stubs had to be taken out of the treemap for.
+        // This only nudges wide pictures towards wide slots, which is what
+        // keeps the unused part of a slot small.
+        maxAspect: Math.min(
+          MEDIA_ASPECT_CAP,
+          Math.max(1.3, mediaShape(e.media!).aspect * 1.2),
+        ),
       }
       : e.stub
         ? {
@@ -606,18 +617,26 @@ function placeFile(f: FileNode, slot: IntRect): void {
   }
 
   if (f.media) {
-    // A picture keeps the geometry it asked for and is fitted into whatever
-    // slot it got. `fits` is the question the fitting pass acts on, and for a
-    // picture it is whether the slot is as large as the picture wanted: a file
+    // The panel *is* the picture's shape: the largest box of that proportion
+    // that fits the slot, at the slot's top left so edges still line up. A
+    // panel stretched to the slot would show a 16:9 render as a square with
+    // two grey bands, which is the one thing a picture panel must not do.
+    // What the slot has left over stays empty, and the fitting pass below
+    // makes up for it by asking for more area.
+    const want = mediaWant(f.media);
+    const a = want.w / Math.max(1, want.h);
+    const boxW = Math.min(w, h * a);
+    const boxH = Math.min(h, w / a);
+    f.geom = { ...want, w: boxW, h: boxH };
+    f.w = boxW;
+    f.h = boxH;
+    // `fits` is the question the fitting pass acts on, and for a picture it is
+    // whether the panel came out as large as the picture asked for. A file
     // with no lines fits every slot trivially, which is why 47 images ended up
     // with a quarter of a percent of the canvas between them while every text
     // panel grew around them.
-    const want = mediaWant(f.media);
-    f.geom = want;
-    f.w = w;
-    f.h = h;
-    f.fits = w * h >= want.w * want.h * MEDIA_FIT_SLACK;
-    f.usable = w > 0 && h > 0;
+    f.fits = boxW * boxH >= want.w * want.h * MEDIA_FIT_SLACK;
+    f.usable = boxW > 0 && boxH > 0;
     f.holdsAll = true;
     return;
   }
@@ -794,14 +813,21 @@ function fitPasses(
       // for good: the same JSON file landed in a slot 42 by 1890 and
       // extrapolated a need of 33 million from that one pass.
       if (f.media) {
-        // Area only, with no correction for the shape of the slot. A panel of
-        // text needs a *form*, because its lines have to wrap into it, and
-        // that is what the correction below is for. A picture is fitted into
-        // whatever it gets, so asking for a shape means asking for area it
-        // does not need: a 3927 by 697 plot in a narrow slot demanded 3010 by
-        // 5712 that way, larger than any source file in the project.
+        // The area the picture wants, divided by how much of a slot of this
+        // shape it can actually use. A 4:1 render in a 1:1 slot uses a
+        // quarter of it, so it asks for four times its own area and comes out
+        // the right size in the shape it needs.
+        //
+        // Divided rather than extrapolated from the slot's proportion the way
+        // a text panel is: taken literally, a sliver of a slot asks for an
+        // absurd area and `Math.max` keeps it, which is how a flat plot once
+        // demanded 3010 by 5712, larger than any source file in the project.
+        // Hence the floor on the efficiency.
         const want = mediaWant(f.media);
-        f.area = Math.max(f.area, want.w * want.h) * 1.06;
+        const a = want.w / Math.max(1, want.h);
+        const slot = f.slotW / Math.max(1, f.slotH);
+        const efficiency = Math.max(MEDIA_MIN_EFFICIENCY, Math.min(a / slot, slot / a));
+        f.area = Math.max(f.area, (want.w * want.h) / efficiency) * 1.06;
         continue;
       }
       const natural = panelGeometry(f.lineCols, f.maxCols);

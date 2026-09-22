@@ -105,9 +105,40 @@ console.log(
     `${shot.w}x${shot.h} panel: ${(ink * 100).toFixed(1)}% of it drawn, ` +
     `${counts.size} colours · cache ${held.count} images, ${(held.bytes / 1048576).toFixed(1)} MB`,
 );
-if (ink < 0.05) fail(`the picture is not visible: ${(ink * 100).toFixed(1)}% of the panel is drawn`);
+// Three percent, not thirty: a block diagram is thin lines on an even
+// background, and the one this picked came out at 9.5 percent while being
+// perfectly legible. The colour count is the stronger signal, since a
+// placeholder has one colour and a drawing has hundreds.
+if (ink < 0.03) fail(`the picture is not visible: ${(ink * 100).toFixed(1)}% of the panel is drawn`);
 if (counts.size < 20) fail(`only ${counts.size} colours in the panel, so it is not an image`);
 if (held.count === 0) fail('nothing in the picture cache after it was drawn');
+
+// The panel is the picture's shape, not the slot's. A 16:9 render in a square
+// panel would be the picture with two grey bands, which is the one thing a
+// picture panel must not be.
+const shapes = await page.evaluate(() =>
+  [...window.__sanity.app.scene.files.values()]
+    .filter((f) => f.node.media && f.node.w > 0 && f.node.h > 0)
+    .map((f) => ({
+      path: f.node.path,
+      want: f.node.media.w / Math.max(1, f.node.media.h),
+      got: f.node.w / f.node.h,
+    })),
+);
+const off = shapes
+  .map((p) => ({ ...p, err: Math.abs(Math.log2(p.got / p.want)) }))
+  .sort((a, b) => b.err - a.err);
+const worst = off[0];
+const within = off.filter((p) => p.err < 0.15).length;
+console.log(
+  `panel shape: ${within} of ${shapes.length} within 11 percent of their picture; ` +
+    `worst ${worst.path.split('/').pop()} wants ${worst.want.toFixed(2)}, got ${worst.got.toFixed(2)}`,
+);
+// Not every one of them: a panel has padding and a title bar, and a tiny icon
+// is mostly those, so its outer proportion cannot match. The bulk has to.
+if (within < shapes.length * 0.8) {
+  fail(`only ${within} of ${shapes.length} panels have their picture's proportion`);
+}
 
 // The resolution follows the zoom: zoomed out, the same picture is held at a
 // smaller level than it was up close.
