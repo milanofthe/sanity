@@ -10,6 +10,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { CanvasApp } from '$lib/canvas/app';
 import type { FileHits } from '$lib/canvas/content';
+import { expandLines } from '$lib/canvas/data/tabs';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
@@ -63,7 +64,9 @@ class BackendText implements TextSource {
     if (!this.pending.has(path)) {
       this.pending.add(path);
       invoke<string>('file_text', { path })
-        .then((text) => this.lines.set(path, text.split('\n')))
+        // Expanded here, once per file, rather than per frame: a column in a
+        // span is a column with tabs expanded, so the text has to be too.
+        .then((text) => this.lines.set(path, expandLines(text)))
         .catch(() => this.lines.set(path, []))
         .finally(() => this.pending.delete(path));
     }

@@ -10,6 +10,7 @@
 
 import type { CanvasApp } from '$lib/canvas/app';
 import { findInTexts, type FileHits } from '$lib/canvas/content';
+import { expandLines } from '$lib/canvas/data/tabs';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
 import { unpack } from './payload.ts';
@@ -71,7 +72,7 @@ export async function loadFixture(name: string): Promise<void> {
   ]);
   scan = s;
   payloads = unpack(blob);
-  texts = Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v.split('\n')]));
+  texts = Object.fromEntries(Object.entries(t).map(([k, v]) => [k, expandLines(v)]));
   project.load(s.root, s.groups, false);
 }
 
