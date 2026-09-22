@@ -15,8 +15,6 @@
 export interface DemoRepo {
   id: string;
   label: string;
-  /** One line on what the project is, for the menu. */
-  about: string;
   /** Where to clone it, so a visitor can open the real thing. */
   url: string;
   files: number;

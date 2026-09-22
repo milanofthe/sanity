@@ -39,25 +39,21 @@ const REPOS = [
     id: 'pathsim',
     label: 'pathsim',
     repo: 'pathsim/pathsim',
-    about: 'Python. Block-based time-domain system simulation.',
   },
   {
     id: 'rslab',
     label: 'rslab',
     repo: 'milanofthe/rslab',
-    about: 'Rust. Sparse direct solver, LDL and LU.',
   },
   {
     id: 'rapidfem',
     label: 'rapidfem',
     repo: 'milanofthe/rapidfem',
-    about: 'Rust, Python and Svelte. Electromagnetic FEM solver.',
   },
   {
     id: 'nanospice',
     label: 'nanospice',
     repo: 'milanofthe/nanospice',
-    about: 'Rust. A SPICE circuit simulator in one file.',
   },
 ];
 
@@ -97,7 +93,6 @@ for (const entry of REPOS) {
   index.push({
     id: entry.id,
     label: entry.label,
-    about: entry.about,
     url: `https://github.com/${entry.repo}`,
     files: scan.files.length,
     lines,

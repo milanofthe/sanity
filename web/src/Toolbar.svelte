@@ -54,7 +54,7 @@
 		search?.focus();
 	}
 
-	/** Where the app itself lives. The demo is the only place anyone sees this
+	/** Where the app itself lives. The demo is the only place anyone sees it
 	 *  without having cloned it first, so it is the one place that has to say
 	 *  where it came from. */
 	const REPO_URL = 'https://github.com/milanofthe/sanity';
@@ -115,27 +115,25 @@
 				{/each}
 			</MenuSection>
 		{/if}
+		{#if shown}
+			<MenuSection title="Showing">
+				<div class="path">
+					<a href={shown.url} target="_blank" rel="noreferrer">
+						{shown.url.replace('https://', '')}
+					</a>
+				</div>
+			</MenuSection>
+		{/if}
 		{#if demos.length > 0}
 			<MenuSection title="sanity">
 				<div class="path">
-					Read only, and a snapshot rather than a live folder. The desktop app
-					opens any folder and watches it.
 					<a href={REPO_URL} target="_blank" rel="noreferrer">
 						{REPO_URL.replace('https://', '')}
 					</a>
 				</div>
 			</MenuSection>
 		{/if}
-		{#if shown}
-			<MenuSection title="Showing">
-				<div class="path">
-					{shown.about}
-					<a href={shown.url} target="_blank" rel="noreferrer">
-						{shown.url.replace('https://', '')}
-					</a>
-				</div>
-			</MenuSection>
-		{:else if project.root}
+		{#if !shown && project.root}
 			<MenuSection title="Open">
 				<div class="path">{project.root}</div>
 			</MenuSection>
@@ -221,7 +219,6 @@
 	}
 	.path a {
 		display: block;
-		margin-top: var(--sp-1);
 		color: var(--accent);
 	}
 	.badge.busy {
