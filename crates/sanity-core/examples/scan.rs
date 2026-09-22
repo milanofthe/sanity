@@ -69,8 +69,11 @@ fn main() {
         let mut missing: Vec<(String, u64)> = Vec::new();
         let mut by_ext: Vec<(String, u64)> = Vec::new();
 
-        for rel in &listed {
-            let Some((data, info)) = scan::read_file(root, rel) else { continue };
+        // Read the way the app reads, across the cores: this example used to
+        // read one file after another, which measured a scan four to eight
+        // times slower than the one anybody actually waits for.
+        for (rel, read) in listed.iter().zip(scan::read_all(root, &listed)) {
+            let Some((data, info)) = read else { continue };
             if data.flags & sanity_core::wire::FLAG_BINARY != 0 {
                 binary += 1;
                 continue;
