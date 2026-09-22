@@ -18,7 +18,8 @@ agents work in the repository.
   height, nested by directory. 83 to 99 percent of the canvas is panel,
   measured across seven repository shapes from 120 to 2500 files, and no panel
   is more than a tenth larger than the file in it needs at the 95th
-  percentile. Long lines wrap rather than clip; no character is dropped.
+  percentile. Long lines wrap rather than clip; no character is dropped, and a
+  tab is four columns in the wire format and on screen alike.
 - **Three levels of detail**, weighted as a partition of one so nothing
   double-draws through a transition. Below 1.8 pixels per line a file is one
   textured quad per column, sampled from a saturation-weighted mip chain.
@@ -113,7 +114,7 @@ npm run check-all
 ```
 
 Type checks, clippy with warnings denied, 106 TypeScript tests and 66 Rust
-tests, then twelve checks that drive a real browser and assert on pixels: the
+tests, then thirteen checks that drive a real browser and assert on pixels: the
 layout invariants, the dropdown geometry, that borders do not shimmer under a
 subpixel pan, that a change flashes its panel and then stops, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
@@ -121,7 +122,9 @@ animate and come to rest, that an idle canvas draws nothing, that the overview
 texture is not smeared vertically, that a change plays as remove then add, and
 that a search dims the project, lights its matches and flies to a line, and
 that every theme is complete, legible and its own rather than falling back to
-Mariana for whatever its block forgot. The
+Mariana for whatever its block forgot, and that the text on screen is the text
+in the file, character for character, compared against the bytes on disk rather
+than against the canvas's own copy of them. The
 layout case list includes a project two thirds reduced to placeholders. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.
