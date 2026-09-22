@@ -59,7 +59,9 @@ jobs:
           # Empty on a dispatch run, which builds without touching releases.
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: sanity ${{ github.ref_name }}
-          releaseDraft: true
+          # A tag is the decision, so there is nothing left to confirm
+          # afterwards: the release goes out with the tag that made it.
+          releaseDraft: false
           prerelease: false
           # Neither build is signed: there is no Apple Developer certificate
           # and no Windows code signing certificate behind this repository. So
