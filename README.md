@@ -38,13 +38,18 @@ Try it on four public repositories, in the browser, no install:
   past its panel keeps its marks through the relayout. Then the canvas goes
   quiet and the frame loop stops: 42 frames for a change, against the 5400 a
   ninety second glow used to cost.
-- **Pictures as pictures.** An image file or a PDF is a panel like any other,
-  sized by what it is: pixels for an image, pages for a document, read out of
-  the file's own header. The image is decoded to the resolution the zoom asks
-  for and no further, because holding the source pixels of pathsim's 47 images
-  would be 730 MB of texture against the 96 MB its whole code costs. The
-  budget for all of it is 64 MB, shared between what is on screen: forty seven
-  in view is 512 pixels each, five in view is 2048.
+- **Pictures as pictures.** An image file is a panel like any other, in the
+  image's own proportion and worth about as much canvas as a 500 line source
+  file at most, sized from the header. A PDF shows its first page: rendered by
+  the platform in the app (ImageIO on macOS; Windows and Linux keep the
+  placeholder for now, see issue #22) and rendered into the dump for the web
+  demo, through a separate process rather than a linked library, since the
+  good PDF renderers are AGPL and this is MIT. Either way the texture is
+  decoded to the resolution the zoom asks for and no further: holding the
+  source pixels of pathsim's 47 images would be 730 MB against the 96 MB its
+  whole code costs. The budget for all of it is 64 MB, shared between what is
+  on screen, so forty seven in view is 512 pixels each and five in view is
+  2048, and zooming back out decodes them down again.
 - **Notebooks as cells**, not as the JSON they are stored in. A `.ipynb` is
   read into its code cells, its prose cells and one line per output naming
   what it is, so what a panel shows is the notebook. On pathsim's 34 notebooks
@@ -170,7 +175,7 @@ demo opens every repository it lists with its text in place, and that a PNG
 export is a 4K picture of the project, at the project's aspect with no
 padding on any side, and that it leaves the canvas as it found it, and that a
 picture in a repository is drawn, at a resolution that follows the zoom,
-inside its budget.
+inside its budget, in its own proportion, a PDF's first page included.
 The layout case list includes a project two thirds reduced to placeholders. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.
