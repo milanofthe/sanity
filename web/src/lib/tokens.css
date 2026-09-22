@@ -280,17 +280,25 @@
 [data-theme='sanity'] {
 	/* --- Sanity's own: the signature red, white, and charcoal ---------------
 
-	   Monochrome with one accent, which is what a palette of three colours
-	   actually is. The differentiation the overview needs comes from value
-	   rather than hue: red for what a language reserves to itself (keywords,
-	   literals, constants), white for the names a program gives things, and
-	   greys for the structure around them. That ordering is also what the
-	   damped overview colours reduce to, so a file's signature at a distance
-	   is its ratio of red to white to grey.
+	   Built from three colours, and for a while that was all it had: red for
+	   what a language reserves to itself, white for the names a program gives
+	   things, greys for the structure around them, and the differentiation
+	   coming from value rather than hue.
 
-	   Directory tinting is off: rotating hues is the one thing a scheme built
-	   from a single accent must not do. Depth reads through the wash and the
-	   border weight instead. */
+	   It reads well and it says too little. With two hues, a string and a
+	   comment and an identifier are three shades of the same grey, and the
+	   only thing that stands out of a panel is whatever the language happens
+	   to reserve. So four more hues, and the rule that keeps them from turning
+	   this into another rainbow scheme: the red is the only saturated colour
+	   here. The others sit at a quarter to a third of its chroma, so they read
+	   as greys with a direction rather than as colours competing with the
+	   accent, and the red still means "the language said this, not you".
+
+	   Directory tinting stays off. Rotating hues per directory is the one
+	   thing a scheme built around a single accent must not do, and the four
+	   new tints are quiet on purpose, which is the opposite of what a
+	   navigation colour needs. Depth reads through the wash and the border
+	   weight instead. */
 
 	--dir-tint: 0;
 	--dir-wash: 0.16;
@@ -305,18 +313,25 @@
 	--red-soft: #ff8a8a;
 	--red-deep: #c40000;
 
+	/* The quiet four. Saturation 20 to 30 percent against the red's 100, all
+	   at roughly the luminance of the dimmed text, so they separate token
+	   kinds without any of them shouting. */
+	--steel: #93a9bd;
+	--sage: #9db89b;
+	--amber: #d3b184;
+	--mauve: #b39cc2;
+
 	--accent: var(--red-ink);
 	--accent-deep: var(--red-deep);
 	--on-accent: #ffffff;
 
-	/* Five of the six data hues are values, not hues. Kept in the same slots
-	   so everything derived from them keeps working. */
-	--data-1: #ffffff;
-	--data-2: var(--red-ink);
-	--data-3: #c3c8cc;
-	--data-4: var(--red-soft);
+	/* Six hues now, in the slots everything derived from them already uses. */
+	--data-1: var(--steel);
+	--data-2: var(--mauve);
+	--data-3: var(--sage);
+	--data-4: var(--amber);
 	--data-5: #767c82;
-	--data-6: var(--red-mid);
+	--data-6: var(--red-ink);
 
 	--bg: #16181a;
 	--bg-panel: #1e2124;
@@ -329,18 +344,21 @@
 	--text-dim: #9aa0a6;
 	--text-faint: #656b71;
 
+	/* Keywords keep the red, because that is the one thing the accent should
+	   mark. Names a program gives things stay white. Everything a language
+	   hands over as a value gets one of the quiet hues. */
 	--tok-plain: #e6e8ea;
 	--tok-comment: #5c6368;
 	--tok-doc-comment: #6f777d;
-	--tok-string: #c3c8cc;
-	--tok-number: var(--red-soft);
+	--tok-string: var(--sage);
+	--tok-number: var(--amber);
 	--tok-keyword: var(--red-ink);
-	--tok-type: #ffffff;
-	--tok-function: #d5d9dc;
+	--tok-type: var(--steel);
+	--tok-function: #dfe3e6;
 	--tok-variable: #e6e8ea;
 	--tok-punctuation: #767c82;
-	--tok-constant: var(--red-mid);
-	--tok-attribute: var(--red-soft);
+	--tok-constant: var(--mauve);
+	--tok-attribute: #dcbd93;
 
 	--ov-plain: color-mix(in srgb, var(--tok-plain) 52%, var(--bg-panel));
 	--ov-variable: color-mix(in srgb, var(--tok-variable) 58%, var(--bg-panel));
@@ -348,11 +366,13 @@
 	--ov-type: color-mix(in srgb, var(--tok-type) 82%, var(--bg-panel));
 	--ov-function: color-mix(in srgb, var(--tok-function) 76%, var(--bg-panel));
 
-	/* Change state by intensity rather than hue, since the theme has one hue.
-	   An addition is the brightest thing on the panel, a modification is the
-	   accent, a deletion is the accent at full strength. */
-	--added: #f4f5f6;
-	--modified: var(--red-mid);
+	/* Now that there are hues, the change marks use the ones everyone already
+	   reads: added is green, removed is red. This was white for added, on the
+	   grounds that the theme had one hue and intensity was all it had, and a
+	   white band next to a red one reads as two strengths of the same thing
+	   rather than as two opposite things. */
+	--added: var(--sage);
+	--modified: var(--amber);
 	--deleted: var(--sanity-red);
 	--heat: var(--red-ink);
 
@@ -360,8 +380,8 @@
 	--reduced-bg: #191b1e;
 	--reduced-ink: #3d4348;
 
-	--ok: var(--text);
-	--warn: var(--red-soft);
+	--ok: var(--sage);
+	--warn: var(--amber);
 	--error: var(--red-ink);
 }
 
