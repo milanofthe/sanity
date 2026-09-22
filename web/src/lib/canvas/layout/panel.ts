@@ -82,33 +82,27 @@ export interface PanelGeometry {
  * count would reintroduce exactly that problem.
  */
 /**
- * How much canvas a picture is worth.
+ * How wide a picture may be: one code column, the same width a panel of text
+ * gets before it wraps into a second one.
  *
- * A third of its own pixels as area, and never more than a file of
- * `MEDIA_MAX_LOC` lines takes. Both halves matter: the fraction keeps an icon
- * small and a plot large, and the ceiling is what stops a 24 megapixel
- * screenshot from taking a quarter of the canvas on its own. Sizing them 1:1
- * would have given pathsim's 47 images more room than all of its code.
+ * That is the measure that means something on this canvas. A picture beside
+ * the code it belongs to should read like another column of it, not like a
+ * poster: sized by area instead, a 4000 by 2000 render came out 2992 wide,
+ * which is six columns and larger than most source files in the project.
  *
- * The ceiling is expressed as a file rather than as a number of world units,
- * because that is the comparison that means something on this canvas: a
- * picture is worth about as much as a source file you would sit down and read.
+ * The pixel share still applies below that, so an icon stays an icon: the
+ * width a picture asks for is the square root of a third of its pixels times
+ * its proportion, and the ceiling only bites for anything from about a
+ * megapixel up, which is every plot and screenshot.
  */
 const MEDIA_PIXEL_SHARE = 1 / 3;
-const MEDIA_MAX_LOC = 500;
 const MEDIA_MAX_COLS = 70;
 const MEDIA_MIN_LINES = 3;
-const MEDIA_MAX_LINES = 400;
+const MEDIA_MAX_LINES = 80;
 
-/** Area of a file of `MEDIA_MAX_LOC` lines, computed through the same
- *  geometry a text panel gets, and cached: it is the same answer every time. */
-let maxMediaArea = 0;
-function mediaCeiling(): number {
-  if (maxMediaArea === 0) {
-    const lines = new Uint16Array(MEDIA_MAX_LOC).fill(MEDIA_MAX_COLS);
-    maxMediaArea = panelArea(lines, MEDIA_MAX_COLS);
-  }
-  return maxMediaArea;
+/** Inner width of a single code column at `MEDIA_MAX_COLS` characters. */
+function mediaMaxWidth(): number {
+  return MEDIA_MAX_COLS * metrics.charWidth;
 }
 
 /**
@@ -121,18 +115,20 @@ function mediaCeiling(): number {
  * had to be taken out of the treemap for.
  */
 export function mediaGeometry(aspect: number, pixels: number): PanelGeometry {
-  // Area first, then the shape out of the aspect. The other way round, with
-  // the height scaled and the width following from it, made the area depend
-  // on the proportion: a 3927 by 697 plot asked for five times the room a
-  // square image of the same pixel count did.
+  // Width first, height from the proportion. Width, because that is what the
+  // ceiling is expressed in and what makes a picture sit beside code as a
+  // column rather than as a block.
   const a = Math.max(0.1, Math.min(10, aspect));
-  const area = Math.min(mediaCeiling(), Math.max(1, pixels) * MEDIA_PIXEL_SHARE);
+  const wanted = Math.sqrt(Math.max(1, pixels) * MEDIA_PIXEL_SHARE * a);
+  const innerW = Math.max(
+    MIN_PANEL_COLS * metrics.charWidth,
+    Math.min(mediaMaxWidth(), wanted),
+  );
   const lines = Math.min(
     MEDIA_MAX_LINES,
-    Math.max(MEDIA_MIN_LINES, Math.sqrt(area / a) / metrics.lineHeight),
+    Math.max(MEDIA_MIN_LINES, innerW / a / metrics.lineHeight),
   );
   const innerH = lines * metrics.lineHeight;
-  const innerW = Math.max(MIN_PANEL_COLS * metrics.charWidth, innerH * a);
   return {
     cols: MIN_PANEL_COLS,
     numberCols: 0,

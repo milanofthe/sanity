@@ -39,8 +39,9 @@ Try it on four public repositories, in the browser, no install:
   quiet and the frame loop stops: 42 frames for a change, against the 5400 a
   ninety second glow used to cost.
 - **Pictures as pictures.** An image file is a panel like any other, in the
-  image's own proportion and worth about as much canvas as a 500 line source
-  file at most, sized from the header. A PDF shows its first page: rendered by
+  image's own proportion and at most one code column wide, which is what makes
+  a figure read as another column of the thing it belongs to rather than as a
+  poster. A PDF shows its first page: rendered by
   the platform in the app (ImageIO on macOS; Windows and Linux keep the
   placeholder for now, see issue #22) and rendered into the dump for the web
   demo, through a separate process rather than a linked library, since the

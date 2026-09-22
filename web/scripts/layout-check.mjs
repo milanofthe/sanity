@@ -46,14 +46,13 @@ const CASES = [
   { cfg: 'files=600&lines=200&stubs=0.66', fill: 0.9, bloat: 1.1 },
   // An eighth of the files are pictures, which is roughly what pathsim has.
   //
-  // Fill is lower here and that is the mode working, the same way it is for
-  // placeholders: a picture's panel keeps the picture's proportion and never
-  // grows past what a picture is worth, so whatever the slot has left over
-  // stays empty. The alternative is a 16:9 render stretched into a square or
-  // a diagram drawn across a quarter of the canvas. What has to hold is that
-  // nothing overlaps, nothing is unusable, and the text panels around them
-  // are not bloated to make room.
-  { cfg: 'files=500&lines=200&media=0.12', fill: 0.84, bloat: 1.2 },
+  // A picture's panel keeps the picture's proportion and is at most one code
+  // column wide, so whatever its slot has left over stays empty. That costs
+  // about two points of fill here, since the pictures are a small part of the
+  // canvas; it would cost a great deal more if they were sized by area. What
+  // has to hold is that nothing overlaps, nothing is unusable, and the text
+  // panels around them are not bloated to make room.
+  { cfg: 'files=500&lines=200&media=0.12', fill: 0.9, bloat: 1.2 },
 ];
 
 const browser = await launch();
