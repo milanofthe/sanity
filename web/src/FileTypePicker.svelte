@@ -62,9 +62,12 @@
 		</div>
 
 		{#each project.groups as g (g.id)}
-			<div class="row" style:--share={`${(share(g.lines) * 100).toFixed(1)}%`}>
+			<div
+				class="row"
+				style:--share={`${(share(g.lines) * 100).toFixed(1)}%`}
+				style:--family={familyColour(g.lang)}
+			>
 				<span class="col-name">
-					<span class="family" style:background={familyColour(g.lang)}></span>
 					<span class="name">{g.id}</span>
 					{#if g.id === 'other'}
 						<span class="why">under 0.5%</span>
@@ -209,14 +212,6 @@
 		gap: var(--sp-2);
 		min-width: 0;
 	}
-	/* The family's colour, as a mark in front of the type. Square and small:
-	   it is a legend entry, not a control. */
-	.family {
-		width: var(--sp-2);
-		height: var(--sp-2);
-		flex: none;
-		border-radius: var(--radius);
-	}
 	.name {
 		font-family: var(--font-mono);
 		font-size: var(--fs-s);
@@ -228,13 +223,22 @@
 	.col-name {
 		position: relative;
 	}
+	/* The bar is the share of the repository *and* the legend: it carries the
+	   colour this file type's language family is tinted with on the canvas.
+	   Held well under full strength, since it sits behind the type's name and
+	   a bar you have to read through is a bar in the way. */
 	.col-name::before {
 		content: '';
 		position: absolute;
 		inset: var(--sp-0) auto var(--sp-0) calc(-1 * var(--sp-1));
 		width: var(--share);
+		/* A floor, so a type with half a percent of the repository still shows
+		   its colour: the bar is a legend as well as a proportion, and a
+		   legend entry you cannot see is not one. */
+		min-width: var(--sp-2);
 		max-width: calc(100% + 2 * var(--sp-1));
-		background: var(--bg-active);
+		background: var(--family, var(--bg-active));
+		opacity: 0.4;
 		z-index: 0;
 	}
 	.col-name > * {
@@ -259,10 +263,13 @@
 		color: var(--text-dim);
 		font-variant-numeric: tabular-nums;
 	}
+	/* The total, under a rule. Padded on both sides of the text rather than
+	   only above it: with the row's min-height doing the spacing the line sat
+	   hard against the bottom edge, which reads as a clipped row. */
 	.foot {
 		border-top: var(--sep-w) solid var(--border);
 		margin-top: var(--sp-2);
-		padding-top: var(--sp-2);
+		padding: var(--sp-2) var(--sp-3);
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 	}
