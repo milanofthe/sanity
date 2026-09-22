@@ -12,8 +12,9 @@ import {
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
 import { MediaTextures } from '$lib/canvas/renderer/mediatex';
+import { Resampler } from '$lib/canvas/renderer/resample';
 import { Scene, type TextSource } from '$lib/canvas/renderer/scene';
-import { metrics } from '$lib/metrics';
+import { metrics, timing } from '$lib/metrics';
 import {
   bandsFromQuery, lodBands, lodName, lodWeights, setBands, type LodName,
 } from '$lib/canvas/lod';
@@ -365,6 +366,11 @@ export class CanvasApp {
           this.gl,
           source.imageBytes,
           () => this.invalidate(),
+          undefined,
+          // At rest a picture is resampled to its exact pixels on the GPU,
+          // and a new texture fades in over the one it replaces.
+          new Resampler(this.gl),
+          timing.lodFade * 1000,
         );
       }
       // Pictures first, then the text files. A picture's panel costs nothing

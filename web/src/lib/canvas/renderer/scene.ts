@@ -350,7 +350,16 @@ export class Scene {
   private dpr = 1;
   /** Pictures placed this frame, drawn after the panels so they sit on top of
    *  their own background. */
-  private imageDraws: { tex: WebGLTexture; x: number; y: number; w: number; h: number; fade: number }[] = [];
+  private imageDraws: {
+    tex: WebGLTexture; x: number; y: number; w: number; h: number; fade: number;
+    /** Texture it is fading from, and how far in it is. */
+    prev: WebGLTexture | null; mix: number;
+    /** Drawn 1:1 at the texture's own size; see `imageVS`. */
+    exact: boolean; tw: number; th: number;
+  }[] = [];
+  /** The camera of the frame being built, for placing pictures on the pixel
+   *  grid. */
+  private camNow: Camera | null = null;
   /** Where the camera was in the previous frame, to tell a moving view from a
    *  still one; see the call to `media.tick`. */
   private camWas = { x: 0, y: 0, zoom: 0 };
@@ -586,7 +595,9 @@ export class Scene {
     this.uOverview = uniforms(gl, this.progOverview, [
       'uView', 'uTex', 'uTexRows', 'uSharp', 'uLangTint', 'uFamily[0]',
     ]);
-    this.uImage = uniforms(gl, this.progImage, ['uView', 'uTex', 'uRect', 'uFade']);
+    this.uImage = uniforms(gl, this.progImage, [
+      'uView', 'uTex', 'uRect', 'uFade', 'uViewport', 'uExact', 'uTexPx',
+    ]);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
       'uView', 'uKind[0]', 'uAtlas', 'uCell', 'uGridCols', 'uGridRows', 'uPhases',
@@ -1207,7 +1218,7 @@ export class Scene {
     // `settling` means a motion is in progress, and something waiting for the
     // canvas to come to rest must not wait for a fade.
     this.changing = changing;
-    if (this.animating || this.streamPending) {
+    if (this.animating || this.streamPending || this.media?.fading()) {
       ticking = true;
       redraw = true;
     }
@@ -1247,6 +1258,7 @@ export class Scene {
     this.camWas.y = cam.y;
     this.camWas.zoom = cam.zoom;
     this.media?.tick(moving);
+    this.camNow = cam;
     this.dpr = cam.dpr;
     this.measureInk(cam.zoom, cam.dpr);
     for (const b of this.overviewByChunk.values()) b.reset();
@@ -1677,10 +1689,28 @@ export class Scene {
     // seconds of them, for 119 smudges. Whatever is already decoded keeps
     // being drawn, so zooming out never costs anything.
     const onScreen = w * zoom * this.dpr;
+    const sourceW = m.kind === 'image' ? mw : Infinity;
+    // At rest, and not mid-animation, the picture is made for exactly the
+    // pixels it covers: from where its edges land on the pixel grid, the same
+    // rounding the panel's own rectangle gets, so the two meet exactly.
+    const tf = this.tf;
+    const cam = this.camNow;
+    const still = this.cameraStill && cam !== null && tf.scale === 1 && tf.bx === 0 && tf.by === 0;
+    let pxW = 0;
+    let pxH = 0;
+    if (still && cam) {
+      const s = cam.zoom * cam.dpr;
+      const ox = (cam.vw / 2 - cam.x * cam.zoom) * cam.dpr;
+      const oy = (cam.vh / 2 - cam.y * cam.zoom) * cam.dpr;
+      pxW = Math.round(ox + (x + w) * s) - Math.round(ox + x * s);
+      pxH = Math.round(oy + (y + h) * s) - Math.round(oy + y * s);
+    }
     const held =
-      (w * zoom >= MEDIA_MIN_PX
-        ? this.media?.want(n.path, onScreen, mw / mh, m.kind === 'image' ? mw : Infinity)
-        : this.media?.have(n.path)) ?? null;
+      (w * zoom < MEDIA_MIN_PX
+        ? this.media?.have(n.path)
+        : still && pxW > 0 && pxH > 0
+          ? this.media?.wantExact(n.path, pxW, pxH, sourceW)
+          : this.media?.want(n.path, onScreen, mw / mh, sourceW)) ?? null;
 
     // What goes under it. Most of what a repository holds in pictures is ink
     // with nothing behind it: a PDF page comes out of ImageIO as black type on
@@ -1694,7 +1724,14 @@ export class Scene {
     const back = paper ? this.pal.surface.paper : this.pal.surface.reducedBg;
     this.pushRect(this.bgRects, x, y, w, h, back, 1, 0, 0);
     if (held) {
-      this.imageDraws.push({ tex: held.tex, x, y, w, h, fade: this.tf.alpha });
+      this.imageDraws.push({
+        tex: held.tex, x, y, w, h, fade: this.tf.alpha,
+        prev: held.prev, mix: this.media?.mix(held) ?? 1,
+        // 1:1 only when it was made for exactly the pixels this rect covers
+        // right now; otherwise it is scaled onto the rect like any level.
+        exact: held.exact && still && held.w === pxW && held.h === pxH,
+        tw: held.w, th: held.h,
+      });
       return;
     }
     if (h * zoom > 4) {
@@ -1714,10 +1751,21 @@ export class Scene {
     gl.uniform1i(this.uImage.uTex, 0);
     gl.activeTexture(gl.TEXTURE0);
     quadAttrib(gl, this.progImage, this.quad);
+    gl.uniform2f(this.uImage.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     for (const d of this.imageDraws) {
-      gl.bindTexture(gl.TEXTURE_2D, d.tex);
       gl.uniform4f(this.uImage.uRect, d.x, d.y, d.w, d.h);
-      gl.uniform1f(this.uImage.uFade, d.fade);
+      // What it is fading from, underneath and scaled to the rect, then the
+      // new texture over it at the fade's strength.
+      if (d.prev && d.mix < 1) {
+        gl.bindTexture(gl.TEXTURE_2D, d.prev);
+        gl.uniform1f(this.uImage.uExact, 0);
+        gl.uniform1f(this.uImage.uFade, d.fade);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+      gl.bindTexture(gl.TEXTURE_2D, d.tex);
+      gl.uniform1f(this.uImage.uExact, d.exact ? 1 : 0);
+      gl.uniform2f(this.uImage.uTexPx, d.tw, d.th);
+      gl.uniform1f(this.uImage.uFade, d.fade * (d.prev ? d.mix : 1));
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
   }

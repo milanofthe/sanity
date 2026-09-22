@@ -79,10 +79,25 @@ export const imageVS = `${HEAD}
 in vec2 aCorner;
 uniform mat3 uView;
 uniform vec4 uRect;
+// Drawing buffer size in device pixels, for the pixel grid.
+uniform vec2 uViewport;
+// 1 when the texture was made for exactly this many screen pixels: then the
+// quad is put on the pixel grid at the texture's own size, so a texel is a
+// pixel, the way glyphs are drawn. 0 scales it onto the rect.
+uniform float uExact;
+uniform vec2 uTexPx;
 out vec2 vUv;
 void main() {
-  vec2 world = uRect.xy + aCorner * uRect.zw;
   vUv = aCorner;
+  if (uExact > 0.5) {
+    vec2 o = (uView * vec3(uRect.xy, 1.0)).xy;
+    vec2 originPx = floor((o * 0.5 + 0.5) * uViewport + 0.5);
+    // World y grows downwards and clip y upwards, as for glyphs.
+    vec2 px = originPx + vec2(aCorner.x, -aCorner.y) * uTexPx;
+    gl_Position = vec4((px / uViewport) * 2.0 - 1.0, 0.0, 1.0);
+    return;
+  }
+  vec2 world = uRect.xy + aCorner * uRect.zw;
   gl_Position = vec4((uView * vec3(world, 1.0)).xy, 0.0, 1.0);
 }`;
 
@@ -92,8 +107,10 @@ uniform float uFade;
 in vec2 vUv;
 out vec4 oColor;
 void main() {
+  // Premultiplied in the texture, so filtering between a line and the clear
+  // pixels around it does not darken the line; straight for the blend.
   vec4 t = texture(uTex, vUv);
-  oColor = vec4(t.rgb, t.a * uFade);
+  oColor = t.a > 0.0 ? vec4(t.rgb / t.a, t.a * uFade) : vec4(0.0);
 }`;
 
 /** A file's overview texture, one quad per code column. */
@@ -272,4 +289,54 @@ void main() {
   float a = texture(uAtlas, vUv).a;
   if (a < 0.01) discard;
   oColor = vec4(vColor.rgb, a * vColor.a);
+}`;
+
+/**
+ * A picture resampled to an exact size: one triangle over the target, and per
+ * target pixel the average of the source texels it covers.
+ *
+ * An area average rather than bilinear or the browser's own resize. Bilinear
+ * reads four texels per pixel however many the pixel covers, so a thin line in
+ * a diagram either lands on a sample or vanishes, and that is the grain. The
+ * browser's resize depends on the engine: measured against a Lanczos
+ * reference, the one in WebKit, which the desktop app draws with, came out
+ * twice as far off as Chromium's and with more edge energy than the reference
+ * itself, which is aliasing.
+ *
+ * Source and result are premultiplied, so a clear pixel adds nothing to the
+ * average whatever colour the exporter left in it; see mediatex.ts.
+ */
+export const resampleVS = `${HEAD}
+void main() {
+  // Three vertices covering the target, from the vertex index alone.
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+export const resampleFS = `${HEAD}
+uniform sampler2D uSrc;
+uniform vec2 uSrcSize;
+uniform vec2 uDstSize;
+// Source mip level to read, zero unless a target pixel covers more texels
+// than the taps can reach.
+uniform float uLod;
+// Taps per axis, one per source texel of the footprint at that level.
+uniform int uTaps;
+out vec4 oColor;
+void main() {
+  // Target pixel index. Row 0 of the target is row 0 of the source, the top
+  // of the picture, so no flip anywhere.
+  vec2 dst = gl_FragCoord.xy - 0.5;
+  vec2 scale = uSrcSize / uDstSize;
+  vec2 origin = dst * scale;
+  vec4 acc = vec4(0.0);
+  for (int j = 0; j < 16; j++) {
+    if (j >= uTaps) break;
+    for (int i = 0; i < 16; i++) {
+      if (i >= uTaps) break;
+      vec2 s = origin + (vec2(float(i), float(j)) + 0.5) / float(uTaps) * scale;
+      acc += textureLod(uSrc, s / uSrcSize, uLod);
+    }
+  }
+  oColor = acc / float(uTaps * uTaps);
 }`;

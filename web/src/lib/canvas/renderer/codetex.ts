@@ -411,6 +411,11 @@ export class OverviewTextures {
 
     const chunk = cls.chunks[slot.chunkIdx];
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, chunk.tex);
+    // Set here rather than trusted: these are global, a 3D upload from an
+    // array fails outright with either of them on, and the picture uploads
+    // turn premultiplication on for their own.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     // The mip chain is built from the whole layer, transparent rows past the
     // end of a short file included, so reducing cannot pull in whatever a
     // previous occupant of the layer left behind. The scratch buffer is

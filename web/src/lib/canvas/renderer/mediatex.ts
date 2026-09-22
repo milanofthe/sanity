@@ -9,7 +9,7 @@
 // is decoded to the size it is drawn at, and decoded again, larger, when
 // somebody zooms in.
 //
-// Three things make that work:
+// What makes that work:
 //
 //   levels      Target widths are powers of two, so zooming does not
 //               re-decode continuously, and a level already held that is
@@ -17,15 +17,30 @@
 //   a budget    One number for everything, least recently seen thrown out
 //               first. Without it a pan across a directory of renders would
 //               climb until the context is lost.
-//   off thread  `createImageBitmap` decodes and resizes without the main
-//               thread, and at most a couple run at once, so opening a
-//               project full of images does not stall the first frames.
+//   off thread  `createImageBitmap` decodes without the main thread, and
+//               at most a couple run at once, so opening a project full of
+//               images does not stall the first frames. The decoded source
+//               is kept for a while, and every size a picture is drawn at is
+//               averaged down from it on the GPU (resample.ts) rather than
+//               resized by the browser, which in WebKit was grainy.
+//   exact       at rest, a picture is made for exactly the pixels it
+//               covers and drawn 1:1, the way text is; see `wantExact`.
+//   faded       a new texture fades in over the one it replaces, so a
+//               picture sharpens rather than pops.
 //   paced       and spaced out in time, largest on screen first, and not at
 //               all while the camera is moving. Measured on a folder of 119
 //               screenshots in the engine the desktop app ships (WKWebView,
 //               not Chromium): decoding them costs 4.6 seconds, which as a
 //               burst is the window not answering and spread out is pictures
 //               arriving one after another.
+
+// Every picture texture holds premultiplied colour. A mip chain and the
+// resampling both average neighbouring texels, and a plot is mostly clear
+// pixels holding whatever colour the exporter left in them, usually black.
+// Averaged straight, that black is pulled into every line as soon as the
+// picture is drawn smaller than its texture, and the lines come out bolder
+// and darker than they are. Premultiplied, a clear texel adds nothing, which
+// is what it is, and the image shader divides it back out.
 
 /** Bytes held for image content, over all levels. 64 MB is about four full
  *  screen renders at 2048 wide, which is more than a canvas ever shows at
@@ -105,6 +120,18 @@ interface Slot {
   seen: number;
   /** Mostly transparent, so it needs a sheet under it; see `translucent`. */
   translucent: boolean;
+  /** Made for exactly this many screen pixels, to be drawn 1:1; see
+   *  `wantExact`. False for a power-of-two level. */
+  exact: boolean;
+  /** The source at its own size, which nothing can improve on: a panel
+   *  larger than the picture draws it magnified. */
+  native: boolean;
+  /** What was drawn before this arrived, faded out over `fadeMs` so a level
+   *  changing is a sharpening rather than a pop. */
+  prev: WebGLTexture | null;
+  prevBytes: number;
+  /** When this arrived, for the fade. */
+  since: number;
 }
 
 /** What `want` hands back when a picture is ready to draw. */
@@ -113,7 +140,32 @@ export interface Drawable {
   w: number;
   h: number;
   translucent: boolean;
+  /** Drawn 1:1 on the pixel grid rather than scaled. */
+  exact: boolean;
+  /** The texture it replaces, still fading out, and how far the new one is
+   *  in, from 0 to 1. */
+  prev: WebGLTexture | null;
 }
+
+
+/** Resamples a picture to an exact size; see resample.ts. Passed in rather
+ *  than imported so this module stays free of the GL program code, which its
+ *  unit tests cannot load. */
+export interface Resampling {
+  resample(src: WebGLTexture, sw: number, sh: number, dw: number, dh: number): WebGLTexture;
+}
+
+/**
+ * Bytes of source pictures kept on the GPU at their own size, to resample
+ * from when the camera comes to rest at a new zoom. A 3062 by 1021 render is
+ * 17 MB with its mip chain, so this is a handful of them: the ones being
+ * looked at, which are the ones a zoom is most likely to settle on again.
+ */
+const SOURCE_BUDGET_BYTES = 96 * 1024 * 1024;
+
+/** Largest side a source is held at, whatever the context allows: a 16k
+ *  scan is not worth a gigabyte of texture. */
+const MAX_SOURCE = 8192;
 
 /** Above this share of transparent area a picture is treated as ink on a page
  *  rather than as a picture with a background of its own. A plot exported by
@@ -181,12 +233,25 @@ export function levelAt(width: number): number {
 
 export class MediaTextures {
   private slots = new Map<string, Slot>();
+  /** Sources at their own size, by path, least recently used first. */
+  private sources = new Map<string, { tex: WebGLTexture; w: number; h: number; bytes: number }>();
+  private sourceBytes = 0;
+  private resampler: Resampling | null;
+  private fadeMs: number;
+  /** Largest side a source may be uploaded at here. */
+  private maxSource: number;
   /** Level being decoded per path, so the same request is not queued twice. */
   private loading = new Map<string, number>();
   /** Asked for but not started, by path: the level wanted, how wide the panel
    *  is on screen, which is the order they are started in, and whether what is
    *  held is so far under the panel that waiting would show mush. */
-  private queued = new Map<string, { level: number; width: number; urgent: boolean }>();
+  private queued = new Map<
+    string,
+    {
+      level: number; width: number; urgent: boolean;
+      exact: { w: number; h: number; sourceW: number } | null;
+    }
+  >();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastStart = 0;
   /** Smoothed cost of a decode, which is what the spacing follows. Seeded at
@@ -236,11 +301,16 @@ export class MediaTextures {
     fetchBytes: (path: string, level: number) => Promise<ArrayBuffer | null>,
     onLoaded: () => void,
     budget = BUDGET_BYTES,
+    resampler: Resampling | null = null,
+    fadeMs = 180,
   ) {
     this.gl = gl;
     this.fetchBytes = fetchBytes;
     this.onLoaded = onLoaded;
     this.budget = budget;
+    this.resampler = resampler;
+    this.fadeMs = fadeMs;
+    this.maxSource = Math.min(MAX_SOURCE, (gl.getParameter(gl.MAX_TEXTURE_SIZE) as number) || 4096);
   }
 
   /**
@@ -259,7 +329,73 @@ export class MediaTextures {
     this.askedNow = 0;
     this.spentThisFrame = 0;
     if (moving) this.movedAt = performance.now();
+    // Fades that have run their course let go of what they were fading from.
+    const now = performance.now();
+    for (const slot of this.slots.values()) {
+      if (slot.prev && now - slot.since >= this.fadeMs) this.endFade(slot);
+    }
     this.schedule();
+  }
+
+  /** Whether a picture is still fading from one texture to the next, so the
+   *  frame loop keeps drawing until it is done. */
+  fading(): boolean {
+    for (const slot of this.slots.values()) if (slot.prev) return true;
+    return false;
+  }
+
+  /** How far the texture a picture is drawn with has faded in, 0 to 1. */
+  mix(d: Drawable): number {
+    const slot = d as Slot;
+    if (!slot.prev) return 1;
+    return Math.min(1, (performance.now() - slot.since) / this.fadeMs);
+  }
+
+  private endFade(slot: Slot): void {
+    if (!slot.prev) return;
+    this.gl.deleteTexture(slot.prev);
+    this.held -= slot.prevBytes;
+    slot.prev = null;
+    slot.prevBytes = 0;
+  }
+
+  /**
+   * The picture at exactly `pxW` by `pxH` screen pixels, to be drawn 1:1.
+   *
+   * For a camera at rest. A level is a power of two and gets scaled onto the
+   * screen, which is soft at best and, through the browser's own resize,
+   * grainy at worst; measured against a Lanczos reference, WebKit's came out
+   * twice as far off as Chromium's. So once the view holds still every
+   * picture on it is resampled to the pixels it actually covers, from its
+   * source, by an area average on the GPU, and put on the pixel grid.
+   *
+   * Returns what is held meanwhile, and asks for the exact version when what
+   * is held is not it. A picture smaller than its panel is drawn from its
+   * source as it is: there is nothing sharper to make.
+   */
+  wantExact(path: string, pxW: number, pxH: number, sourceW = Infinity): Drawable | null {
+    this.askedNow++;
+    const w = Math.max(1, Math.round(pxW));
+    const h = Math.max(1, Math.round(pxH));
+    const slot = this.slots.get(path);
+    if (slot) {
+      slot.seen = this.clock;
+      if (slot.exact && slot.w === w && slot.h === h) return slot;
+      if (slot.native && slot.w <= w) return slot;
+    }
+    if (!this.resampler || w > this.maxSource || h > this.maxSource) {
+      return this.want(path, pxW, pxW / pxH, sourceW);
+    }
+    if (this.failed.has(path)) return slot ?? null;
+    // Already being made at this width: asking again would make it twice,
+    // and fade in twice.
+    if (this.loading.get(path) === w) return slot ?? null;
+    const pending = this.queued.get(path);
+    if (!(pending?.exact && pending.exact.w === w && pending.exact.h === h)) {
+      this.queued.set(path, { level: w, width: pxW, urgent: !slot, exact: { w, h, sourceW } });
+    }
+    this.schedule();
+    return slot ?? null;
   }
 
   /**
@@ -336,7 +472,7 @@ export class MediaTextures {
   private request(path: string, level: number, width: number, urgent: boolean): void {
     if (this.failed.has(path)) return;
     if (this.loading.get(path) === level) return;
-    this.queued.set(path, { level, width, urgent: urgent || level <= CHEAP_LEVEL });
+    this.queued.set(path, { level, width, urgent: urgent || level <= CHEAP_LEVEL, exact: null });
     this.schedule();
   }
 
@@ -419,7 +555,10 @@ export class MediaTextures {
       this.loading.set(path, next.level);
       this.inFlight++;
       this.lastStart = performance.now();
-      void this.decode(path, next.level).finally(() => {
+      const job = next.exact
+        ? this.decodeExact(path, next.exact.w, next.exact.h, next.exact.sourceW)
+        : this.decode(path, next.level);
+      void job.finally(() => {
         this.inFlight--;
         this.loading.delete(path);
         // Straight back into the pump rather than through a timer: a timer
@@ -434,6 +573,12 @@ export class MediaTextures {
   }
 
   private async decode(path: string, level: number): Promise<void> {
+    // With a resampler, a level is made the way the exact version is: from
+    // the source, decoded once and kept, averaged down on the GPU. The
+    // browser's resize is not used at all, since it is what made pictures
+    // grainy in WebKit, and a picture that is asked for at a level and then
+    // exactly decodes its source once instead of twice.
+    if (this.resampler) return this.decodeExact(path, level, 0, Infinity, false);
     // The level goes along: an image is resized while it is decoded, but a
     // document has to be rasterised at a size, and only the source knows how.
     const started = performance.now();
@@ -452,12 +597,12 @@ export class MediaTextures {
       bitmap = await createImageBitmap(new Blob([bytes]), {
         resizeWidth: level,
         resizeQuality: 'high',
-        // Nothing converted on the way in or out. The default is for a
-        // bitmap that will be drawn into a 2D canvas: premultiplied and
-        // converted to the display's colour space, and both are undone again
-        // by the upload, which is what made a 128 pixel thumbnail cost
-        // milliseconds rather than the 0.09 the upload itself measures.
-        premultiplyAlpha: 'none',
+        // Premultiplied, and uploaded as premultiplied, so nothing is
+        // converted on the way in; see the module comment. No colour space
+        // conversion either, which the upload would otherwise undo again;
+        // that pair is what made a 128 pixel thumbnail cost milliseconds
+        // rather than the 0.09 the upload itself measures.
+        premultiplyAlpha: 'premultiply',
         colorSpaceConversion: 'none',
       });
     } catch {
@@ -480,18 +625,16 @@ export class MediaTextures {
   private upload(path: string, bitmap: ImageBitmap): void {
     const { gl } = this;
     const old = this.slots.get(path);
-    if (old) {
-      gl.deleteTexture(old.tex);
-      this.held -= old.bytes;
-      this.slots.delete(path);
-    }
-    const tex = gl.createTexture();
+    const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    // Taken as it is: the bitmap was decoded unpremultiplied and unconverted,
-    // and the shader blends it with the usual source-alpha equation.
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    // Taken as it is: premultiplied and unconverted.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    // Global state, and set back at once: WebGL2 refuses a 3D upload from an
+    // array while it is on, which is how the overview textures stopped being
+    // written the moment the first picture arrived.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     // A mip chain, because a picture is drawn at every size between its panel
     // on screen and a thumbnail, and without it the overview zoom aliases into
     // noise. Box filtering is right here, unlike for code: what a photograph
@@ -503,21 +646,167 @@ export class MediaTextures {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+    // Kept from the level before when there was one: the answer is about the
+    // picture, not about the size it was decoded to, and re-probing every
+    // level would ask the same question again.
+    this.install(path, tex, bitmap.width, bitmap.height, false, false,
+      old ? old.translucent : translucent(bitmap));
+  }
+
+  /**
+   * Put a new texture in a path's slot, fading from whatever was drawn.
+   *
+   * The old texture is kept until the fade is over. Swapping outright is the
+   * pop: a blown-up thumbnail replaced by a sharp render in one frame.
+   */
+  private install(
+    path: string, tex: WebGLTexture, w: number, h: number,
+    exact: boolean, native: boolean, isTranslucent: boolean,
+  ): void {
+    const old = this.slots.get(path);
     // Four bytes a pixel, and a third again for the chain.
-    const bytes = Math.round(bitmap.width * bitmap.height * 4 * 1.34);
+    const bytes = Math.round(w * h * 4 * 1.34);
+    let prev: WebGLTexture | null = null;
+    let prevBytes = 0;
+    if (old) {
+      // One fade at a time: a fade still running gives up what it was fading
+      // from, and the new one starts from what was coming in.
+      this.endFade(old);
+      prev = old.tex;
+      prevBytes = old.bytes;
+      this.slots.delete(path);
+    }
     this.slots.set(path, {
-      tex,
-      w: bitmap.width,
-      h: bitmap.height,
-      bytes,
-      seen: this.clock,
-      // Kept from the level before when there was one: the answer is about the
-      // picture, not about the size it was decoded to, and re-probing every
-      // level would ask the same question again.
-      translucent: old ? old.translucent : translucent(bitmap),
+      tex, w, h, bytes, seen: this.clock, translucent: isTranslucent,
+      exact, native, prev, prevBytes, since: performance.now(),
     });
     this.held += bytes;
     this.trim();
+  }
+
+  /**
+   * Make the exact version of a picture: its source at its own size, from the
+   * cache or decoded, averaged down to `w` by `h` on the GPU.
+   *
+   * A source is fetched at the size the backend will give without work when
+   * that is enough: a panel under a thumbnail's size is resampled from the
+   * thumbnail, which spares a folder of screenshots at the overview zoom the
+   * full decode of every one of them. A document is asked for at the width it
+   * is wanted, since it is rasterised to order rather than stored.
+   */
+  private async decodeExact(
+    path: string, w: number, h: number, sourceW: number, exact = true,
+  ): Promise<void> {
+    // Enough to resample from: as large as the target, or the picture's own
+    // size when that is smaller. A level has no height of its own; it takes
+    // the source's proportion.
+    const enough = (sw: number, sh: number) =>
+      (sw >= w && sh >= h) || sw >= sourceW - 1;
+    let src = this.sources.get(path) ?? null;
+    if (src && !enough(src.w, src.h)) src = null;
+    if (!src) {
+      let bitmap = await this.fetchBitmap(path, w);
+      // A thumbnail where the source was needed: ask for the source, which is
+      // what anything past a thumbnail's size gets.
+      if (bitmap && !enough(bitmap.width, bitmap.height)) {
+        bitmap.close();
+        bitmap = await this.fetchBitmap(path, Math.max(w, h, 4096));
+      }
+      if (!bitmap) return;
+      const up = performance.now();
+      const tex = this.uploadSource(bitmap);
+      if (!this.slots.has(path)) this.probed.set(path, translucent(bitmap));
+      src = { tex, w: bitmap.width, h: bitmap.height, bytes: Math.round(bitmap.width * bitmap.height * 4 * 1.34) };
+      bitmap.close();
+      this.keepSource(path, src);
+      const took = performance.now() - up;
+      this.uploadMs += took;
+      this.spentThisFrame += took;
+      this.worstUpload = Math.max(this.worstUpload, took);
+    }
+    const isTranslucent = this.slots.get(path)?.translucent ?? this.probed.get(path) ?? false;
+    const t0 = performance.now();
+    if (!exact) h = Math.max(1, Math.round((w * src.h) / src.w));
+    if (src.w <= w && src.h <= h) {
+      // No larger than the panel: the source as it is, drawn magnified.
+      // Copied, since the source cache may let go of the original.
+      const tex = this.resampler!.resample(src.tex, src.w, src.h, src.w, src.h);
+      this.install(path, tex, src.w, src.h, false, true, isTranslucent);
+    } else {
+      const tex = this.resampler!.resample(src.tex, src.w, src.h, w, h);
+      this.install(path, tex, w, h, exact, false, isTranslucent);
+    }
+    this.spentThisFrame += performance.now() - t0;
+    this.onLoaded();
+  }
+
+  /** Fetch and decode at the source's own size, or null, marking it failed. */
+  private async fetchBitmap(path: string, level: number): Promise<ImageBitmap | null> {
+    const started = performance.now();
+    const bytes = await this.fetchBytes(path, level).catch(() => null);
+    this.fetchMs += performance.now() - started;
+    if (!bytes || bytes.byteLength === 0) {
+      this.failed.add(path);
+      return null;
+    }
+    this.decodes++;
+    this.fetched += bytes.byteLength;
+    try {
+      const bitmap = await createImageBitmap(new Blob([bytes]), {
+        premultiplyAlpha: 'premultiply',
+        colorSpaceConversion: 'none',
+      });
+      const took = performance.now() - started;
+      this.decodeMs += took;
+      this.decodeEma = this.decodeEma * 0.7 + took * 0.3;
+      this.worstDecode = Math.max(this.worstDecode, took);
+      return bitmap;
+    } catch {
+      this.failed.add(path);
+      return null;
+    }
+  }
+
+  /** A source on the GPU at its own size, with a mip chain for the rare
+   *  target sixteen times smaller than it. */
+  private uploadSource(bitmap: ImageBitmap): WebGLTexture {
+    const { gl } = this;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    // Global state, and set back at once: WebGL2 refuses a 3D upload from an
+    // array while it is on, which is how the overview textures stopped being
+    // written the moment the first picture arrived.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return tex;
+  }
+
+  /** Translucency measured on a source before its path had a slot. */
+  private probed = new Map<string, boolean>();
+
+  /** Hold a source, dropping the least recently used past the budget. */
+  private keepSource(path: string, src: { tex: WebGLTexture; w: number; h: number; bytes: number }): void {
+    const old = this.sources.get(path);
+    if (old) {
+      this.gl.deleteTexture(old.tex);
+      this.sourceBytes -= old.bytes;
+      this.sources.delete(path);
+    }
+    this.sources.set(path, src);
+    this.sourceBytes += src.bytes;
+    for (const [p, s] of this.sources) {
+      if (this.sourceBytes <= SOURCE_BUDGET_BYTES || p === path) break;
+      this.gl.deleteTexture(s.tex);
+      this.sourceBytes -= s.bytes;
+      this.sources.delete(p);
+    }
   }
 
   /** Throw out what has not been looked at until the budget holds. */
@@ -544,6 +833,7 @@ export class MediaTextures {
   }
 
   private drop(path: string, slot: Slot): void {
+    this.endFade(slot);
     this.gl.deleteTexture(slot.tex);
     this.slots.delete(path);
     this.held -= slot.bytes;
@@ -594,8 +884,14 @@ export class MediaTextures {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.queued.clear();
-    for (const slot of this.slots.values()) this.gl.deleteTexture(slot.tex);
+    for (const slot of this.slots.values()) {
+      this.endFade(slot);
+      this.gl.deleteTexture(slot.tex);
+    }
     this.slots.clear();
+    for (const s of this.sources.values()) this.gl.deleteTexture(s.tex);
+    this.sources.clear();
+    this.sourceBytes = 0;
     this.held = 0;
   }
 }
