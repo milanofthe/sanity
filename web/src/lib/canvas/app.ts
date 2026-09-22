@@ -101,6 +101,25 @@ export interface ContentResult {
   stale: boolean;
 }
 
+/** What a PNG export asks for. */
+export interface ImageRequest {
+  /** Size of the image in pixels. */
+  width: number;
+  height: number;
+  /** What to frame: what is on screen, or the whole project. */
+  region: 'view' | 'project';
+}
+
+/**
+ * Largest edge an export will ask the GPU for.
+ *
+ * Both the driver's viewport limit and the browser's canvas limit sit above
+ * this on every machine that can run the app at all, and a bound of our own
+ * means a request that is too big comes back smaller rather than blank: a
+ * canvas past its limit does not throw, it loses its context.
+ */
+const MAX_IMAGE_EDGE = 8192;
+
 export class CanvasApp {
   readonly cam = new Camera();
   private gl: WebGL2RenderingContext;
@@ -851,6 +870,105 @@ export class CanvasApp {
     }
     this.raf = requestAnimationFrame(this.frame);
   };
+
+  /**
+   * Render one frame at an arbitrary size and hand back a PNG.
+   *
+   * A screenshot of the window is capped at the window: a thousand panels in
+   * 1440 pixels means a file is a line and a line is less than a pixel. This
+   * renders the same scene into a bigger frame instead, which is not an
+   * upscale of that picture but a different one, because every level of detail
+   * here follows from pixels per line. At 3840 across, a panel that was eight
+   * pixels wide on screen is twenty and has its tokens in it.
+   *
+   * Done by lending the camera a viewport rather than by rendering to a
+   * texture: the whole pipeline already takes its size from the camera and
+   * the drawing buffer, so there is nothing to special-case. The loop is
+   * stopped for the duration, since it would otherwise draw the window with
+   * the export's camera, and the state is put back in `finally` whatever
+   * happens, because leaving the camera on a 4K viewport would leave the
+   * window showing a corner of itself.
+   */
+  async renderToBlob(req: ImageRequest): Promise<Blob> {
+    if (!this.scene || !this.layout) throw new Error('nothing to render');
+    const [maxW, maxH] = this.gl.getParameter(this.gl.MAX_VIEWPORT_DIMS) as Int32Array;
+    const width = Math.max(64, Math.min(req.width, maxW, MAX_IMAGE_EDGE));
+    const height = Math.max(64, Math.min(req.height, maxH, MAX_IMAGE_EDGE));
+
+    // The world rect to frame, then widened to the image's aspect, so asking
+    // for 16:9 never cuts anything off what was on screen.
+    const [rx0, ry0, rx1, ry1] = req.region === 'project'
+      ? this.layout.bounds
+      : this.cam.visibleRect();
+    const pad = req.region === 'project' ? 0.02 : 0;
+    const cx = (rx0 + rx1) / 2;
+    const cy = (ry0 + ry1) / 2;
+    const rw = (rx1 - rx0) * (1 + pad * 2);
+    const rh = (ry1 - ry0) * (1 + pad * 2);
+
+    const keep = { x: this.cam.x, y: this.cam.y, zoom: this.cam.zoom };
+    cancelAnimationFrame(this.raf);
+    this.running = false;
+
+    try {
+      this.canvas.width = width;
+      this.canvas.height = height;
+      this.cam.vw = width;
+      this.cam.vh = height;
+      // One world unit per image pixel at zoom 1, so the atlas is asked for
+      // the level this size of text actually needs.
+      this.cam.dpr = 1;
+      this.cam.stop();
+      this.cam.zoom = Math.min(width / rw, height / rh);
+      this.cam.x = cx;
+      this.cam.y = cy;
+
+      // Panels arriving, panels settling and text being fetched all need
+      // frames, so this draws until the picture is done rather than once.
+      // Two settled frames rather than one: at this size files that were bars
+      // on screen are readable, and their text is requested *by* the frame
+      // that needs it, so the first pass is what asks for it and the second
+      // is the one that has it.
+      const done = () => this.pending.length === 0 && !this.settling();
+      let last = performance.now();
+      let stable = 0;
+      for (let i = 0; i < 600 && stable < 2; i++) {
+        this.uploadBudget();
+        const now = performance.now();
+        const dt = Math.min(0.1, (now - last) / 1000);
+        last = now;
+        this.scene.advance(dt);
+        this.scene.render(this.cam, dt);
+        await this.lastSource?.ready?.();
+        if (done()) {
+          stable++;
+          continue;
+        }
+        stable = 0;
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+
+      return await new Promise<Blob>((resolve, reject) => {
+        // preserveDrawingBuffer is on, see renderer/gl.ts, so the frame just
+        // drawn is still there to be read.
+        this.canvas.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error('the image could not be encoded'))),
+          'image/png',
+        );
+      });
+    } finally {
+      // resize() puts the canvas and the camera's viewport back from the
+      // element's own size, which is the one thing that must not be guessed.
+      this.resize();
+      this.cam.x = keep.x;
+      this.cam.y = keep.y;
+      this.cam.zoom = keep.zoom;
+      // Left false so `invalidate` schedules a frame: the loop was cancelled
+      // above, and claiming it is running is how a canvas ends up frozen.
+      this.running = false;
+      this.invalidate();
+    }
+  }
 
   /** World-space line height, for anything outside that needs the scale. */
   get lineHeight(): number {

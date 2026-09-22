@@ -17,6 +17,7 @@
 		| 'copy'
 		| 'folder'
 		| 'search'
+		| 'image'
 		| 'check';
 
 	const paths: Record<IconName, string> = {
@@ -29,6 +30,8 @@
 		folder: 'M1.5 3.5h4l1.5 2h7.5v8h-13z',
 		// A circle and a handle, on the same 16 unit grid as the rest.
 		search: 'M10.5 6.5a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM9.5 9.5 14 14',
+		// A frame with a horizon in it: an image file.
+		image: 'M2 3.5h12v9H2zM2 10.5 5.5 7l3 3 2-2 3.5 3.5',
 		check: 'M3 8.5 6.5 12 13 4.5'
 	};
 

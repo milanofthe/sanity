@@ -57,20 +57,39 @@ let decoded = new Map<string, FileData>();
 class BackendText implements TextSource {
   private lines = new Map<string, string[]>();
   private pending = new Set<string>();
+  private inflight = new Set<Promise<unknown>>();
+  /** Called when a file's text has arrived, so the frame that was missing it
+   *  can be drawn again. The loop parks when nothing moves, so without this
+   *  the text of a panel appeared on the next pan rather than when it
+   *  loaded. */
+  onLoad: (() => void) | null = null;
 
   lineText(path: string, line: number): string | null {
     const hit = this.lines.get(path);
     if (hit) return line < hit.length ? hit[line] : '';
     if (!this.pending.has(path)) {
       this.pending.add(path);
-      invoke<string>('file_text', { path })
+      const p = invoke<string>('file_text', { path })
         // Expanded here, once per file, rather than per frame: a column in a
         // span is a column with tabs expanded, so the text has to be too.
         .then((text) => this.lines.set(path, expandLines(text)))
         .catch(() => this.lines.set(path, []))
-        .finally(() => this.pending.delete(path));
+        .finally(() => {
+          this.pending.delete(path);
+          this.inflight.delete(p);
+          this.onLoad?.();
+        });
+      this.inflight.add(p);
     }
     return null;
+  }
+
+  /** Resolves once the text asked for so far is in. An export renders a frame
+   *  at a size where files that were bars on screen are readable, and their
+   *  text is requested by that frame; without waiting, the image would be the
+   *  empty panels. */
+  ready(): Promise<void> {
+    return Promise.all([...this.inflight]).then(() => undefined);
   }
 
   invalidate(path: string): void {
@@ -183,12 +202,14 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
 
+  text.onLoad = () => app.invalidate();
   app.open(
     {
       entries,
       payload: (p) => payloads.get(p),
       text,
       find,
+      ready: () => text.ready(),
     },
     keepView,
   );
@@ -287,6 +308,23 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
 }
 
 /** Stop watching. */
+/**
+ * Write a rendered PNG, asking where through the native dialog.
+ *
+ * The bytes go over as the raw request body rather than as a JSON array,
+ * which for a 4K image is four megabytes instead of a twenty-four megabyte
+ * string of decimal numbers. The dialog is opened in the backend, so the path
+ * never has to come back through the IPC: only an ASCII header could carry
+ * one, and paths are not ASCII. The suggested name does cross as a header,
+ * which is safe because we build it, see lib/image.ts.
+ *
+ * Returns the path written, or null if the dialog was dismissed.
+ */
+export async function savePng(bytes: Uint8Array, name: string): Promise<string | null> {
+  const body = new Uint8Array(bytes);
+  return invoke<string | null>('save_png', body, { headers: { 'x-name': name } });
+}
+
 export async function stopWatching(): Promise<void> {
   if (!inTauri()) return;
   project.watching = false;

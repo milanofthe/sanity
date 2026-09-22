@@ -23,6 +23,7 @@
 	} from '$lib/sources/tauri';
 	import type { UnlistenFn } from '@tauri-apps/api/event';
 	import { bandsFromQuery, setBands } from '$lib/canvas/lod';
+	import { IMAGE_HEIGHT, IMAGE_WIDTH, saveImage } from '$lib/image';
 
 	let app = $state<CanvasApp | undefined>();
 	let stats = $state<CanvasStats | null>(null);
@@ -31,6 +32,39 @@
 	let ctx = $state<{ x: number; y: number; path: string | null } | null>(null);
 	/** The repositories this build has a dump of, empty in the desktop app. */
 	let demos = $state<DemoRepo[]>([]);
+	/** One line about something that just happened, such as where an image was
+	 *  written. Errors have their own slot; this is for the good news. */
+	let notice = $state<string | null>(null);
+	let noticeTimer = 0;
+
+	/** Say something in the status bar. `hold` of 0 leaves it until replaced,
+	 *  which is what a job still running needs. */
+	function say(message: string | null, hold = 6000) {
+		notice = message;
+		clearTimeout(noticeTimer);
+		if (message && hold > 0) {
+			noticeTimer = setTimeout(() => (notice = null), hold) as unknown as number;
+		}
+	}
+
+	/**
+	 * Write the canvas to a PNG.
+	 *
+	 * Takes a second or two at 4K, most of it in the PNG encoder, and the
+	 * canvas is unusable while it runs because the export borrows its drawing
+	 * buffer. So it says what it is doing first and what came of it after.
+	 */
+	async function save(region: 'view' | 'project') {
+		if (!app) return;
+		say(`rendering ${IMAGE_WIDTH} x ${IMAGE_HEIGHT}…`, 0);
+		try {
+			const to = await saveImage(app, region);
+			say(to ? `wrote ${to}` : 'not saved');
+		} catch (e) {
+			say(null);
+			error = e instanceof Error ? e.message : String(e);
+		}
+	}
 	/** The running watch, so opening another folder replaces it. */
 	let unwatch: UnlistenFn | null = null;
 
@@ -294,7 +328,7 @@
 	onopenfile={openFile}
 	oncontextmenu={(at) => (ctx = at)}
 />
-<StatusBar {stats} {hover} {error} />
+<StatusBar {stats} {hover} {error} {notice} />
 
 <ContextMenu x={ctx?.x ?? 0} y={ctx?.y ?? 0} open={ctx !== null} onclose={() => (ctx = null)}>
 	{#if ctx?.path}
@@ -334,6 +368,26 @@
 			onclick={() => {
 				app?.fit();
 				ctx = null;
+			}}
+		/>
+	</MenuSection>
+	<MenuSection title="Image">
+		<MenuItem
+			label="Save this view"
+			icon="image"
+			hint="4K"
+			onclick={() => {
+				ctx = null;
+				void save('view');
+			}}
+		/>
+		<MenuItem
+			label="Save whole project"
+			icon="image"
+			hint="4K"
+			onclick={() => {
+				ctx = null;
+				void save('project');
 			}}
 		/>
 	</MenuSection>

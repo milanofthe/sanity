@@ -692,6 +692,46 @@ async fn find_text(
     })
 }
 
+/// Write a PNG the window rendered, asking where through the native dialog.
+///
+/// The bytes arrive as the raw request body: a 4K image is a few megabytes,
+/// and the default IPC would turn them into a string of decimal numbers six
+/// times that size. The dialog is opened here rather than in the window so
+/// that the chosen path never has to travel back through the IPC, which for a
+/// raw body can only carry ASCII headers, and paths are not ASCII.
+///
+/// Returns the path written, or None when the dialog was dismissed.
+#[tauri::command]
+async fn save_png(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Option<String>, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("save_png expects the image as a raw body".into());
+    };
+    let name = request
+        .headers()
+        .get("x-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("sanity.png")
+        .to_owned();
+
+    // Blocking is right here and would not be on the main thread: this is an
+    // async command, so it runs on the async runtime, and the dialog has to
+    // be answered before there is anywhere to write.
+    let picked = tauri_plugin_dialog::DialogExt::dialog(&app)
+        .file()
+        .set_file_name(name)
+        .add_filter("PNG image", &["png"])
+        .blocking_save_file();
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(Some(path.display().to_string()))
+}
+
 fn read_text(root: &Path, rel: &str) -> Result<String, String> {
     // Refuse to escape the open folder, however the path was spelled.
     let full = root.join(rel);
@@ -726,6 +766,7 @@ pub fn run() {
             stop_watch,
             drop_files,
             repo_index,
+            save_png,
             log_line
         ])
         .run(tauri::generate_context!())

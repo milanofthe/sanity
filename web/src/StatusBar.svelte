@@ -8,12 +8,16 @@
 	let {
 		stats,
 		hover = null,
-		error = null
+		error = null,
+		notice = null
 	}: {
 		stats: CanvasStats | null;
 		/** Path under the pointer, or null. */
 		hover?: string | null;
 		error?: string | null;
+		/** Something that just happened and is worth one line, such as where an
+		 *  image was written. Cleared by whoever set it. */
+		notice?: string | null;
 	} = $props();
 
 	const cut = $derived(hover ? hover.lastIndexOf('/') + 1 : 0);
@@ -41,6 +45,8 @@
 <footer>
 	{#if error}
 		<span class="group err" title={error}>{error}</span>
+	{:else if notice}
+		<span class="group note" title={notice}>{notice}</span>
 	{/if}
 	{#if stats}
 		<span class="group">
@@ -167,6 +173,12 @@
 	.err {
 		color: var(--error);
 		max-width: 50ch;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.note {
+		color: var(--accent);
+		max-width: 60ch;
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
