@@ -32,6 +32,10 @@ const SIZES = [14, 20, 28, 40, 56, 80, 112] as const;
 
 interface Level {
   size: number;
+  /** Horizontal subpixel positions each glyph is rasterised at; see
+   *  `SUBPIXEL_PHASES`. One for the fixed levels, which are only ever drawn
+   *  scaled while the camera moves. */
+  phases: number;
   tex: WebGLTexture;
   cellW: number;
   cellH: number;
@@ -40,6 +44,19 @@ interface Level {
 }
 
 export { BASELINE_RATIO, CELL_RATIO };
+
+/**
+ * Horizontal positions within a pixel an exact atlas holds each glyph at.
+ *
+ * A glyph at rest is drawn 1:1 from its cell, so it has to start on a whole
+ * pixel, and a character is rarely a whole number of pixels wide: at 13.3
+ * pixels per line on a dpr 1 screen it is 6.65, and snapping each glyph on
+ * its own made the gaps between letters alternate between 6 and 7 pixels.
+ * Browsers solve this the same way: the glyph is rasterised a few times at
+ * fractional offsets, and each one is drawn from the variant nearest to where
+ * it really falls, so the spacing is even to a quarter of a pixel.
+ */
+const SUBPIXEL_PHASES = 4;
 
 export class GlyphAtlas {
   private levels: Level[] = [];
@@ -52,11 +69,15 @@ export class GlyphAtlas {
   capRatio = 0.72;
   descenderRatio = 0.21;
 
+  /** Largest texture side the context takes, for fitting the phases in. */
+  private maxTexSize: number;
+
   constructor(private gl: WebGL2RenderingContext) {
-    for (const size of SIZES) this.levels.push(this.build(size));
+    this.maxTexSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    for (const size of SIZES) this.levels.push(this.build(size, 1));
   }
 
-  private build(size: number): Level {
+  private build(size: number, wantPhases: number): Level {
     const { gl } = this;
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d')!;
@@ -74,17 +95,24 @@ export class GlyphAtlas {
     // into the neighbouring cell once the texture is filtered.
     const cellW = Math.ceil(advance) + 4;
     const cellH = Math.ceil(size * CELL_RATIO);
+    // Each phase is a full grid of glyphs below the previous one. As many as
+    // fit the context's largest texture: WebGL2 promises 2048, and at the
+    // largest size four grids are 8064 pixels tall.
+    const phases = Math.max(1, Math.min(wantPhases, Math.floor(this.maxTexSize / (cellH * GRID_ROWS))));
     canvas.width = cellW * GRID_COLS;
-    canvas.height = cellH * GRID_ROWS;
+    canvas.height = cellH * GRID_ROWS * phases;
 
     ctx.font = `${size}px ${font.mono}`;
     ctx.fillStyle = '#fff';
     ctx.textBaseline = 'alphabetic';
     const baseline = GlyphAtlas.baselineAt(size);
-    for (let i = 0; i < GLYPH_COUNT; i++) {
-      const gx = (i % GRID_COLS) * cellW;
-      const gy = Math.floor(i / GRID_COLS) * cellH;
-      ctx.fillText(String.fromCharCode(FIRST + i), gx + 2, gy + baseline);
+    for (let p = 0; p < phases; p++) {
+      const top = p * GRID_ROWS * cellH;
+      for (let i = 0; i < GLYPH_COUNT; i++) {
+        const gx = (i % GRID_COLS) * cellW;
+        const gy = top + Math.floor(i / GRID_COLS) * cellH;
+        ctx.fillText(String.fromCharCode(FIRST + i), gx + 2 + p / phases, gy + baseline);
+      }
     }
 
     const tex = gl.createTexture()!;
@@ -97,7 +125,7 @@ export class GlyphAtlas {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    return { size, tex, cellW, cellH, texW: canvas.width, texH: canvas.height };
+    return { size, phases, tex, cellW, cellH, texW: canvas.width, texH: canvas.height };
   }
 
   /**
@@ -124,7 +152,7 @@ export class GlyphAtlas {
         this.exact.set(want, held);
         return held;
       }
-      const built = this.build(want);
+      const built = this.build(want, SUBPIXEL_PHASES);
       this.exact.set(want, built);
       this.trim();
       return built;

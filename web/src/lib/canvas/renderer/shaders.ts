@@ -217,14 +217,14 @@ uniform vec2 uCell;      // cell size in atlas uv
 uniform vec2 uBoxPx;      // the atlas cell, in device pixels
 uniform float uEmWorld;   // the em that is drawn as exactly the cell, in world units
 uniform float uGridCols;
+uniform float uGridRows;
+// Subpixel variants the atlas holds each glyph at, one grid of glyphs each.
+uniform float uPhases;
 // Drawing buffer size in device pixels, for putting a glyph on the pixel grid.
 uniform vec2 uViewport;
 out vec2 vUv;
 out vec4 vColor;
 void main() {
-  float idx = aPosGlyph.z;
-  vec2 cell = vec2(mod(idx, uGridCols), floor(idx / uGridCols));
-  vUv = (cell + aCorner) * uCell;
   vColor = vec4(uKind[int(aPosGlyph.w)], aSizeFade.y);
 
   // Size and position both on the pixel grid. The quad is the atlas cell,
@@ -238,9 +238,24 @@ void main() {
   // The whole quad is shifted by one offset rather than each corner being
   // rounded on its own: rounding corners changes a glyph's width by up to a
   // pixel, which is a wobble rather than a sharpening.
+  //
+  // Horizontally the glyph starts on the pixel at or left of where it falls,
+  // and the variant rasterised nearest the remaining fraction is drawn, so
+  // the spacing between letters stays even. Vertically every line of a
+  // column shares its fraction, so plain rounding keeps them even already.
   vec2 boxPx = max(vec2(1.0), floor(uBoxPx * (aSizeFade.x / uEmWorld) + 0.5));
   vec2 originClip = (uView * vec3(aPosGlyph.xy, 1.0)).xy;
-  vec2 originPx = floor((originClip * 0.5 + 0.5) * uViewport + 0.5);
+  vec2 exactPx = (originClip * 0.5 + 0.5) * uViewport;
+  float baseX = floor(exactPx.x);
+  float phase = floor((exactPx.x - baseX) * uPhases + 0.5);
+  if (phase >= uPhases) {
+    baseX += 1.0;
+    phase = 0.0;
+  }
+  vec2 originPx = vec2(baseX, floor(exactPx.y + 0.5));
+  float idx = aPosGlyph.z + phase * uGridCols * uGridRows;
+  vec2 cell = vec2(mod(idx, uGridCols), floor(idx / uGridCols));
+  vUv = (cell + aCorner) * uCell;
   // Y flips between the two: world y grows downwards and uView turns that
   // into clip space, where it grows upwards. Adding the box in pixels without
   // that flip draws every glyph upside down.

@@ -531,8 +531,8 @@ export class Scene {
     this.uImage = uniforms(gl, this.progImage, ['uView', 'uTex', 'uRect', 'uFade']);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
-      'uView', 'uKind[0]', 'uAtlas', 'uCell', 'uGridCols', 'uViewport', 'uBoxPx',
-      'uEmWorld',
+      'uView', 'uKind[0]', 'uAtlas', 'uCell', 'uGridCols', 'uGridRows', 'uPhases',
+      'uViewport', 'uBoxPx', 'uEmWorld',
     ]);
 
     this.bgRects = new InstanceBuffer(gl, RECT_STRIDE, 2048);
@@ -2122,13 +2122,18 @@ export class Scene {
     //   rounded, drawn 1:1           13.9  17.3    11.8  13.6
     const scalePx = (pxPerLine / metrics.lineHeight) * dpr;
     gl.uniform2f(this.uGlyph.uBoxPx, level.cellW, level.cellH);
+    const oneToOne = exact && GlyphAtlas.oneToOne(em * dpr);
     gl.uniform1f(
       this.uGlyph.uEmWorld,
-      exact && GlyphAtlas.oneToOne(em * dpr)
+      oneToOne
         ? metrics.charWidth / this.atlas.advanceRatio
         : level.size / Math.max(1e-6, scalePx),
     );
     gl.uniform1f(this.uGlyph.uGridCols, GlyphAtlas.gridCols);
+    gl.uniform1f(this.uGlyph.uGridRows, GlyphAtlas.gridRows);
+    // Only a glyph drawn 1:1 lands where a phase can be chosen for it; a
+    // scaled one is resampled anyway and takes the first grid.
+    gl.uniform1f(this.uGlyph.uPhases, oneToOne ? level.phases : 1);
     gl.uniform2f(this.uGlyph.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, level.tex);
