@@ -51,7 +51,12 @@ const fail = (msg) => {
 // intact. Expanded in the browser by the function below rather than by
 // canvas/data/tabs.ts, so the check and the thing it checks do not share an
 // implementation.
-const fixture = (process.env.SANITY_SRC ?? src).split('=')[1] ?? 'fixture';
+// `fixture=x` lives at /x, `demo=x` at /demo/x. Being able to point this at a
+// demo repository is what lets it check a notebook, whose text is assembled
+// from its cells rather than read off the file: see crates/sanity-core's
+// notebook module, and `scan::display_text`.
+const q = (process.env.SANITY_SRC ?? src).split('=');
+const fixture = q[0] === 'demo' ? `demo/${q[1]}` : (q[1] ?? 'fixture');
 await page.evaluate(async (name) => {
   const raw = await fetch(`/${name}/texts.json`).then((r) => r.json());
   const TAB = 4;
@@ -237,6 +242,24 @@ await look(
   'the largest file in view',
   `return files.filter((f) => !f.node.stub).sort((a, b) => b.data.lineCount - a.data.lineCount)[0] ?? null;`,
 );
+
+// A notebook, when the project has one. Its lines exist nowhere on disk: they
+// are the cells, flattened, and the spans come from two parses over two views
+// of that same line space. So this is the case where the text the renderer
+// draws and the text the check compares against could drift apart while both
+// look plausible.
+const notebooks = await page.evaluate(
+  () => [...window.__sanity.app.scene.files.values()].filter((f) => f.node.path.endsWith('.ipynb')).length,
+);
+if (notebooks === 0) {
+  console.log('no notebook in this project, so the cell path is not checked here');
+} else {
+  await look(
+    'a notebook',
+    `return files.filter((f) => !f.node.stub && f.node.path.endsWith('.ipynb'))
+       .sort((a, b) => b.data.lineCount - a.data.lineCount)[0] ?? null;`,
+  );
+}
 
 await browser.close();
 console.log(

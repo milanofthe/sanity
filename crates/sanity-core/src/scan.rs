@@ -183,6 +183,30 @@ fn binary_file_data() -> FileData {
     f
 }
 
+/// The text of a file as the canvas shows it.
+///
+/// The identity for everything except a notebook, whose cells are read out of
+/// its JSON. Every reader goes through this: the scan for its metrics, the
+/// `file_text` command for the glyphs, the content search for its hits, and
+/// the dump for the demo. They have to agree, because a span's column is a
+/// column of the line the renderer draws, and a hit's line number is a line
+/// of the panel it lights up.
+pub fn display_text(rel: &str, bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(bytes);
+    match notebook_of(rel, &raw) {
+        Some(nb) => nb.source,
+        None => raw.into_owned(),
+    }
+}
+
+/// The notebook a file is, if it is one.
+fn notebook_of(rel: &str, text: &str) -> Option<crate::notebook::Notebook> {
+    if !crate::notebook::is_notebook(rel) {
+        return None;
+    }
+    crate::notebook::parse(text)
+}
+
 /// Read one file and produce its payload. Returns `None` when the file cannot
 /// be read at all, which happens for broken symlinks and races with a build.
 pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
@@ -198,18 +222,26 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
         ));
     }
 
-    let text = String::from_utf8_lossy(&bytes);
+    let raw = String::from_utf8_lossy(&bytes);
+    // A notebook is read once, and both its text and its spans come out of
+    // that one reading: going through `display_text` here and then parsing
+    // again would be parsing the cells as if they were the JSON, which is how
+    // the output lines ended up with no colour of their own.
+    let notebook = notebook_of(rel, &raw);
+    let text: &str = notebook.as_ref().map(|nb| nb.source.as_str()).unwrap_or(&raw);
     // A grammar if one claims the extension, then the coarse lexer for the
     // languages that have no usable grammar, then line metrics alone. Plain
     // output still renders correctly: what the zoomed-out levels show is
     // indentation and line length, and only the colour is missing.
     let ext = extension_of(rel);
-    let data = if let Some(grammar) = ext.and_then(grammar_for_extension) {
-        tokenize(&text, grammar)
+    let data = if let Some(nb) = notebook.as_ref() {
+        crate::notebook::tokenize(nb)
+    } else if let Some(grammar) = ext.and_then(grammar_for_extension) {
+        tokenize(text, grammar)
     } else if let Some((id, _, syn)) = ext.and_then(crate::lang::syntax_for_extension) {
-        crate::simple::lex(&text, id, syn)
+        crate::simple::lex(text, id, syn)
     } else {
-        let mut d = plain_file_data(&text);
+        let mut d = plain_file_data(text);
         d.flags |= FLAG_NO_GRAMMAR;
         d
     };
@@ -377,6 +409,38 @@ pub fn ignored_paths(root: &Path, paths: &[String]) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The wiring, not the parser: a notebook on disk has to come back through
+    // `read_file` measured as its cells. It used to be measured as JSON, which
+    // put a file of 247 lines of code into a panel of nine thousand rows and
+    // filled it with base64.
+    #[test]
+    fn a_notebook_is_read_as_its_cells() {
+        let dir = std::env::temp_dir().join("sanity-notebook-scan-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let long = "A".repeat(4000);
+        let doc = format!(
+            r#"{{"cells": [
+                 {{"cell_type": "markdown", "source": ["Heading of a cell\n"]}},
+                 {{"cell_type": "code", "source": ["import numpy as np\n", "x = 1\n"],
+                   "outputs": [{{"output_type": "display_data",
+                                "data": {{"image/png": "{long}"}}}}]}}
+               ], "metadata": {{"language_info": {{"file_extension": ".py"}}}}}}"#
+        );
+        std::fs::write(dir.join("nb.ipynb"), doc).unwrap();
+
+        let (data, scanned) = read_file(&dir, "nb.ipynb").expect("reads");
+        assert_eq!(scanned.line_count, 5, "heading, blank, two lines of code, one output");
+        assert!(scanned.max_cols < 40, "no base64 line survived: {} columns", scanned.max_cols);
+        assert!(data.validate().is_ok());
+        // The output line is drawn, and in the colour a comment takes.
+        let last = data.line_count() - 1;
+        let s0 = data.span_start[last] as usize;
+        let s1 = data.span_start[last + 1] as usize;
+        assert_eq!(s1 - s0, 1);
+        assert_eq!(crate::wire::span_kind(data.spans[s0]), Kind::Comment as u8);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn git_reports_ignored_paths_and_leaves_tracked_ones() {

@@ -113,7 +113,10 @@ pub fn find_in_files(
                     if scan::looks_binary(&bytes) {
                         continue;
                     }
-                    let text = String::from_utf8_lossy(&bytes);
+                    // The same text the canvas shows, so a hit's line number
+                    // is a line of the panel that lights up: a notebook is
+                    // searched as its cells, not as its JSON.
+                    let text = scan::display_text(rel, &bytes);
                     let (hits, more) = find_in_text(&text, needle, cap_per_file);
                     if hits.is_empty() {
                         continue;

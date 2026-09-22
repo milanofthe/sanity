@@ -2662,6 +2662,7 @@ name = "sanity-core"
 version = "0.1.0"
 dependencies = [
  "codebook-tree-sitter-latex",
+ "serde_json",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",

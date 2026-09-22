@@ -753,7 +753,9 @@ fn read_text(root: &Path, rel: &str) -> Result<String, String> {
         return Err("path outside the open folder".into());
     }
     let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    // Through the same normalisation the scan uses, or a notebook's glyphs
+    // would be drawn from its JSON while its spans came from its cells.
+    Ok(scan::display_text(rel, &bytes))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

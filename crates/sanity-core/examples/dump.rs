@@ -65,7 +65,7 @@ fn main() {
         // worth reading; the dump is a development artefact, not a cache.
         if info.line_count < 4000 {
             if let Ok(t) = std::fs::read(root.join(rel)) {
-                texts.push((rel.clone(), String::from_utf8_lossy(&t).into_owned()));
+                texts.push((rel.clone(), scan::display_text(rel, &t)));
             }
         }
     }

@@ -38,6 +38,11 @@ Try it on four public repositories, in the browser, no install:
   past its panel keeps its marks through the relayout. Then the canvas goes
   quiet and the frame loop stops: 42 frames for a change, against the 5400 a
   ninety second glow used to cost.
+- **Notebooks as cells**, not as the JSON they are stored in. A `.ipynb` is
+  read into its code cells, its prose cells and one line per output naming
+  what it is, so what a panel shows is the notebook. On pathsim's 34 notebooks
+  that is 5733 lines instead of 12,634, 9 percent of the repository instead of
+  18, and no base64.
 - **16 languages** through tree-sitter, plus a coarse lexer for Verilog-A and
   SPICE, which have no grammar that fits them. A code language gets a colour on
   70 to 89 percent of its characters, prose markup on less because prose is
@@ -159,6 +164,12 @@ padding on any side, and that it leaves the canvas as it found it.
 The layout case list includes a project two thirds reduced to placeholders. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.
+
+`SANITY_SRC=demo=pathsim npm run glyph-check` points the text check at one of
+the demo repositories instead of the fixture, which is how the notebook path
+gets checked: a notebook's lines exist nowhere on disk, so the text the
+renderer draws and the text the check compares against could drift apart while
+both look plausible.
 
 `npm run icons` regenerates the mark: one description produces the app icon,
 the favicon and the toolbar component.
