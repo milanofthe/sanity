@@ -1259,7 +1259,9 @@ export class Scene {
     const dot = n.name.lastIndexOf('.');
     const ext = dot > 0 ? n.name.slice(dot + 1) : '';
     const dir = n.path.slice(0, Math.max(0, n.path.length - n.name.length - 1));
-    const lines = f.node.stub ? '' : compactCount(n.lineCount);
+    // The live count, for the same reason: the header would otherwise keep
+    // showing what the file had when it was laid out.
+    const lines = f.node.stub ? '' : compactCount(f.data.lineCount);
 
     // Right-aligned, in order: the type badge, then the line count. Both are
     // dropped before the name when space runs short, the badge first because
@@ -1457,7 +1459,15 @@ export class Scene {
     const colHeight = g.linesPerColumn * metrics.lineHeight;
     // Screen rows, wrapped lines included, which is what the texture holds
     // and what the columns are filled with.
-    const totalRows = f.rows[n.lineCount];
+    //
+    // Off the data rather than off the node: the node carries the line count
+    // the layout was built from, and a file that has since lost lines has a
+    // shorter `rows`, so indexing it with the node's count read past the end.
+    // That is `undefined`, every number derived from it became NaN, and the
+    // panel drew nothing at all -- for good, not just for the animation. An
+    // edit that removed lines made its file disappear from the overview,
+    // which is the zoom this whole app is meant to be watched at.
+    const totalRows = f.rows[f.data.lineCount];
 
     for (let c = 0; c < g.columns; c++) {
       const first = c * g.linesPerColumn;

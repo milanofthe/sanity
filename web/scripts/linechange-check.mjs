@@ -16,7 +16,7 @@
 // the state could be right while nothing is drawn.
 
 import { decodePng } from './png.mjs';
-import { base, frameOnScreen, launch, pixelDiff, settled, src } from './browser.mjs';
+import { base, canvasBox, frameOnScreen, launch, pixelDiff, settled, src } from './browser.mjs';
 
 const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
@@ -442,6 +442,124 @@ if (created.marked !== created.of || created.since !== 0 || created.recent < 1) 
   );
 } else {
   console.log(`ok    a new file arrives with all ${created.of} lines marked, and flashing`);
+}
+
+// --- and the panel still has its content afterwards, at the zoom it is
+// watched at ---
+//
+// This is where a change used to make a file vanish. `pushOverview` took the
+// line count from the layout node rather than from the data, so a file that
+// had lost lines was indexed past the end of its own row table: undefined,
+// then NaN through every coordinate, then a panel that drew nothing and never
+// came back. Nothing in the state was wrong, which is why it is measured in
+// pixels, and it only shows at the overview zoom, which is why it is measured
+// there rather than where the bands are.
+// A file of its own, untouched by everything above: what is measured here
+// needs a panel whose layout still matches its content, and `target` has been
+// doubled and re-marked by now, which left it larger than its own node rather
+// than smaller. That is the opposite of the case, and the first version of
+// this check passed with the bug reinstated because of it.
+const other = await page.evaluate(() => {
+  const app = window.__sanity.app;
+  const f = [...app.scene.files.values()]
+    .filter((x) => !x.node.stub && x.data.lineCount > 150 && x.node.lineCount === x.data.lineCount)
+    .sort((a, b) => b.data.lineCount - a.data.lineCount)[0];
+  if (!f) return null;
+  const path = f.node.path;
+  // Its own splicer: the one above is closed over `target`.
+  window.__sanity.spliceOf = (from, count) => {
+    const d = app.scene.files.get(path).data;
+    const keep = [];
+    for (let i = 0; i < d.lineCount; i++) if (i < from || i >= from + count) keep.push(i);
+    const spanStart = new Uint32Array(keep.length + 1);
+    const spans = [];
+    for (let k = 0; k < keep.length; k++) {
+      spanStart[k] = spans.length;
+      const i = keep[k];
+      for (let s = d.spanStart[i]; s < d.spanStart[i + 1]; s++) spans.push(d.spans[s]);
+    }
+    spanStart[keep.length] = spans.length;
+    return {
+      lineCount: keep.length, langId: d.langId, flags: d.flags, spanStart,
+      lineCols: Uint16Array.from(keep.map((i) => d.lineCols[i])),
+      lineIndent: Uint8Array.from(keep.map((i) => d.lineIndent[i])),
+      lineState: Uint8Array.from(keep.map((i) => d.lineState[i])),
+      spans: Uint32Array.from(spans),
+    };
+  };
+  // The zoom this app is meant to be watched at: a line under two pixels,
+  // where a panel is its overview texture and nothing else.
+  app.cam.zoom = 1.7 / 14;
+  app.cam.x = f.node.x + f.node.w / 2;
+  app.cam.y = f.node.y + f.node.h / 2;
+  app.invalidate();
+  const [sx, sy] = app.cam.worldToScreen(f.node.x, f.node.y);
+  const [ex, ey] = app.cam.worldToScreen(f.node.x + f.node.w, f.node.y + f.node.h);
+  return {
+    path,
+    lines: f.data.lineCount,
+    x: Math.round(sx), y: Math.round(sy), w: Math.round(ex - sx), h: Math.round(ey - sy),
+  };
+});
+if (!other) {
+  fail('no untouched panel was found, so the overview case is untested');
+} else {
+  await settled(page);
+  await frameOnScreen(page);
+
+  const cbox = await canvasBox(page);
+  const clip = {
+    x: cbox.x + other.x + 2,
+    y: cbox.y + other.y + 4,
+    width: Math.max(8, other.w - 4),
+    height: Math.max(8, other.h - 8),
+  };
+
+  /** Share of the panel that is not its own background, which is what "the
+   *  content is drawn" means at a zoom where a line is under two pixels. */
+  const ink = async () => {
+    const png = decodePng(await page.screenshot({ type: 'png', clip }));
+    const counts = new Map();
+    for (let i = 0; i < png.data.length; i += 4) {
+      const key = (png.data[i] << 16) | (png.data[i + 1] << 8) | png.data[i + 2];
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    let top = 0;
+    for (const c of counts.values()) top = Math.max(top, c);
+    return 1 - top / (png.width * png.height);
+  };
+
+  const inkBefore = await ink();
+  const shrink = await page.evaluate(([path, count]) => {
+    const app = window.__sanity.app;
+    const f = app.scene.files.get(path);
+    app.touch(path, window.__sanity.spliceOf(Math.floor(f.data.lineCount / 2), count));
+    return { node: f.node.lineCount, data: f.change?.pending?.lineCount ?? f.data.lineCount };
+  }, [other.path, CUT]);
+  // Past the whole gesture, so what is measured is the panel at rest.
+  await page.waitForTimeout(1600);
+  await settled(page);
+  await frameOnScreen(page);
+  const inkAfter = await ink();
+  console.log(
+    `overview: ${other.path} at ${other.lines} lines, ${(inkBefore * 100).toFixed(1)}% of the ` +
+      `panel drawn; after cutting ${CUT} it is ${shrink.data} lines in a node of ${shrink.node}, ` +
+      `${(inkAfter * 100).toFixed(1)}% drawn`,
+  );
+  // The condition the bug needs: fewer lines than the layout it still sits in.
+  // Without it this measures nothing, so it is asserted rather than assumed.
+  if (shrink.node <= shrink.data) {
+    fail(`the file is not smaller than its layout (node ${shrink.node}, data ${shrink.data})`);
+  } else if (inkBefore < 0.1) {
+    fail(`the panel was ${(inkBefore * 100).toFixed(1)}% drawn to begin with, so this proves nothing`);
+  } else if (inkAfter < inkBefore * 0.6) {
+    fail(
+      `the panel lost its content: ${(inkBefore * 100).toFixed(1)}% drawn before the cut, ` +
+        `${(inkAfter * 100).toFixed(1)}% after`,
+    );
+  } else {
+    console.log('ok    and the panel keeps its content at the overview zoom');
+  }
 }
 
 await browser.close();
