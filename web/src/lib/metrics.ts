@@ -100,6 +100,33 @@ export const columns = {
   maxPerPanel: 32,
   /** Fewest lines a code column is quantized to. */
   minLines: 4,
+  /**
+   * Fewest lines a column is worth splitting into.
+   *
+   * A panel wraps into newspaper columns to reach a shape the treemap can
+   * place, and shape alone is happy to cut a short file into four columns of
+   * twenty five: measured on pathsim, ten panels held fewer than forty lines
+   * a column, among them a 36 line workflow file in two columns of 23. None
+   * do now.
+   * Reading those means jumping back to the top for something that would have
+   * fitted on one screen.
+   *
+   * Swept on pathsim (328 text panels) and the nine shapes layout-check
+   * covers, with the cost measured as how much larger a short file's panel is
+   * than the shape it prefers:
+   *
+   *   40   61 panels in one column, cost up to 3.42, every case converges
+   *   50   99 panels in one column, cost up to 3.67, one case runs to the
+   *        pass limit with two panels narrower than preferred
+   *   60  138 panels in one column, and the cost stops being confined to
+   *        short files: long panels go from 0.99 to 1.47 at the 95th
+   *        percentile, three cases end with misfits, most run to the limit
+   *
+   * Fifty, because it is the largest value whose cost stays inside the short
+   * files it is spent on, and because a file of under a hundred lines then
+   * stays in one piece.
+   */
+  minPerColumn: 50,
 } as const;
 
 

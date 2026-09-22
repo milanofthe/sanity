@@ -31,11 +31,11 @@ const CASES = [
   { cfg: 'files=1000&lines=300', fill: 0.95, bloat: 1.05 },
   { cfg: 'files=1200&lines=400', fill: 0.96, bloat: 1.05 },
   { cfg: 'files=2500&lines=600', fill: 0.96, bloat: 1.05 },
-  // Pathological shapes: almost all tiny files, and a few enormous ones. The
-  // first is the one case still worth improving: a twelve line file is smaller
-  // than the floor a panel has, so its slot is set by that floor rather than
-  // by its content, and the 95th percentile sits at 1.56 against 1.00
-  // everywhere else.
+  // Pathological shapes: almost all tiny files, and a few enormous ones. In
+  // the first, a twelve line file is smaller than the floor a panel has, so
+  // its slot is set by that floor rather than by its content. That used to
+  // show as a 95th percentile of 1.56 against 1.00 everywhere else; it is now
+  // in `small bloat`, where every one of those files is counted.
   { cfg: 'files=800&lines=12', fill: 0.81, bloat: 1.8 },
   { cfg: 'files=200&lines=4000', fill: 0.98, bloat: 1.1 },
   // Two thirds of the files reduced to placeholders. Fill is structurally
@@ -64,6 +64,24 @@ page.on('console', (m) => {
 page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
 
 let failures = 0;
+/**
+ * Bound on how much larger a short file's panel is than its preferred shape.
+ *
+ * Loose, because the room is the decision. A file is cut into another column
+ * only once that column would hold fifty lines, so a short file ends up in one
+ * or two columns whatever shape its slot has, and the slot's surplus width
+ * stays empty beside the text instead of turning into columns nobody asked
+ * for. Measured across the nine shapes: 2.62, 3.06, 3.10, 3.67, 3.63, 2.76,
+ * 2.61, 3.63, 3.32.
+ *
+ * The room is horizontal, which is why it does not show up as panels with
+ * empty bottoms: of the rows a short panel has, the median short file fills 76
+ * percent of them, against 67 before the rule. Fill is unchanged to a few
+ * tenths of a point everywhere except the all-tiny-files case, where it rises
+ * by three.
+ */
+const SMALL_BLOAT = 3.8;
+
 for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   lastLine = null;
   await page.goto(`${base}/?${cfg}`, { waitUntil: 'load' });
@@ -96,6 +114,14 @@ for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   if (fill < minFill) problems.push(`fill=${(fill * 100).toFixed(1)}% < ${minFill * 100}%`);
   const bloat = num('bloat p95');
   if (!(bloat <= maxBloat)) problems.push(`bloat p95=${bloat.toFixed(2)} > ${maxBloat}`);
+  // Short files are held to their own, looser bound: they are deliberately
+  // kept in fewer columns than their slot would take, so the room left inside
+  // them is the decision rather than a fault. Still bounded, because "kept in
+  // one piece" is not a licence for a panel twice the size of its file.
+  const smallBloat = num('small bloat p95');
+  if (!(smallBloat <= SMALL_BLOAT)) {
+    problems.push(`small bloat p95=${smallBloat.toFixed(2)} > ${SMALL_BLOAT}`);
+  }
   // The pass count is reported, not asserted: the pathological case converges
   // on its last allowed pass, and the layout it produces is still valid. What
   // actually has to hold is `unusable`, `overlaps` and `offgrid`, above.

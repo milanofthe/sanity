@@ -6,8 +6,10 @@
 
 import { metrics } from '$lib/metrics';
 import {
-  COLUMN_GUTTER, fillSlot, MAX_COLUMNS, MIN_PANEL_COLS, panelArea as panelArea_, panelGeometry,
+  COLUMN_GUTTER, columnsWorth, fillSlot, MAX_COLUMNS, MIN_PANEL_COLS,
+  panelArea as panelArea_, panelGeometry,
   mediaGeometry, stubArea, stubGeometry, type PanelGeometry,
+  SMALL_FILE_LINES,
 } from './panel';
 import { visualRowsCached } from './wrap';
 import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
@@ -286,6 +288,16 @@ function panelBounds(lineCols: ArrayLike<number>, geom: PanelGeometry): {
 } {
   const rows = Math.max(1, visualRowsCached(lineCols, geom.cols));
   const pitch = geom.cols * metrics.charWidth + COLUMN_GUTTER;
+  // At the column cap, not at the fewest columns the file is worth cutting
+  // into. The two differ for short files, and this is the bound on what the
+  // panel *can* fill rather than on what it would rather be: handed a slot
+  // flatter than it likes, a panel still takes the columns it needs to hold
+  // its rows. Tried the other way round, so the treemap would hand short
+  // files taller slots directly: it does place a few more of them in one
+  // column, and it also put a thirteen line file in a slot of 210 by 98,
+  // where seven columns of twelve characters is the only way to fill it and
+  // none of them is readable. A preference belongs where it can be given up,
+  // which is the fitting pass, not in a bound the packing takes literally.
   const widest = MAX_COLUMNS * pitch - COLUMN_GUTTER + 2 * metrics.panelPadX;
   const shortest =
     Math.ceil(rows / MAX_COLUMNS) * metrics.lineHeight
@@ -960,7 +972,12 @@ function fitPasses(
       for (let c = natural.cols; ; c = Math.max(MIN_PANEL_COLS, Math.floor(c / 16) * 8)) {
         const rows = visualRowsCached(f.lineCols, c);
         const pitch = c * metrics.charWidth + COLUMN_GUTTER;
-        for (let k = 1; k <= MAX_COLUMNS; k++) {
+        // Only as many columns as the rows are worth, the same rule `fillSlot`
+        // judges the result by. Searching past it asks for a slot whose shape
+        // only a panel with too many columns could fill, so the file would be
+        // handed exactly what it was just declared a misfit for.
+        const kMax = columnsWorth(rows);
+        for (let k = 1; k <= kMax; k++) {
           const w = k * pitch - COLUMN_GUTTER + 2 * metrics.panelPadX;
           const h =
             Math.ceil(rows / k) * metrics.lineHeight
@@ -1077,6 +1094,10 @@ export interface LayoutStats {
    */
   bloatP95: number;
   bloatMax: number;
+  /** The same for files short enough to be kept in one piece; see
+   *  `SMALL_FILE_LINES`. Reported apart because the room they leave is a
+   *  decision rather than a fault. */
+  smallBloatP95: number;
   /** The directory with the most children among those that had an overlap,
    *  with its size in cells. Points straight at whether the integer split ran
    *  out of cells or got the arithmetic wrong. */
@@ -1092,6 +1113,7 @@ export function layoutStats(l: Layout): LayoutStats {
   let overflowing = 0;
   let hiddenStubs = 0;
   const bloat: number[] = [];
+  const smallBloat: number[] = [];
   for (const f of l.files) {
     panelArea += f.w * f.h;
     aspectSum += f.w / Math.max(1, f.h);
@@ -1100,9 +1122,18 @@ export function layoutStats(l: Layout): LayoutStats {
     if (!f.usable && !f.stub) unusable++;
     if (!f.holdsAll) overflowing++;
     if (f.stub && !f.usable) hiddenStubs++;
-    if (!f.stub) bloat.push((f.w * f.h) / Math.max(1, panelArea_(f.lineCols, f.maxCols)));
+    // Short files are excluded on purpose. They are kept in fewer columns
+    // than their slot would like, which leaves room inside the panel by
+    // design: measuring that as bloat would report the decision as a fault
+    // and hide a real one behind it. `smallBloatP95` reports them separately.
+    if (!f.stub) {
+      const b = (f.w * f.h) / Math.max(1, panelArea_(f.lineCols, f.maxCols));
+      if (f.lineCount > SMALL_FILE_LINES) bloat.push(b);
+      else smallBloat.push(b);
+    }
   }
   bloat.sort((a, b) => a - b);
+  smallBloat.sort((a, b) => a - b);
 
   let overlaps = 0;
   let offGrid = 0;
@@ -1148,6 +1179,9 @@ export function layoutStats(l: Layout): LayoutStats {
 
   return {
     bloatP95: bloat.length ? bloat[Math.floor(0.95 * (bloat.length - 1))] : 1,
+    smallBloatP95: smallBloat.length
+      ? smallBloat[Math.floor(0.95 * (smallBloat.length - 1))]
+      : 1,
     bloatMax: bloat.length ? bloat[bloat.length - 1] : 1,
     fill: panelArea / Math.max(1, l.root.w * l.root.h),
     aspect: l.root.w / Math.max(1, l.root.h),

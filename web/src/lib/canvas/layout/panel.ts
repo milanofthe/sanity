@@ -23,6 +23,28 @@ export const MAX_COLUMNS = colBounds.maxPerPanel;
  *  than it looks: it is the floor on a panel's height, and a slot flatter
  *  than that floor is one no column count can fit. */
 export const MIN_COLUMN_LINES = colBounds.minLines;
+/** Fewest lines worth splitting a column into; see `columns.minPerColumn`. */
+export const MIN_LINES_PER_COLUMN = colBounds.minPerColumn;
+/** Up to this many lines a file counts as short in the layout statistics. It
+ *  changes no layout, it only says which panels `smallBloatP95` is about. */
+export const SMALL_FILE_LINES = 150;
+/**
+ * How many columns a file of this many rows is worth cutting into.
+ *
+ * A panel wraps into newspaper columns to reach a shape the treemap can place,
+ * and shape alone is happy to cut a short file into four columns of twenty
+ * five. Reading that means three jumps back to the top for something that
+ * would have fitted on one screen, so a column has to be worth its break:
+ * every one of them holds `MIN_LINES_PER_COLUMN` rows or it does not exist.
+ *
+ * The rule is the same for every file, with no threshold where short turns
+ * into long. It simply stops binding once a file is long enough that the
+ * column cap is reached first, at around 1280 rows.
+ */
+export function columnsWorth(rows: number): number {
+  return Math.max(1, Math.min(MAX_COLUMNS, Math.floor(rows / MIN_LINES_PER_COLUMN)));
+}
+
 /** Re-exported from metrics, where the bounds live so they can be checked
  *  without the module graph. */
 export const PREFERRED_MIN_COLS = colBounds.preferredMin;
@@ -276,9 +298,19 @@ export function fillSlot(
     return Math.max(colBounds.hardMin, Math.min(avail - margin, capWidth));
   };
 
-  let columns = Math.max(1, Math.ceil(lineCount / linesPerColumn));
+  // Start at the fewest columns the file is worth cutting into, and let the
+  // loop below add the ones the slot's height forces.
+  let columns = Math.max(
+    1,
+    Math.min(columnsWorth(lineCount), Math.ceil(lineCount / linesPerColumn)),
+  );
   for (let attempt = 0; attempt < 6; attempt++) {
     const rows = visualRowsCached(lineCols, textWidthAt(columns));
+    // Capacity decides here, not taste: the loop exists to make sure the
+    // wrapped rows fit, and a floor on how much a column is worth splitting
+    // would hold a panel below the rows it has to hold. That floor belongs to
+    // the starting point above, which is a preference, and this is the
+    // correction, which is an obligation.
     const next = Math.min(MAX_COLUMNS, Math.max(1, Math.ceil(rows / linesPerColumn)));
     if (next === columns) break;
     // Only ever widen: alternating between two counts would never settle, and
@@ -339,7 +371,12 @@ export function fillSlot(
     pitch,
     w: slotW,
     h: slotH,
-    ok: available >= PREFERRED_MIN_COLS && holdsAll,
+    // A panel cut into more columns than its length is worth counts as a
+    // misfit, the same as one too narrow to read. Both are answered the same
+    // way: the fitting pass asks for a slot that does not force it, and the
+    // shape it asks for is worked out with the same rule, so what it gets back
+    // is a slot where the preference holds.
+    ok: available >= PREFERRED_MIN_COLS && holdsAll && columns <= columnsWorth(neededRows),
     usable: available >= HARD_MIN_COLS,
     holdsAll,
   };
@@ -361,7 +398,11 @@ export function panelGeometry(
   // (n * colWidth) / (lines / n * lineHeight) = aspect for n.
   const colWidth = cols * metrics.charWidth;
   const ideal = Math.sqrt((TARGET_ASPECT * lines * metrics.lineHeight) / colWidth);
-  const columns = Math.min(MAX_COLUMNS, Math.max(1, Math.round(ideal)));
+  // Never more columns than the file has lines to fill them with: a short file
+  // cut into four columns is four jumps back to the top for something that
+  // would have fitted on one screen.
+  const worthSplitting = Math.max(1, Math.floor(lines / MIN_LINES_PER_COLUMN));
+  const columns = Math.min(MAX_COLUMNS, worthSplitting, Math.max(1, Math.round(ideal)));
 
   const linesPerColumn = quantize(Math.ceil(lines / columns), MIN_COLUMN_LINES);
   const inner = {
