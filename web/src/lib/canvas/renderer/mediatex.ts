@@ -53,6 +53,12 @@ const MAX_GAP_MS = 200;
  *  short enough that letting go of the trackpad feels immediate. */
 const QUIET_MS = 100;
 
+/** The same, for a picture being drawn from far too little. Two frames, not
+ *  zero: skipping the wait entirely meant a zoom sweep pulled full-size
+ *  textures for every picture it passed through, 43 decodes and 58 MB held for
+ *  panels that were gone by the time they arrived. */
+const URGENT_QUIET_MS = 32;
+
 interface Slot {
   tex: WebGLTexture;
   /** Pixel size of what is held, which is the level, not the source. */
@@ -141,9 +147,10 @@ export class MediaTextures {
   private slots = new Map<string, Slot>();
   /** Level being decoded per path, so the same request is not queued twice. */
   private loading = new Map<string, number>();
-  /** Asked for but not started, by path: the level wanted and how wide the
-   *  panel is on screen, which is the order they are started in. */
-  private queued = new Map<string, { level: number; width: number }>();
+  /** Asked for but not started, by path: the level wanted, how wide the panel
+   *  is on screen, which is the order they are started in, and whether what is
+   *  held is so far under the panel that waiting would show mush. */
+  private queued = new Map<string, { level: number; width: number; urgent: boolean }>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastStart = 0;
   /** Smoothed cost of a decode, which is what the spacing follows. Seeded at
@@ -265,14 +272,33 @@ export class MediaTextures {
         this.held > this.budget * 0.8 && slot.w > level * 4 && slot.w > MIN_LEVEL;
       if (!tooLarge && (slot.w >= level || slot.w >= MAX_LEVEL)) return slot;
     }
-    this.request(path, level, width);
+    // Zooming from the overview into one picture asks for eight times the
+    // level it is held at, and what is on screen until that arrives is a
+    // thumbnail blown up. That case does not wait for the camera to be still;
+    // a step or two of sharpening does.
+    this.request(path, level, width, !slot || slot.w * 4 <= level);
     return slot ?? null;
   }
 
-  private request(path: string, level: number, width: number): void {
+  /**
+   * What is held for this path, without asking for anything more.
+   *
+   * For a panel too small to be worth a decode: once a picture has been
+   * decoded it keeps being drawn at whatever level it has, because throwing it
+   * away on a zoom out and fetching it again on the way back in is the loop
+   * this cache exists to avoid.
+   */
+  have(path: string): Drawable | null {
+    const slot = this.slots.get(path);
+    if (!slot) return null;
+    slot.seen = this.clock;
+    return slot;
+  }
+
+  private request(path: string, level: number, width: number, urgent: boolean): void {
     if (this.failed.has(path)) return;
     if (this.loading.get(path) === level) return;
-    this.queued.set(path, { level, width });
+    this.queued.set(path, { level, width, urgent });
     this.schedule();
   }
 
@@ -295,7 +321,8 @@ export class MediaTextures {
     if (this.timer !== null) return;
     if (this.queued.size === 0 || this.inFlight >= MAX_IN_FLIGHT) return;
     const now = performance.now();
-    const quiet = this.hurry ? 0 : Math.max(0, this.movedAt + QUIET_MS - now);
+    const wait = this.hurry ? 0 : this.anyUrgent() ? URGENT_QUIET_MS : QUIET_MS;
+    const quiet = Math.max(0, this.movedAt + wait - now);
     const spaced = this.hurry ? 0 : Math.max(0, this.lastStart + this.gap() - now);
     this.timer = setTimeout(
       () => {
@@ -306,9 +333,16 @@ export class MediaTextures {
     );
   }
 
+  /** Whether anything queued is a picture drawn from far too little. */
+  private anyUrgent(): boolean {
+    for (const q of this.queued.values()) if (q.urgent) return true;
+    return false;
+  }
+
   private pump(): void {
     const now = performance.now();
-    if (!this.hurry && (now - this.movedAt < QUIET_MS || now - this.lastStart < this.gap())) {
+    const wait = this.hurry ? 0 : this.anyUrgent() ? URGENT_QUIET_MS : QUIET_MS;
+    if (now - this.movedAt < wait || (!this.hurry && now - this.lastStart < this.gap())) {
       this.schedule();
       return;
     }
@@ -318,8 +352,11 @@ export class MediaTextures {
       let path = '';
       let best = -1;
       for (const [p, q] of this.queued) {
-        if (q.width > best) {
-          best = q.width;
+        // Urgent before wide: a panel showing a blown-up thumbnail is worse to
+        // look at than a slightly soft one, whatever their sizes.
+        const rank = q.width * (q.urgent ? 1e6 : 1);
+        if (rank > best) {
+          best = rank;
           path = p;
         }
       }

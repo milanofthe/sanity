@@ -93,6 +93,42 @@ console.log(`pictures  ${withPictures.line.replace('bench over ', '')}`);
 const swept = withPictures.after;
 console.log(`swept     ${cost(swept)} (running totals)`);
 
+// Zooming into one picture: how long until what is drawn is the picture at
+// its panel's own resolution rather than the thumbnail blown up. This is the
+// case the pacing has to stay out of the way of.
+const sharpen = await page.evaluate(async () => {
+  const app = window.__sanity.app;
+  const f = [...app.scene.files.values()]
+    .filter((x) => x.node.media && x.node.media.w > 800)
+    .sort((a, b) => b.node.media.w * b.node.media.h - a.node.media.w * a.node.media.h)[0];
+  if (!f) return null;
+  const before = app.scene.media.stats().decodes;
+  const t0 = performance.now();
+  app.cam.fit(f.node.x, f.node.y, f.node.x + f.node.w, f.node.y + f.node.h, 0.02);
+  app.invalidate();
+  const wanted = (f.node.w - 16) * app.cam.zoom;
+  for (let i = 0; i < 400; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    const held = app.scene.media.have(f.node.path);
+    if (held && held.w >= wanted * 0.6) {
+      return {
+        path: f.node.path.split('/').pop(),
+        ms: Math.round(performance.now() - t0),
+        level: held.w,
+        panel: Math.round(wanted),
+        decodes: app.scene.media.stats().decodes - before,
+      };
+    }
+  }
+  return { path: f.node.path, ms: -1, level: 0, panel: Math.round(wanted), decodes: 0 };
+});
+if (sharpen) {
+  console.log(
+    `zoom in   ${sharpen.path} sharp after ${sharpen.ms} ms ` +
+      `(${sharpen.level} for a ${sharpen.panel} pixel panel, ${sharpen.decodes} decode(s))`,
+  );
+}
+
 // The same sweep with the cache detached: the panels keep their placeholders,
 // everything else about the scene is identical, so the difference between the
 // two lines is what the pictures cost to draw.

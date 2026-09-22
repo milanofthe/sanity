@@ -9,13 +9,14 @@
 // payloads.bin,texts.json}. The web demo is the same thing under
 // public/demo/<repo>; see sources/demo.ts.
 
-import type { CanvasApp } from '$lib/canvas/app';
-import { findInTexts, type FileHits } from '$lib/canvas/content';
-import { expandLines } from '$lib/canvas/data/tabs';
-import type { MediaSize } from '$lib/canvas/layout/tree';
-import type { TextSource } from '$lib/canvas/renderer/scene';
-import { project, type FileGroup } from '$lib/state/project.svelte';
-import { unpack } from './payload.ts';
+import type { CanvasApp } from "$lib/canvas/app";
+import { findInTexts, type FileHits } from "$lib/canvas/content";
+import { expandLines } from "$lib/canvas/data/tabs";
+import type { MediaSize } from "$lib/canvas/layout/tree";
+import type { TextSource } from "$lib/canvas/renderer/scene";
+import { project, type FileGroup } from "$lib/state/project.svelte";
+import { unpack } from "./payload.ts";
+import { THUMB_MAX } from "./thumbs.ts";
 
 interface FixtureScan {
   root: string;
@@ -26,12 +27,12 @@ interface FixtureScan {
     clipCols?: number;
     media?: MediaSize;
   }[];
-  groups: Omit<FileGroup, 'mode'>[];
+  groups: Omit<FileGroup, "mode">[];
 }
 
 let scan: FixtureScan | null = null;
 /** Which fixture is loaded, for the media URLs. */
-let loaded = '';
+let loaded = "";
 /** Paths that are documents rather than images, which arrive as a rendered
  *  page instead of as the file itself. */
 let documents = new Set<string>();
@@ -49,7 +50,7 @@ class FixtureText implements TextSource {
   lineText(path: string, line: number): string | null {
     const lines = texts[path];
     if (!lines) return null;
-    return line < lines.length ? lines[line] : '';
+    return line < lines.length ? lines[line] : "";
   }
 }
 
@@ -67,7 +68,7 @@ async function find(query: string, capPerFile: number): Promise<FileHits[]> {
   await textsReady;
   return findInTexts(
     Object.entries(texts).map(
-      ([path, lines]) => [path, lines.join('\n')] as [string, string],
+      ([path, lines]) => [path, lines.join("\n")] as [string, string],
     ),
     query,
     capPerFile,
@@ -76,7 +77,7 @@ async function find(query: string, capPerFile: number): Promise<FileHits[]> {
 
 /** The fixture named in the query string, if any. */
 export function fixtureName(): string | null {
-  return new URLSearchParams(location.search).get('fixture');
+  return new URLSearchParams(location.search).get("fixture");
 }
 
 /**
@@ -108,7 +109,7 @@ export async function loadFixture(
   scan = s;
   payloads = unpack(blob);
   documents = new Set(
-    s.files.filter((f) => f.media?.kind === 'document').map((f) => f.path),
+    s.files.filter((f) => f.media?.kind === "document").map((f) => f.path),
   );
   textsReady = fetch(`${base}/texts.json`)
     .then((r) => r.json() as Promise<Record<string, string>>)
@@ -134,24 +135,43 @@ export function openFixture(app: CanvasApp, keepView = false): void {
       maxCols: f.maxCols,
       clipCols: f.clipCols,
       media: f.media,
-      stub: project.modeForPath(f.path) === 'reduced',
+      stub: project.modeForPath(f.path) === "reduced",
     }))
-    .filter((e) => project.modeForPath(e.path) !== 'off');
+    .filter((e) => project.modeForPath(e.path) !== "off");
   const source = {
     entries,
     payload: (p: string) => payloads.get(p),
     text,
     find,
     ready: () => textsReady,
-    // The dump copies pictures in under media/, so a fetch is all it takes.
-    // A document is there as a pre-rendered first page, with `.png` after its
-    // own name: the browser has no PDF renderer and the dump was built on a
-    // machine that does. See scripts/demo.mjs.
-    imageBytes: (path: string) => {
+    // The dump copies pictures in under media/ and their thumbnails under
+    // thumbs/, so a fetch is all it takes. Up to a thumbnail's size that is
+    // what is fetched, which is the same rule the app follows against its
+    // backend, and it keeps the demo from pulling megabytes for panels a
+    // hundred pixels wide. A document is there as a pre-rendered first page,
+    // with `.png` after its own name: the browser has no PDF renderer and the
+    // dump was built on a machine that does. See scripts/demo.mjs.
+    imageBytes: (path: string, level: number) => {
       const doc = documents.has(path);
-      return fetch(`${base(loaded)}/media/${path}${doc ? '.png' : ''}`)
-        .then((r) => (r.ok ? r.arrayBuffer() : null))
-        .catch(() => null);
+      const full = `${base(loaded)}/media/${path}${doc ? ".png" : ""}`;
+      const url =
+        !doc && level <= THUMB_MAX
+          ? `${base(loaded)}/thumbs/${path}.png`
+          : full;
+      return (
+        fetch(url)
+          // Not every picture has a thumbnail: an SVG is a picture the dump's
+          // decoder does not read, and the browser reads it fine. So a miss
+          // falls through to the source rather than marking the file broken.
+          .then((r) =>
+            r.ok
+              ? r.arrayBuffer()
+              : url === full
+                ? null
+                : fetch(full).then((f) => (f.ok ? f.arrayBuffer() : null)),
+          )
+          .catch(() => null)
+      );
     },
   };
   app.open(source, keepView);

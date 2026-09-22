@@ -50,16 +50,22 @@ Try it on four public repositories, in the browser, no install:
   background of its own is drawn on a sheet of paper rather than on the canvas
   ground.
 
-  Either way the texture is decoded to the level under the panel it is drawn
-  in and no further: holding the source pixels of pathsim's 47 images would be
-  730 MB against the 96 MB its whole code costs. The budget for all of it is
-  64 MB, shared between what is on screen. Decodes are paced rather than run as
-  a burst, widest panel first, and none start while the camera is moving: a
-  folder of 119 screenshots is 4.6 seconds of decoding in WebKit, which as a
-  burst is a window that does not answer. Paced, and asked for once each rather
-  than again at every zoom, the same folder costs 2.1 seconds spread out, reads
-  41 MB instead of 69, and leaves the frame time where it is with no pictures
-  on screen at all.
+  Pictures arrive in two steps. The backend thumbnails every one of them at
+  128 pixels, across its cores and cached on disk by path, size and
+  modification time, and that is what the canvas draws at any zoom where a
+  panel is smaller than that. Only a panel somebody has zoomed into falls
+  through to the source, decoded to the level under its own width and no
+  further: holding the source pixels of pathsim's 47 images would be 730 MB
+  against the 96 MB its whole code costs, and the budget for all of it is
+  64 MB, shared between what is on screen.
+
+  Decodes are paced rather than run as a burst, widest panel first, and none
+  start while the camera is moving, apart from a picture being drawn from so
+  little that waiting would show mush. Measured on a folder of 119 screenshots
+  in WebKit, which is the engine the app ships: opening it went from 6999 ms of
+  decoding and 69 MB read to 407 ms and 1.1 MB, a zoom sweep across the whole
+  project asks for nothing at all, and zooming into one picture has it at full
+  resolution 243 ms later.
 - **Notebooks as cells**, not as the JSON they are stored in. A `.ipynb` is
   read into its code cells, its prose cells and one line per output naming
   what it is, so what a panel shows is the notebook. On pathsim's 34 notebooks

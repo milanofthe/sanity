@@ -199,6 +199,15 @@ const HIT_MIX_CURRENT = 0.55;
 const FLASH_WASH = 0.55;
 
 /** On-screen floor for a stub panel, in CSS pixels. */
+/** CSS pixels of panel width below which a picture is not fetched at all.
+ *
+ *  Small, because a thumbnail is cheap: 24 pixels still shows the colour and
+ *  the rough shape of a plot, which is worth having, and the panels this rules
+ *  out are the ones where a picture would be two pixels of mush. The rule
+ *  earns its keep on the projects where a directory holds hundreds of
+ *  renders. */
+const MEDIA_MIN_PX = 24;
+
 const STUB_MIN_PX = 1.5;
 
 /**
@@ -1377,9 +1386,17 @@ export class Scene {
     // area it will occupy while that is still being decoded. Asked for by
     // screen pixels, not by world units: the same panel needs eight times the
     // texture in a 4K export that it needs in the window.
+    //
+    // Below a certain size on screen it is not asked for at all. A panel 30
+    // pixels across shows a smudge whatever is in it, and a project of 119
+    // screenshots opened at the overview zoom is 119 source decodes, two
+    // seconds of them, for 119 smudges. Whatever is already decoded keeps
+    // being drawn, so zooming out never costs anything.
     const onScreen = w * zoom * this.dpr;
     const held =
-      this.media?.want(n.path, onScreen, mw / mh, m.kind === 'image' ? mw : Infinity) ?? null;
+      (w * zoom >= MEDIA_MIN_PX
+        ? this.media?.want(n.path, onScreen, mw / mh, m.kind === 'image' ? mw : Infinity)
+        : this.media?.have(n.path)) ?? null;
 
     // What goes under it. Most of what a repository holds in pictures is ink
     // with nothing behind it: a PDF page comes out of ImageIO as black type on

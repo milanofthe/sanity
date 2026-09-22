@@ -10,5 +10,6 @@ pub mod media;
 pub mod notebook;
 pub mod scan;
 pub mod simple;
+pub mod thumb;
 pub mod tokenize;
 pub mod wire;

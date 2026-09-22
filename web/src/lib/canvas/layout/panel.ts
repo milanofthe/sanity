@@ -94,11 +94,17 @@ export interface PanelGeometry {
  * width a picture asks for is the square root of a third of its pixels times
  * its proportion, and the ceiling only bites for anything from about a
  * megapixel up, which is every plot and screenshot.
+ *
+ * There is a second ceiling, on height, because a width limit alone does
+ * nothing for a portrait: a screenshot of a phone is one part wide to two
+ * parts tall, so 75 columns of it came out 78 lines tall, taller than most
+ * source files in the project. Whichever ceiling binds, the other side comes
+ * down with it, so the panel keeps the picture's proportion either way.
  */
 const MEDIA_PIXEL_SHARE = 1 / 3;
-const MEDIA_MAX_COLS = 70;
+const MEDIA_MAX_COLS = 75;
 const MEDIA_MIN_LINES = 3;
-const MEDIA_MAX_LINES = 80;
+const MEDIA_MAX_LINES = 45;
 
 /** Inner width of a single code column at `MEDIA_MAX_COLS` characters. */
 function mediaMaxWidth(): number {
@@ -120,14 +126,15 @@ export function mediaGeometry(aspect: number, pixels: number): PanelGeometry {
   // column rather than as a block.
   const a = Math.max(0.1, Math.min(10, aspect));
   const wanted = Math.sqrt(Math.max(1, pixels) * MEDIA_PIXEL_SHARE * a);
+  // Both ceilings in one width, so a tall picture is narrowed rather than
+  // squashed: the tallest a panel may be, read back through the proportion, is
+  // a width like any other.
+  const fromHeight = MEDIA_MAX_LINES * metrics.lineHeight * a;
   const innerW = Math.max(
     MIN_PANEL_COLS * metrics.charWidth,
-    Math.min(mediaMaxWidth(), wanted),
+    Math.min(mediaMaxWidth(), fromHeight, wanted),
   );
-  const lines = Math.min(
-    MEDIA_MAX_LINES,
-    Math.max(MEDIA_MIN_LINES, innerW / a / metrics.lineHeight),
-  );
+  const lines = Math.max(MEDIA_MIN_LINES, innerW / a / metrics.lineHeight);
   const innerH = lines * metrics.lineHeight;
   return {
     cols: MIN_PANEL_COLS,

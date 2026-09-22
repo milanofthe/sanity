@@ -43,6 +43,8 @@ fn main() {
     let mut line_counts: HashMap<String, u32> = HashMap::new();
     let mut media_files = 0u32;
     let mut media_bytes = 0u64;
+    let mut thumb_files = 0u32;
+    let mut thumb_bytes = 0u64;
 
     for rel in &listed {
         let Some((data, info)) = scan::read_file(&root, rel) else { continue };
@@ -88,9 +90,10 @@ fn main() {
             }
         }
         // A picture is copied in as it is, under media/, so the browser can
-        // fetch it and decode it at whatever resolution the zoom needs. Not
-        // resized here: resizing means an image codec, and the browser
-        // already has one that does it during decode.
+        // fetch it and decode it at whatever resolution the zoom needs, and a
+        // thumbnail goes next to it under thumbs/. The app makes those on the
+        // fly through the `thumbs` command; the web demo has no backend to ask,
+        // so its thumbnails are baked here and the frontend path is the same.
         if info.media.is_some() && info.byte_len <= MAX_MEDIA_BYTES {
             let dst = out.join("media").join(rel);
             if let Some(parent) = dst.parent() {
@@ -99,6 +102,20 @@ fn main() {
             if std::fs::copy(root.join(rel), &dst).is_ok() {
                 media_files += 1;
                 media_bytes += info.byte_len;
+            }
+            if matches!(info.media, Some(sanity_core::media::Media::Image { .. })) {
+                if let Ok(bytes) = std::fs::read(root.join(rel)) {
+                    if let Some(small) = sanity_core::thumb::thumbnail(&bytes, sanity_core::thumb::THUMB_MAX) {
+                        let dst = out.join("thumbs").join(format!("{rel}.png"));
+                        if let Some(parent) = dst.parent() {
+                            std::fs::create_dir_all(parent).ok();
+                        }
+                        if std::fs::write(&dst, &small).is_ok() {
+                            thumb_files += 1;
+                            thumb_bytes += small.len() as u64;
+                        }
+                    }
+                }
             }
         }
     }
@@ -129,11 +146,13 @@ fn main() {
         .expect("write texts.json");
 
     println!(
-        "dumped {} files, {} payload bytes, {} texts, {media_files} pictures ({} KB) to {}",
+        "dumped {} files, {} payload bytes, {} texts, {media_files} pictures ({} KB), \
+         {thumb_files} thumbnails ({} KB) to {}",
         payloads.len(),
         payloads.iter().map(|(_, b)| b.len()).sum::<usize>(),
         texts.len(),
         media_bytes / 1024,
+        thumb_bytes / 1024,
         out.display()
     );
 }

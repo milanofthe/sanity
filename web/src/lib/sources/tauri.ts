@@ -16,6 +16,7 @@ import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
 import { unpack } from './payload.ts';
+import { THUMB_MAX, unpackThumbs } from './thumbs.ts';
 
 /** True inside the Tauri window, false in a plain browser tab. */
 export const inTauri = (): boolean =>
@@ -189,7 +190,33 @@ export async function loadRepo(path: string): Promise<void> {
   const blob = await invoke<ArrayBuffer>('repo_payloads');
   payloads = unpack(blob);
   decoded = new Map();
+  thumbs = new Map();
   project.load(scan.root, scan.groups, false);
+}
+
+/** The small version of each picture, by path; see sources/thumbs.ts. */
+let thumbs = new Map<string, ArrayBuffer>();
+
+/**
+ * Ask the backend for every picture's thumbnail, in batches.
+ *
+ * In batches because the first one should be on the canvas while the rest are
+ * still being decoded, and because a folder of a thousand pictures should not
+ * be one reply of a hundred megabytes. `onBatch` wakes the render loop, which
+ * parks as soon as the scene is still.
+ */
+async function loadThumbs(paths: string[], onBatch: () => void): Promise<void> {
+  const BATCH = 48;
+  for (let i = 0; i < paths.length; i += BATCH) {
+    const slice = paths.slice(i, i + BATCH);
+    try {
+      const reply = await invoke<ArrayBuffer>('thumbs', { paths: slice });
+      for (const [path, bytes] of unpackThumbs(reply)) thumbs.set(path, bytes);
+      onBatch();
+    } catch {
+      return;
+    }
+  }
 }
 
 /** Build the scene from the loaded scan and the current view modes. */
@@ -207,6 +234,10 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
     .filter((e) => project.modeForPath(e.path) !== 'off');
 
   text.onLoad = () => app.invalidate();
+  // Pictures first at thumbnail size, in the background: the canvas opens on
+  // the placeholders and fills in as the batches land.
+  const pictures = entries.filter((e) => e.media && e.media.kind === 'image').map((e) => e.path);
+  if (pictures.length > 0) void loadThumbs(pictures, () => app.invalidate());
   app.open(
     {
       entries,
@@ -214,13 +245,22 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       text,
       find,
       ready: () => text.ready(),
-      // An image is read as it is; a document is rasterised by the platform
-      // at the width the zoom asked for, first page only. See `pdf_page`.
-      imageBytes: (path: string, level: number) =>
-        (path.toLowerCase().endsWith('.pdf')
-          ? invoke<ArrayBuffer>('pdf_page', { path, width: level })
-          : invoke<ArrayBuffer>('file_bytes', { path })
-        ).catch(() => null),
+      // Up to a thumbnail's size, the thumbnail: that is the whole of the
+      // usual case, and it costs neither a megabyte across the boundary nor a
+      // multi-megapixel decode in the window. Past it, the source, which is
+      // read as it is for an image and rasterised by the platform for a
+      // document, first page only. See `thumbs` and `pdf_page`.
+      imageBytes: (path: string, level: number) => {
+        if (level <= THUMB_MAX) {
+          const held = thumbs.get(path);
+          if (held) return Promise.resolve(held);
+        }
+        return (
+          path.toLowerCase().endsWith('.pdf')
+            ? invoke<ArrayBuffer>('pdf_page', { path, width: level })
+            : invoke<ArrayBuffer>('file_bytes', { path })
+        ).catch(() => null);
+      },
     },
     keepView,
   );
