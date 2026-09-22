@@ -6,7 +6,8 @@
 // live backend, so what it renders is what the app renders.
 //
 // Enabled with ?fixture=<name>, expecting web/public/<name>/{scan.json,
-// payloads.bin,texts.json}.
+// payloads.bin,texts.json}. The web demo is the same thing under
+// public/demo/<repo>; see sources/demo.ts.
 
 import type { CanvasApp } from '$lib/canvas/app';
 import { findInTexts, type FileHits } from '$lib/canvas/content';
@@ -29,6 +30,13 @@ interface FixtureScan {
 let scan: FixtureScan | null = null;
 let payloads = new Map<string, ArrayBuffer>();
 let texts: Record<string, string[]> = {};
+/** Resolves when texts.json has arrived, so anything that needs the text can
+ *  wait for it instead of finding nothing. */
+let textsReady: Promise<void> = Promise.resolve();
+/** Tells the canvas to draw again once the text is in. The render loop parks
+ *  when nothing moves, so without this the glyphs would appear on the next
+ *  pan rather than when they load. */
+let onTexts: (() => void) | null = null;
 
 class FixtureText implements TextSource {
   lineText(path: string, line: number): string | null {
@@ -49,8 +57,11 @@ const text = new FixtureText();
  * canvas/content.ts.
  */
 async function find(query: string, capPerFile: number): Promise<FileHits[]> {
+  await textsReady;
   return findInTexts(
-    Object.entries(texts).map(([path, lines]) => [path, lines.join('\n')] as [string, string]),
+    Object.entries(texts).map(
+      ([path, lines]) => [path, lines.join('\n')] as [string, string],
+    ),
     query,
     capPerFile,
   );
@@ -61,23 +72,48 @@ export function fixtureName(): string | null {
   return new URLSearchParams(location.search).get('fixture');
 }
 
-export async function loadFixture(name: string): Promise<void> {
+/**
+ * Fetch a dump and hand it to the project state.
+ *
+ * The structure is awaited and the text is not. texts.json is the bulk of a
+ * dump, 7.5 of pathsim's 8.9 megabytes, and the first thing anyone sees is
+ * the whole repository at a zoom where a line is a pixel and there is no text
+ * to draw. So the canvas comes up on scan.json plus the payloads, about a
+ * fifth of the transfer, and the text lands while it is already usable.
+ *
+ * `as.root` replaces the root the dump was made from, which for the demo is
+ * whatever path the build machine cloned into and has no business being in
+ * the window title.
+ */
+export async function loadFixture(
+  name: string,
+  as: { root?: string; demo?: boolean } = {},
+): Promise<void> {
   const base = `/${name}`;
-  const [s, blob, t] = await Promise.all([
+  texts = {};
+  const [s, blob] = await Promise.all([
     fetch(`${base}/scan.json`).then((r) => r.json() as Promise<FixtureScan>),
     fetch(`${base}/payloads.bin`).then((r) => r.arrayBuffer()),
-    fetch(`${base}/texts.json`)
-      .then((r) => r.json() as Promise<Record<string, string>>)
-      .catch(() => ({}) as Record<string, string>),
   ]);
   scan = s;
   payloads = unpack(blob);
-  texts = Object.fromEntries(Object.entries(t).map(([k, v]) => [k, expandLines(v)]));
-  project.load(s.root, s.groups, false);
+  textsReady = fetch(`${base}/texts.json`)
+    .then((r) => r.json() as Promise<Record<string, string>>)
+    .then((t) => {
+      texts = Object.fromEntries(
+        Object.entries(t).map(([k, v]) => [k, expandLines(v)]),
+      );
+      onTexts?.();
+    })
+    .catch(() => {
+      texts = {};
+    });
+  project.load(as.root ?? s.root, s.groups, false, as.demo ?? false);
 }
 
 export function openFixture(app: CanvasApp, keepView = false): void {
   if (!scan) return;
+  onTexts = () => app.invalidate();
   const entries = scan.files
     .map((f) => ({
       path: f.path,
@@ -87,7 +123,8 @@ export function openFixture(app: CanvasApp, keepView = false): void {
       stub: project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
-  app.open({ entries, payload: (p) => payloads.get(p), text, find }, keepView);
+  const source = { entries, payload: (p: string) => payloads.get(p), text, find, ready: () => textsReady };
+  app.open(source, keepView);
 }
 
 export function fixtureLoaded(): boolean {

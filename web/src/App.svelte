@@ -15,6 +15,9 @@
 		fixtureLoaded, fixtureName, loadFixture, openFixture,
 	} from '$lib/sources/fixture';
 	import {
+		demoName, loadDemoIndex, rememberDemo, type DemoRepo,
+	} from '$lib/sources/demo';
+	import {
 		inTauri, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
 		startup, stopWatching, watchRepo,
 	} from '$lib/sources/tauri';
@@ -26,6 +29,8 @@
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let ctx = $state<{ x: number; y: number; path: string | null } | null>(null);
+	/** The repositories this build has a dump of, empty in the desktop app. */
+	let demos = $state<DemoRepo[]>([]);
 	/** The running watch, so opening another folder replaces it. */
 	let unwatch: UnlistenFn | null = null;
 
@@ -111,6 +116,31 @@
 		}
 	}
 
+	/**
+	 * Show one of the baked-in repositories.
+	 *
+	 * The same path a fixture takes, which is the point: the demo is not a
+	 * second renderer with its own quirks, it is this app with a folder that
+	 * arrives over HTTP. The root is set to the repository's own name, since
+	 * the path the dump was made from belongs to the build machine.
+	 */
+	async function openDemo(id: string) {
+		if (!app || busy) return;
+		busy = true;
+		error = null;
+		try {
+			await loadFixture(`demo/${id}`, { root: id, demo: true });
+			lastModeKey = project.groups.map((g) => `${g.id}:${g.mode}`).join(',');
+			rebuild(false);
+			app.fit();
+			rememberDemo(id);
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			busy = false;
+		}
+	}
+
 	$effect(() => () => {
 		unwatch?.();
 		unwatch = null;
@@ -141,6 +171,16 @@
 				})
 				.catch((e) => (error = e instanceof Error ? e.message : String(e)))
 				.finally(() => (busy = false));
+			return;
+		}
+		// In a browser there is no folder to open, so the demo build shows one
+		// of its repositories: the one that was linked to, or the first.
+		if (!inTauri()) {
+			void loadDemoIndex().then((list) => {
+				demos = list;
+				if (list.length > 0) return openDemo(demoName() ?? list[0].id);
+				if (app) openSynthetic(app, true);
+			});
 			return;
 		}
 		startup().then((s) => {
@@ -236,6 +276,8 @@
 	bind:this={toolbar}
 	onopen={() => openFolder()}
 	onreload={(path) => openFolder(path)}
+	ondemo={(id) => openDemo(id)}
+	{demos}
 	onsearch={onSearch}
 	onnext={() => step(1)}
 	onprev={() => step(-1)}

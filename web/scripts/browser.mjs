@@ -94,6 +94,11 @@ export async function openApp({
  * duration changes.
  */
 export async function settled(page, timeout = 30000) {
+  // Whatever the source still has in flight. A fixture fetches its text after
+  // its structure, so the canvas can be at rest with panels that have no
+  // characters in them yet, and a check that compared then would be measuring
+  // the gap rather than the drawing.
+  await page.evaluate(() => window.__sanity?.ready?.()).catch(() => {});
   await page
     // `app.settling()` and not `stats.settling`: the stats are written by the
     // render loop, so right after a relayout they still describe the previous

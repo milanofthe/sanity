@@ -14,10 +14,14 @@
 	import { ui } from '$lib/state/ui.svelte';
 	import { project } from '$lib/state/project.svelte';
 	import { THEMES } from '$lib/theme';
+	import type { DemoRepo } from '$lib/sources/demo';
+	import { inTauri } from '$lib/sources/tauri';
 
 	let {
 		onopen,
 		onreload,
+		ondemo,
+		demos = [],
 		onsearch,
 		onnext,
 		onprev,
@@ -29,6 +33,9 @@
 	}: {
 		onopen?: () => void;
 		onreload?: (path: string) => void;
+		ondemo?: (id: string) => void;
+		/** Repositories baked into the build, empty in the desktop app. */
+		demos?: DemoRepo[];
 		onsearch?: (q: string) => void;
 		onnext?: () => void;
 		onprev?: () => void;
@@ -48,6 +55,9 @@
 	}
 
 	const short = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
+	/** Thousands as k, so a hint stays a hint. */
+	const kilo = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
+	const shown = $derived(demos.find((d) => project.demo && d.id === project.root) ?? null);
 	const toggle = (id: 'project' | 'view' | 'theme') => () =>
 		(ui.openMenu = ui.openMenu === id ? null : id);
 	const close = () => (ui.openMenu = null);
@@ -64,15 +74,30 @@
 		ontoggle={toggle('project')}
 		onclose={close}
 	>
-		<MenuItem
-			label="Open folder…"
-			icon="folder"
-			disabled={busy}
-			onclick={() => {
-				ui.openMenu = null;
-				onopen?.();
-			}}
-		/>
+		{#if inTauri() || demos.length === 0}
+			<MenuItem
+				label={inTauri() ? 'Open folder…' : 'Generated repo'}
+				icon="folder"
+				disabled={busy}
+				onclick={() => {
+					ui.openMenu = null;
+					onopen?.();
+				}}
+			/>
+		{/if}
+		{#if demos.length > 0}
+			<MenuSection title="Repositories">
+				{#each demos as d (d.id)}
+					<MenuItem
+						label={d.label}
+						hint={`${d.files} files · ${kilo(d.lines)} lines`}
+						checked={d.id === shown?.id}
+						disabled={busy}
+						onclick={() => { ui.openMenu = null; ondemo?.(d.id); }}
+					/>
+				{/each}
+			</MenuSection>
+		{/if}
 		{#if project.recent.length > 0}
 			<MenuSection title="Recent">
 				{#each project.recent as path (path)}
@@ -85,7 +110,16 @@
 				{/each}
 			</MenuSection>
 		{/if}
-		{#if project.root}
+		{#if shown}
+			<MenuSection title="Showing">
+				<div class="path">
+					{shown.about}
+					<a href={shown.url} target="_blank" rel="noreferrer">
+						{shown.url.replace('https://', '')}
+					</a>
+				</div>
+			</MenuSection>
+		{:else if project.root}
 			<MenuSection title="Open">
 				<div class="path">{project.root}</div>
 			</MenuSection>
@@ -133,6 +167,8 @@
 
 	{#if busy}
 		<span class="badge busy" title="Scanning">scanning</span>
+	{:else if project.demo}
+		<span class="badge" title="A snapshot of a public repository, read only">demo</span>
 	{:else if project.synthetic}
 		<span class="badge" title="Showing generated data, not a real repository">synthetic</span>
 	{/if}
@@ -166,6 +202,11 @@
 		color: var(--text-faint);
 		padding: 2px var(--sp-3) var(--sp-1);
 		overflow-wrap: anywhere;
+	}
+	.path a {
+		display: block;
+		margin-top: var(--sp-1);
+		color: var(--accent);
 	}
 	.badge.busy {
 		color: var(--warn);

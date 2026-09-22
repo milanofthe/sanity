@@ -62,6 +62,16 @@ export interface RepoSource {
    * a fixture is searched in the browser, which already holds them.
    */
   find?: (query: string, capPerFile: number) => Promise<FileHits[]>;
+  /**
+   * Resolves when whatever the source loads in the background has arrived, or
+   * absent when there is nothing to wait for.
+   *
+   * A fixture fetches its text after its structure, so the canvas is up and
+   * drawing panels before there is a character to put in them. A check that
+   * screenshots the moment the scan is done would be looking at the gap; it
+   * awaits this through the debug handle, see scripts/browser.mjs.
+   */
+  ready?: () => Promise<void>;
 }
 
 const UPLOAD_BUDGET_MS = 6;
@@ -220,6 +230,9 @@ export class CanvasApp {
       // rather than restating them.
       flashAt,
       markAt,
+      // Whether the open source has finished loading, so a check can wait for
+      // the text rather than race it.
+      ready: () => this.lastSource?.ready?.() ?? Promise.resolve(),
     };
   }
 

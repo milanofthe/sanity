@@ -35,6 +35,10 @@ class ProjectState {
 	root = $state<string>('');
 	/** Set when the canvas is showing generated data rather than a real repo. */
 	synthetic = $state(false);
+	/** Set when the canvas is showing one of the repositories baked into the
+	 *  web build: real code, but a snapshot with no folder behind it, so
+	 *  nothing that writes or watches applies. */
+	demo = $state(false);
 	groups = $state<FileGroup[]>([]);
 	/** Recently opened folders, most recent first. */
 	recent = $state<string[]>([]);
@@ -60,9 +64,10 @@ class ProjectState {
 	/** Build the picker rows from a scan, defaulting artefacts to placeholders
 	 *  rather than to hidden: the point of the mode is that you can see they
 	 *  are there. */
-	load(root: string, rows: Omit<FileGroup, 'mode'>[], synthetic = false) {
+	load(root: string, rows: Omit<FileGroup, 'mode'>[], synthetic = false, demo = false) {
 		this.root = root;
 		this.synthetic = synthetic;
+		this.demo = demo;
 		const total = rows.reduce((s, r) => s + r.lines, 0) || 1;
 		const groups: FileGroup[] = [];
 		let minor: FileGroup | null = null;
@@ -79,7 +84,9 @@ class ProjectState {
 		if (minor && minor.files > 0) groups.push(minor);
 		this.groups = groups;
 
-		if (!synthetic && root) {
+		// Only real folders go into the recent list: it exists to reopen one,
+		// and neither a generated repo nor a demo snapshot is a folder.
+		if (!synthetic && !demo && root) {
 			this.recent = [root, ...this.recent.filter((r) => r !== root)].slice(0, 8);
 		}
 	}
@@ -100,7 +107,7 @@ class ProjectState {
 
 	refreshGroups(rows: Omit<FileGroup, 'mode'>[]) {
 		const chosen = new Map(this.groups.map((g) => [g.id, g.mode]));
-		this.load(this.root, rows, this.synthetic);
+		this.load(this.root, rows, this.synthetic, this.demo);
 		for (const g of this.groups) {
 			const was = chosen.get(g.id);
 			if (was) g.mode = was;
