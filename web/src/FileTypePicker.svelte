@@ -64,6 +64,7 @@
 		{#each project.groups as g (g.id)}
 			<div
 				class="row"
+				class:tinted={ui.tintLanguages}
 				style:--share={`${(share(g.lines) * 100).toFixed(1)}%`}
 				style:--family={familyColour(g.lang)}
 			>
@@ -223,23 +224,29 @@
 	.col-name {
 		position: relative;
 	}
-	/* The bar is the share of the repository *and* the legend: it carries the
-	   colour this file type's language family is tinted with on the canvas.
-	   Held well under full strength, since it sits behind the type's name and
-	   a bar you have to read through is a bar in the way. */
+	/* The share of the repository, as a fill behind the type name. */
 	.col-name::before {
 		content: '';
 		position: absolute;
 		inset: var(--sp-0) auto var(--sp-0) calc(-1 * var(--sp-1));
 		width: var(--share);
 		/* A floor, so a type with half a percent of the repository still shows
-		   its colour: the bar is a legend as well as a proportion, and a
-		   legend entry you cannot see is not one. */
+		   its colour once the tint is on: a legend entry you cannot see is not
+		   one. */
 		min-width: var(--sp-2);
 		max-width: calc(100% + 2 * var(--sp-1));
-		background: var(--family, var(--bg-active));
-		opacity: 0.4;
+		background: var(--bg-active);
 		z-index: 0;
+	}
+	/* With the tint on, that same bar carries the colour the canvas paints
+	   this language family in, which makes the list the legend for it. Held
+	   well under full strength, since it sits behind the type's name and a bar
+	   you have to read through is a bar in the way. Off, the bar is a neutral
+	   fill again: a colour that means nothing on the canvas should not be
+	   sitting in the menu claiming to. */
+	.tinted .col-name::before {
+		background: var(--family);
+		opacity: 0.4;
 	}
 	.col-name > * {
 		position: relative;

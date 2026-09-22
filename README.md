@@ -38,11 +38,13 @@ macOS, and More info then Run anyway on Windows. Building from source is
   than it did untinted, and 100 percent of the within-panel structure
   survives. Off unless asked for, because the thing this canvas is usually
   watched for is where something changed, and a second colour scheme competes
-  with that. The bar behind each file type in that menu carries the same
-  colour, which makes the list the legend: it is the type's share of the
-  repository and its family at once, and the colour comes from the language
-  the files were actually read under rather than from their extension, so a
-  folder of notebooks is Python because its notebooks say so.
+  with that. With the switch on, the bar behind each file type in that menu
+  takes the same colour, which makes the list the legend: it is the type's
+  share of the repository and its family at once. Off, the bar is a neutral
+  fill again, since a colour that means nothing on the canvas has no business
+  sitting in the menu claiming to. The colour comes from the language the
+  files were actually read under rather than from their extension, so a folder
+  of notebooks is Python because its notebooks say so.
 - **It survives a lost context.** A driver can take the WebGL context away at
   any time, and everything on the GPU goes with it: on this canvas that is
   every panel at once, empty, with nothing saying why. The loss is caught, the
