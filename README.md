@@ -45,12 +45,21 @@ Try it on four public repositories, in the browser, no install:
   the platform in the app (ImageIO on macOS; Windows and Linux keep the
   placeholder for now, see issue #22) and rendered into the dump for the web
   demo, through a separate process rather than a linked library, since the
-  good PDF renderers are AGPL and this is MIT. Either way the texture is
-  decoded to the resolution the zoom asks for and no further: holding the
-  source pixels of pathsim's 47 images would be 730 MB against the 96 MB its
-  whole code costs. The budget for all of it is 64 MB, shared between what is
-  on screen, so forty seven in view is 512 pixels each and five in view is
-  2048, and zooming back out decodes them down again.
+  good PDF renderers are AGPL and this is MIT. Whatever it came from, a page
+  and a plot are ink with nothing behind them, so a picture that carries no
+  background of its own is drawn on a sheet of paper rather than on the canvas
+  ground.
+
+  Either way the texture is decoded to the level under the panel it is drawn
+  in and no further: holding the source pixels of pathsim's 47 images would be
+  730 MB against the 96 MB its whole code costs. The budget for all of it is
+  64 MB, shared between what is on screen. Decodes are paced rather than run as
+  a burst, widest panel first, and none start while the camera is moving: a
+  folder of 119 screenshots is 4.6 seconds of decoding in WebKit, which as a
+  burst is a window that does not answer. Paced, and asked for once each rather
+  than again at every zoom, the same folder costs 2.1 seconds spread out, reads
+  41 MB instead of 69, and leaves the frame time where it is with no pictures
+  on screen at all.
 - **Notebooks as cells**, not as the JSON they are stored in. A `.ipynb` is
   read into its code cells, its prose cells and one line per output naming
   what it is, so what a panel shows is the notebook. On pathsim's 34 notebooks
