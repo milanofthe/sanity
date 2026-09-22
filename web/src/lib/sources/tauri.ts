@@ -214,6 +214,8 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       text,
       find,
       ready: () => text.ready(),
+      imageBytes: (path: string) =>
+        invoke<ArrayBuffer>('file_bytes', { path }).catch(() => null),
     },
     keepView,
   );

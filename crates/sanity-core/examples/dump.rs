@@ -10,6 +10,11 @@
 
 use std::path::PathBuf;
 
+/// Largest picture the dump carries. The demo is served over the network and
+/// a single 30 megabyte render is not worth the wait; the panel falls back to
+/// its placeholder.
+const MAX_MEDIA_BYTES: u64 = 8 * 1024 * 1024;
+
 use std::collections::HashMap;
 
 use sanity_core::lang::extension_of;
@@ -36,6 +41,8 @@ fn main() {
     // repository at once.
     let mut decoded: Vec<(String, FileData)> = Vec::new();
     let mut line_counts: HashMap<String, u32> = HashMap::new();
+    let mut media_files = 0u32;
+    let mut media_bytes = 0u64;
 
     for rel in &listed {
         let Some((data, info)) = scan::read_file(&root, rel) else { continue };
@@ -80,6 +87,20 @@ fn main() {
                 texts.push((rel.clone(), scan::display_text(rel, &t)));
             }
         }
+        // A picture is copied in as it is, under media/, so the browser can
+        // fetch it and decode it at whatever resolution the zoom needs. Not
+        // resized here: resizing means an image codec, and the browser
+        // already has one that does it during decode.
+        if info.media.is_some() && info.byte_len <= MAX_MEDIA_BYTES {
+            let dst = out.join("media").join(rel);
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            if std::fs::copy(root.join(rel), &dst).is_ok() {
+                media_files += 1;
+                media_bytes += info.byte_len;
+            }
+        }
     }
 
     let payloads: Vec<(String, Vec<u8>)> =
@@ -108,10 +129,11 @@ fn main() {
         .expect("write texts.json");
 
     println!(
-        "dumped {} files, {} payload bytes, {} texts to {}",
+        "dumped {} files, {} payload bytes, {} texts, {media_files} pictures ({} KB) to {}",
         payloads.len(),
         payloads.iter().map(|(_, b)| b.len()).sum::<usize>(),
         texts.len(),
+        media_bytes / 1024,
         out.display()
     );
 }

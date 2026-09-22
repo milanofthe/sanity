@@ -68,6 +68,35 @@ void main() {
 }`;
 
 /** A file's overview texture, one quad per code column. */
+/**
+ * A picture: one quad, one texture, one draw call.
+ *
+ * Not instanced, unlike everything else here, because every picture has its
+ * own texture of its own size. A canvas shows a few dozen at most, and a draw
+ * call each is nothing next to a texture array that would have to be sized for
+ * the largest of them.
+ */
+export const imageVS = `${HEAD}
+in vec2 aCorner;
+uniform mat3 uView;
+uniform vec4 uRect;
+out vec2 vUv;
+void main() {
+  vec2 world = uRect.xy + aCorner * uRect.zw;
+  vUv = aCorner;
+  gl_Position = vec4((uView * vec3(world, 1.0)).xy, 0.0, 1.0);
+}`;
+
+export const imageFS = `${HEAD}
+uniform sampler2D uTex;
+uniform float uFade;
+in vec2 vUv;
+out vec4 oColor;
+void main() {
+  vec4 t = texture(uTex, vUv);
+  oColor = vec4(t.rgb, t.a * uFade);
+}`;
+
 export const overviewVS = `${HEAD}
 in vec2 aCorner;
 in vec4 aRect;

@@ -30,6 +30,8 @@ interface FixtureScan {
 }
 
 let scan: FixtureScan | null = null;
+/** Which fixture is loaded, for the media URLs. */
+let loaded = '';
 let payloads = new Map<string, ArrayBuffer>();
 let texts: Record<string, string[]> = {};
 /** Resolves when texts.json has arrived, so anything that needs the text can
@@ -87,10 +89,13 @@ export function fixtureName(): string | null {
  * whatever path the build machine cloned into and has no business being in
  * the window title.
  */
+const base = (name: string) => `/${name}`;
+
 export async function loadFixture(
   name: string,
   as: { root?: string; demo?: boolean } = {},
 ): Promise<void> {
+  loaded = name;
   const base = `/${name}`;
   texts = {};
   const [s, blob] = await Promise.all([
@@ -126,7 +131,18 @@ export function openFixture(app: CanvasApp, keepView = false): void {
       stub: project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
-  const source = { entries, payload: (p: string) => payloads.get(p), text, find, ready: () => textsReady };
+  const source = {
+    entries,
+    payload: (p: string) => payloads.get(p),
+    text,
+    find,
+    ready: () => textsReady,
+    // The dump copies pictures in under media/, so a fetch is all it takes.
+    imageBytes: (path: string) =>
+      fetch(`${base(loaded)}/media/${path}`)
+        .then((r) => (r.ok ? r.arrayBuffer() : null))
+        .catch(() => null),
+  };
   app.open(source, keepView);
 }
 

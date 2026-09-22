@@ -281,6 +281,31 @@ fn file_info(rel: &str, data: &FileData, info: &ScannedFile) -> FileInfo {
     }
 }
 
+/// The raw bytes of one file, for a picture the renderer is about to decode.
+///
+/// Raw rather than JSON for the same reason the payloads are: a PNG is
+/// hundreds of kilobytes and the default IPC would base64 it. The path is
+/// checked against the open folder the same way `file_text` checks it, so
+/// this cannot be used to read the disk.
+#[tauri::command]
+async fn file_bytes(path: String, state: State<'_, AppState>) -> Result<Response, String> {
+    let root = {
+        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        repo.root.clone()
+    };
+    if root.as_os_str().is_empty() {
+        return Err("no folder open".into());
+    }
+    let full = root.join(&path);
+    let canonical = full.canonicalize().map_err(|e| e.to_string())?;
+    let root_canonical = root.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical.starts_with(&root_canonical) {
+        return Err("path outside the open folder".into());
+    }
+    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
+    Ok(Response::new(bytes))
+}
+
 /// Every payload concatenated, with an index, as raw bytes.
 ///
 /// Returned through `ipc::Response` rather than as JSON: the default IPC would
@@ -807,6 +832,7 @@ pub fn run() {
             scan_repo,
             repo_payloads,
             file_text,
+            file_bytes,
             find_text,
             startup,
             open_in_editor,

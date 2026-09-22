@@ -11,6 +11,7 @@ import {
 } from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
+import { MediaTextures } from '$lib/canvas/renderer/mediatex';
 import { Scene, type TextSource } from '$lib/canvas/renderer/scene';
 import { metrics } from '$lib/metrics';
 import {
@@ -72,6 +73,15 @@ export interface RepoSource {
    * awaits this through the debug handle, see scripts/browser.mjs.
    */
   ready?: () => Promise<void>;
+  /**
+   * Raw bytes of one file, for a picture the renderer is about to decode, or
+   * absent when the source has no way to hand them over.
+   *
+   * Bytes rather than a decoded image: the resolution a picture is decoded at
+   * follows the zoom, and only the renderer knows that. See
+   * renderer/mediatex.ts.
+   */
+  imageBytes?: (path: string) => Promise<ArrayBuffer | null>;
 }
 
 const UPLOAD_BUDGET_MS = 6;
@@ -332,6 +342,16 @@ export class CanvasApp {
       // Every panel settles in as it arrives, staggered outward from the
       // centre. That is the load animation.
       this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
+      // Pictures, when the source can hand their bytes over. Held by the
+      // scene because it knows what is on screen and at what size, and it
+      // wakes the loop when one arrives: the loop parks when nothing moves.
+      if (source.imageBytes) {
+        this.scene.media = new MediaTextures(
+          this.gl,
+          source.imageBytes,
+          () => this.invalidate(),
+        );
+      }
       this.pending = this.layout.files.map((f) => f.path);
       this.fit();
     }
@@ -863,7 +883,9 @@ export class CanvasApp {
         quads: s.overviewQuads + s.spanQuads + s.glyphQuads + s.rectQuads,
         cpuMs: performance.now() - t0,
         frameMs: this.frameMs,
-        vramMb: tex.bytes / 1048576,
+        // Code textures and pictures together: two budgets in one number,
+        // because what matters is what the process holds.
+        vramMb: (tex.bytes + (this.scene.media?.stats().bytes ?? 0)) / 1048576,
         fill: this.fill,
         indexing: this.pending.length ? this.uploaded / this.layout.files.length : 0,
         bands:
@@ -948,6 +970,10 @@ export class CanvasApp {
         this.scene.advance(dt);
         this.scene.render(this.cam, dt);
         await this.lastSource?.ready?.();
+        // And for the pictures this frame asked for at this size: an export
+        // that wrote the placeholders would be the one picture of the project
+        // that is wrong.
+        await this.scene.media?.settled();
         if (done()) {
           stable++;
           continue;

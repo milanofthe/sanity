@@ -27,12 +27,14 @@ import { lineAtRow, visualRowsCached, wrapOffsets } from '$lib/canvas/layout/wra
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { GlyphAtlas } from './glyphatlas';
 import { HEIGHT_CLASSES, OverviewTextures, type Slot } from './codetex';
+import { MediaTextures } from './mediatex';
 import {
   createProgram, instanceAttribs, quadAttrib, uniforms, unitQuad,
   InstanceBuffer, type GL,
 } from './gl';
 import {
   glyphFS, glyphVS, overviewFS, overviewVS, rectFS, rectVS, spanFS, spanVS,
+  imageVS, imageFS,
 } from './shaders';
 
 /** Supplies the actual characters of a line, only ever asked for lines that
@@ -275,10 +277,21 @@ export class Scene {
 
   private progRect: WebGLProgram;
   private progOverview: WebGLProgram;
+  private progImage: WebGLProgram;
+  /** Pictures on the GPU, at the resolution the zoom asks for. Absent until a
+   *  source that can hand over image bytes is opened. */
+  media: MediaTextures | null = null;
+  /** Device pixel ratio of the frame being drawn, for asking the picture
+   *  cache for a resolution in real pixels. */
+  private dpr = 1;
+  /** Pictures placed this frame, drawn after the panels so they sit on top of
+   *  their own background. */
+  private imageDraws: { tex: WebGLTexture; x: number; y: number; w: number; h: number; fade: number }[] = [];
   private progSpan: WebGLProgram;
   private progGlyph: WebGLProgram;
   private uRect: Record<string, WebGLUniformLocation | null>;
   private uOverview: Record<string, WebGLUniformLocation | null>;
+  private uImage: Record<string, WebGLUniformLocation | null>;
   private uSpan: Record<string, WebGLUniformLocation | null>;
   private uGlyph: Record<string, WebGLUniformLocation | null>;
 
@@ -449,10 +462,12 @@ export class Scene {
 
     this.progRect = createProgram(gl, rectVS, rectFS, 'rect');
     this.progOverview = createProgram(gl, overviewVS, overviewFS, 'overview');
+    this.progImage = createProgram(gl, imageVS, imageFS, 'image');
     this.progSpan = createProgram(gl, spanVS, spanFS, 'span');
     this.progGlyph = createProgram(gl, glyphVS, glyphFS, 'glyph');
     this.uRect = uniforms(gl, this.progRect, ['uView', 'uViewport']);
     this.uOverview = uniforms(gl, this.progOverview, ['uView', 'uTex', 'uTexRows', 'uSharp']);
+    this.uImage = uniforms(gl, this.progImage, ['uView', 'uTex', 'uRect', 'uFade']);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
       'uView', 'uKind[0]', 'uAtlas', 'uCell', 'uGlyphScale', 'uGridCols',
@@ -1030,6 +1045,11 @@ export class Scene {
     this.fgRects.reset();
     this.spans.reset();
     this.glyphs.reset();
+    this.imageDraws.length = 0;
+    // The clock eviction order is measured in, and the device ratio the
+    // picture resolution is asked for in; both are per frame.
+    this.media?.tick();
+    this.dpr = cam.dpr;
     for (const b of this.overviewByChunk.values()) b.reset();
 
     let stillAnimating = false;
@@ -1129,6 +1149,7 @@ export class Scene {
 
     this.drawRects(this.bgRects);
     this.drawOverview();
+    this.drawImages();
     this.writeSpanFlat(glyphFade);
     this.drawSpans();
     this.drawGlyphs(pxPerLine, cam.dpr);
@@ -1341,12 +1362,46 @@ export class Scene {
     const h = mh * scale;
     const x = n.x + metrics.panelPadX + (availW - w) / 2;
     const y = n.y + metrics.titleHeight + metrics.panelPadY + (availH - h) / 2;
+
+    // The picture itself, at the resolution this size on screen needs, or the
+    // area it will occupy while that is still being decoded. Asked for by
+    // screen pixels, not by world units: the same panel needs eight times the
+    // texture in a 4K export that it needs in the window.
+    const onScreen = w * zoom * this.dpr;
+    const held = this.media?.want(n.path, onScreen, mw / mh) ?? null;
+
+    // The area, always, and the picture over it. Not only a placeholder: most
+    // renders in a repository have a transparent background, so without
+    // something under them they are a few grey lines on the canvas. Measured
+    // on pathsim's figures: mean alpha 6.6 of 255, and only a sixth of their
+    // pixels opaque at all.
     this.pushRect(this.bgRects, x, y, w, h, this.pal.surface.reducedBg, 1, 0, 0);
+    if (held) {
+      this.imageDraws.push({ tex: held.tex, x, y, w, h, fade: this.tf.alpha });
+      return;
+    }
     if (h * zoom > 4) {
       this.pushRect(
         this.fgRects, x, y, w, h, this.pal.surface.reducedBg, 0,
         this.pal.surface.border, 1,
       );
+    }
+  }
+
+  /** One draw call per picture; see shaders.ts for why it is not instanced. */
+  private drawImages(): void {
+    const { gl } = this;
+    if (this.imageDraws.length === 0) return;
+    gl.useProgram(this.progImage);
+    gl.uniformMatrix3fv(this.uImage.uView, false, this.view);
+    gl.uniform1i(this.uImage.uTex, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    quadAttrib(gl, this.progImage, this.quad);
+    for (const d of this.imageDraws) {
+      gl.bindTexture(gl.TEXTURE_2D, d.tex);
+      gl.uniform4f(this.uImage.uRect, d.x, d.y, d.w, d.h);
+      gl.uniform1f(this.uImage.uFade, d.fade);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
   }
 

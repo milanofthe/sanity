@@ -38,6 +38,13 @@ Try it on four public repositories, in the browser, no install:
   past its panel keeps its marks through the relayout. Then the canvas goes
   quiet and the frame loop stops: 42 frames for a change, against the 5400 a
   ninety second glow used to cost.
+- **Pictures as pictures.** An image file or a PDF is a panel like any other,
+  sized by what it is: pixels for an image, pages for a document, read out of
+  the file's own header. The image is decoded to the resolution the zoom asks
+  for and no further, because holding the source pixels of pathsim's 47 images
+  would be 730 MB of texture against the 96 MB its whole code costs. The
+  budget for all of it is 64 MB, shared between what is on screen: forty seven
+  in view is 512 pixels each, five in view is 2048.
 - **Notebooks as cells**, not as the JSON they are stored in. A `.ipynb` is
   read into its code cells, its prose cells and one line per output naming
   what it is, so what a panel shows is the notebook. On pathsim's 34 notebooks
@@ -148,7 +155,7 @@ npm run check-all
 ```
 
 Type checks, clippy with warnings denied, 106 TypeScript tests and 66 Rust
-tests, then fifteen checks that drive a real browser and assert on pixels: the
+tests, then sixteen checks that drive a real browser and assert on pixels: the
 layout invariants, the dropdown geometry, that borders do not shimmer under a
 subpixel pan, that a change flashes its panel and then stops, that no source text
 is lost to wrapping, that a relayout re-uploads only what changed, that panels
@@ -161,7 +168,9 @@ in the file, character for character, compared against the bytes on disk rather
 than against the canvas's own copy of them, and that the
 demo opens every repository it lists with its text in place, and that a PNG
 export is a 4K picture of the project, at the project's aspect with no
-padding on any side, and that it leaves the canvas as it found it.
+padding on any side, and that it leaves the canvas as it found it, and that a
+picture in a repository is drawn, at a resolution that follows the zoom,
+inside its budget.
 The layout case list includes a project two thirds reduced to placeholders. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.
