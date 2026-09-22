@@ -33,6 +33,35 @@ pub struct FileInfo {
     /// panel had room for it.
     #[serde(rename = "clipCols")]
     pub clip_cols: u32,
+    /// Present when the file is a picture rather than text. The layout sizes
+    /// and shapes its panel from this instead of from lines; see
+    /// `sanity_core::media`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaInfo>,
+}
+
+/// What a picture is, for the layout. Flat rather than an enum so the
+/// frontend can read it without a discriminant: an image has pixels, a
+/// document has pages.
+#[derive(Serialize, Clone, Copy, Debug)]
+pub struct MediaInfo {
+    /// "image" or "document".
+    pub kind: &'static str,
+    /// Pixel size, 0 when the header did not say.
+    pub w: u32,
+    pub h: u32,
+    /// Pages, 0 for an image.
+    pub pages: u32,
+}
+
+impl From<sanity_core::media::Media> for MediaInfo {
+    fn from(m: sanity_core::media::Media) -> Self {
+        use sanity_core::media::Media;
+        match m {
+            Media::Image { w, h } => MediaInfo { kind: "image", w, h, pages: 0 },
+            Media::Document { pages, w, h } => MediaInfo { kind: "document", w, h, pages },
+        }
+    }
 }
 
 /// Rows for the view picker: one per extension.
@@ -163,7 +192,10 @@ async fn scan_repo(
     // thousand lines: 1.07 seconds on one thread, 349 milliseconds on eight.
     for (rel, read) in listed.iter().zip(scan::read_all(&root, &listed)) {
         let Some((data_one, info)) = read else { continue };
-        if data_one.flags & FLAG_BINARY != 0 {
+        // A picture carries no lines, so its payload is empty, but it is a
+        // file in the project and gets a panel. Everything else binary is
+        // still only counted.
+        if data_one.flags & FLAG_BINARY != 0 && info.media.is_none() {
             binary += 1;
             continue;
         }
@@ -245,6 +277,7 @@ fn file_info(rel: &str, data: &FileData, info: &ScannedFile) -> FileInfo {
         line_count: info.line_count,
         max_cols: width_percentile(&data.line_cols, 0.9),
         clip_cols: info.max_cols,
+        media: info.media.map(MediaInfo::from),
     }
 }
 
@@ -340,7 +373,7 @@ async fn refresh_files(
         }
 
         let Some((data_one, info)) = scan::read_file(&root, rel) else { continue };
-        if data_one.flags & FLAG_BINARY != 0 {
+        if data_one.flags & FLAG_BINARY != 0 && info.media.is_none() {
             continue;
         }
         stamps.push((rel.clone(), (info.mtime, info.byte_len)));

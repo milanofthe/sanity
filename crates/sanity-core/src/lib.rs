@@ -6,6 +6,7 @@
 
 pub mod find;
 pub mod lang;
+pub mod media;
 pub mod notebook;
 pub mod scan;
 pub mod simple;

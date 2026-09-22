@@ -39,7 +39,9 @@ fn main() {
 
     for rel in &listed {
         let Some((data, info)) = scan::read_file(&root, rel) else { continue };
-        if data.flags & FLAG_BINARY != 0 {
+        // A picture is listed with what its header says; anything else binary
+        // is left out, the same rule the app's own scan uses.
+        if data.flags & FLAG_BINARY != 0 && info.media.is_none() {
             continue;
         }
         let ext = extension_of(rel).unwrap_or("(none)").to_ascii_lowercase();
@@ -52,18 +54,28 @@ fn main() {
         }
 
         let cols = percentile(&data.line_cols, 0.9);
+        let media = match info.media {
+            Some(sanity_core::media::Media::Image { w, h }) => {
+                format!(r#","media":{{"kind":"image","w":{w},"h":{h},"pages":0}}"#)
+            }
+            Some(sanity_core::media::Media::Document { pages, w, h }) => {
+                format!(r#","media":{{"kind":"document","w":{w},"h":{h},"pages":{pages}}}"#)
+            }
+            None => String::new(),
+        };
         files.push(format!(
-            r#"{{"path":{},"lineCount":{},"maxCols":{},"clipCols":{}}}"#,
+            r#"{{"path":{},"lineCount":{},"maxCols":{},"clipCols":{}{}}}"#,
             json_string(rel),
             info.line_count,
             cols,
             info.max_cols,
+            media,
         ));
         line_counts.insert(rel.clone(), info.line_count);
         decoded.push((rel.clone(), data));
         // Text for the readable zoom level. Only for files small enough to be
         // worth reading; the dump is a development artefact, not a cache.
-        if info.line_count < 4000 {
+        if info.line_count < 4000 && info.media.is_none() {
             if let Ok(t) = std::fs::read(root.join(rel)) {
                 texts.push((rel.clone(), scan::display_text(rel, &t)));
             }

@@ -22,6 +22,9 @@ pub struct ScannedFile {
     pub path: String,
     pub line_count: u32,
     pub max_cols: u32,
+    /// Set when the file is a picture rather than text, with what the layout
+    /// needs to size and shape its panel. See `media`.
+    pub media: Option<crate::media::Media>,
     pub byte_len: u64,
     /// Modification time in nanoseconds since the epoch, as it was *before*
     /// the read, and 0 when the system does not report one.
@@ -215,10 +218,34 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
     let bytes = std::fs::read(&full).ok()?;
     let byte_len = bytes.len() as u64;
 
+    // A picture is not text, but it is part of the project, so it is listed
+    // with what its header says rather than skipped. Checked before the
+    // binary sniff, since that is what used to swallow it.
+    if let Some(media) = crate::media::probe(rel, &bytes) {
+        return Some((
+            binary_file_data(),
+            ScannedFile {
+                path: rel.to_string(),
+                line_count: 0,
+                max_cols: 0,
+                media: Some(media),
+                byte_len,
+                mtime,
+            },
+        ));
+    }
+
     if looks_binary(&bytes) {
         return Some((
             binary_file_data(),
-            ScannedFile { path: rel.to_string(), line_count: 0, max_cols: 0, byte_len, mtime },
+            ScannedFile {
+                path: rel.to_string(),
+                line_count: 0,
+                max_cols: 0,
+                media: None,
+                byte_len,
+                mtime,
+            },
         ));
     }
 
@@ -249,6 +276,7 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
         path: rel.to_string(),
         line_count: data.line_count() as u32,
         max_cols: data.line_cols.iter().copied().max().unwrap_or(0) as u32,
+        media: None,
         byte_len,
         mtime,
     };
