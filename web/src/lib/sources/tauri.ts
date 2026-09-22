@@ -36,6 +36,10 @@ interface ScanResult {
   files: ScanFile[];
   groups: Omit<FileGroup, 'mode'>[];
   binary: number;
+  /** How many files git ignores in the folder, and how many of those this
+   *  scan took; see `scan_repo`. */
+  ignoredTotal: number;
+  ignoredShown: number;
   elapsedMs: number;
 }
 
@@ -186,12 +190,16 @@ export async function pickFolder(): Promise<string | null> {
 
 /** Scan a folder and hand the result to the picker. */
 export async function loadRepo(path: string): Promise<void> {
-  scan = await invoke<ScanResult>('scan_repo', { path });
+  scan = await invoke<ScanResult>('scan_repo', {
+    path,
+    includeIgnored: project.includeIgnored,
+  });
   const blob = await invoke<ArrayBuffer>('repo_payloads');
   payloads = unpack(blob);
   decoded = new Map();
   thumbs = new Map();
   project.load(scan.root, scan.groups, false);
+  project.setIgnoredCounts(scan.ignoredTotal, scan.ignoredShown);
 }
 
 /** The small version of each picture, by path; see sources/thumbs.ts. */

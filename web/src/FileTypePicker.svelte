@@ -18,6 +18,10 @@
 
 	const n = (v: number) => v.toLocaleString('en-US');
 
+	/** Switching the ignored files on or off means another scan, which only
+	 *  the app knows how to run. */
+	let { onignored }: { onignored?: (on: boolean) => void } = $props();
+
 	/** The mode a set of rows agrees on, or '' when they differ. A control
 	 *  showing one of several states as selected would be a lie. */
 	const groupMode = (rows: { mode: ViewMode }[]): ViewMode | '' => {
@@ -66,6 +70,17 @@
 				label="Tint by language at the outermost zoom"
 				onchange={() => ui.setTintLanguages(!ui.tintLanguages)}
 			/>
+			{#if project.ignoredTotal > 0 || project.includeIgnored}
+				<Toggle
+					checked={project.includeIgnored}
+					disabled={project.demo || project.synthetic}
+					label="Include the {n(project.ignoredTotal)} files git ignores"
+					onchange={(on: boolean) => onignored?.(on)}
+				/>
+				{#if project.includeIgnored && project.ignoredShown < project.ignoredTotal}
+					<span class="why">taking the first {n(project.ignoredShown)}</span>
+				{/if}
+			{/if}
 		</div>
 
 		<div class="foot">
@@ -106,8 +121,11 @@
 	   empty: the column headings sat well left of the numbers they labelled. */
 	.options {
 		display: flex;
-		align-items: center;
-		gap: var(--sp-2);
+		flex-direction: column;
+		align-items: flex-start;
+		gap: var(--sp-1);
+		padding-top: var(--sp-2);
+		padding-bottom: var(--sp-2);
 		min-height: var(--row-h);
 		padding: 0 var(--sp-3);
 		border-top: var(--sep-w) solid var(--border);

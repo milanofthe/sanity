@@ -112,6 +112,28 @@
 		rebuild();
 	});
 
+	/**
+	 * Switch the files git ignores in or out.
+	 *
+	 * A rescan, because the backend only reads what it was asked to list. The
+	 * view is kept: the panels that were there stay where they are and the
+	 * ignored ones appear around them.
+	 */
+	async function setIgnored(on: boolean) {
+		project.setIncludeIgnored(on);
+		const root = loadedRoot();
+		if (!app || busy || !root) return;
+		busy = true;
+		try {
+			await loadRepo(root);
+			rebuild(true);
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function openFolder(path?: string) {
 		if (!app || busy) return;
 		if (!inTauri()) {
@@ -322,6 +344,7 @@
 	onopen={() => openFolder()}
 	onreload={(path) => openFolder(path)}
 	ondemo={(id) => openDemo(id)}
+	onignored={(on) => setIgnored(on)}
 	{demos}
 	onsearch={onSearch}
 	onnext={() => step(1)}

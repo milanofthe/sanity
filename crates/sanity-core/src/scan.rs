@@ -144,6 +144,33 @@ fn walk(root: &Path) -> Result<Vec<String>, ScanError> {
     Ok(out)
 }
 
+/// Largest file read whole. 16 MB is past every source file in the
+/// repositories measured here and short of the build output a folder is full
+/// of once ignored files are switched on.
+pub const MAX_READ_BYTES: u64 = 16 * 1024 * 1024;
+
+/// How much of a larger file is read, which is what the media probe and the
+/// binary sniff see. Two megabytes rather than a few kilobytes because a PDF
+/// keeps its page tree wherever it likes.
+const PROBE_BYTES: usize = 2 * 1024 * 1024;
+
+/// The first `n` bytes of a file, for something too large to hold.
+fn read_head(path: &Path, n: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; n];
+    let mut filled = 0usize;
+    while filled < n {
+        match file.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(got) => filled += got,
+            Err(_) => return None,
+        }
+    }
+    buf.truncate(filled);
+    Some(buf)
+}
+
 /// A NUL byte in the first few kilobytes means binary. Crude and it is what
 /// git does; the cases it gets wrong are files nobody wants to read anyway.
 pub fn looks_binary(bytes: &[u8]) -> bool {
@@ -247,8 +274,18 @@ fn notebook_of(rel: &str, text: &str) -> Option<crate::notebook::Notebook> {
 pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
     let full = root.join(rel);
     let mtime = mtime_of(&full);
-    let bytes = std::fs::read(&full).ok()?;
-    let byte_len = bytes.len() as u64;
+    let size = std::fs::metadata(&full).ok()?.len();
+    // Past a point a file is not read at all, only its head. Nothing on the
+    // canvas wants the body of a 200 MB archive: it has no lines to draw, and
+    // reading it costs a second and the memory of the whole project. The head
+    // is still enough for the two questions that matter, whether it is a
+    // picture and whether it is binary.
+    let bytes = if size > MAX_READ_BYTES {
+        read_head(&full, PROBE_BYTES)?
+    } else {
+        std::fs::read(&full).ok()?
+    };
+    let byte_len = size;
 
     // A picture is not text, but it is part of the project, so it is listed
     // with what its header says rather than skipped. Checked before the
@@ -267,7 +304,7 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
         ));
     }
 
-    if looks_binary(&bytes) {
+    if size > MAX_READ_BYTES || looks_binary(&bytes) {
         return Some((
             binary_file_data(),
             ScannedFile {

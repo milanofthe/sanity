@@ -79,9 +79,28 @@ pub struct ScanResult {
     pub groups: Vec<GroupInfo>,
     /// Files skipped as binary, reported so the count adds up in the UI.
     pub binary: u32,
+    /// How many files git ignores in this folder, whether or not they were
+    /// taken. The picker shows it, so switching them on is a decision with a
+    /// number in front of it rather than a surprise.
+    #[serde(rename = "ignoredTotal")]
+    pub ignored_total: u32,
+    /// And how many of those are in this scan, which is fewer whenever the
+    /// folder has more of them than `IGNORED_CAP`.
+    #[serde(rename = "ignoredShown")]
+    pub ignored_shown: u32,
     #[serde(rename = "elapsedMs")]
     pub elapsed_ms: u32,
 }
+
+/// Most ignored files a scan will take.
+///
+/// There is no useful number here that is also unlimited: this repository
+/// ignores 83,014 files and nearly ten gigabytes of build output, and a
+/// monitor that reads all of them to show that they exist has stopped being a
+/// monitor. Twenty thousand is more files than any project this was measured
+/// on has in total, so the cap only bites on build output, and the UI says
+/// when it did.
+const IGNORED_CAP: usize = 20_000;
 
 /// The scan is kept in memory so payload requests do not re-read the tree.
 /// A repository's line and span data is around 30 bytes per line, so a 200k
@@ -112,6 +131,10 @@ pub struct Repo {
     /// update one row and hand the whole index back without re-reading the
     /// tree, which takes four seconds on a large project.
     files: Vec<FileInfo>,
+    /// How many files git ignores here, and how many of them this scan took;
+    /// carried so a relayout reports the same numbers the scan did.
+    ignored_total: u32,
+    ignored_shown: u32,
     /// Files skipped as binary, carried so the index still adds up.
     binary: u32,
 }
@@ -127,6 +150,8 @@ impl Default for Repo {
             stamps: HashMap::new(),
             files: Vec::new(),
             binary: 0,
+            ignored_total: 0,
+            ignored_shown: 0,
         }
     }
 }
@@ -168,6 +193,7 @@ fn extension_of(path: &str) -> String {
 #[tauri::command]
 async fn scan_repo(
     path: String,
+    include_ignored: Option<bool>,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ScanResult, String> {
@@ -177,7 +203,18 @@ async fn scan_repo(
         return Err(format!("not a directory: {path}"));
     }
 
-    let listed = scan::list_files(&root).map_err(|e| e.to_string())?;
+    let mut listed = scan::list_files(&root).map_err(|e| e.to_string())?;
+    // What git ignores is a filter rather than a wall: counted always, taken
+    // when asked for. Counting is one `ls-files`, 136 milliseconds on the
+    // 83,014 files this repository ignores, against the hundreds the scan
+    // itself takes.
+    let (extra, ignored_total) = if include_ignored.unwrap_or(false) {
+        scan::git_ignored_files(&root, IGNORED_CAP)
+    } else {
+        (Vec::new(), scan::git_ignored_files(&root, 0).1)
+    };
+    let ignored_shown = extra.len() as u32;
+    listed.extend(extra);
 
     let mut files = Vec::with_capacity(listed.len());
     let mut payloads = Vec::with_capacity(listed.len());
@@ -216,6 +253,8 @@ async fn scan_repo(
         files: files.clone(),
         groups,
         binary,
+        ignored_total: ignored_total as u32,
+        ignored_shown,
         elapsed_ms: started.elapsed().as_millis() as u32,
     };
 
@@ -229,6 +268,8 @@ async fn scan_repo(
         repo.line_counts = line_counts;
         repo.stamps = stamps;
         repo.binary = binary;
+        repo.ignored_total = ignored_total as u32;
+        repo.ignored_shown = ignored_shown;
     }
 
     // Watching is what turns a snapshot into a monitor, so it starts with the
@@ -672,6 +713,8 @@ async fn repo_index(state: State<'_, AppState>) -> Result<ScanResult, String> {
         files: repo.files.clone(),
         groups: groups_from(&repo.files),
         binary: repo.binary,
+        ignored_total: repo.ignored_total,
+        ignored_shown: repo.ignored_shown,
         elapsed_ms: 0,
     })
 }

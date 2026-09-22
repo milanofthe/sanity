@@ -39,13 +39,21 @@ fn main() {
         let name = root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let t0 = Instant::now();
 
-        let listed = match scan::list_files(root) {
+        let mut listed = match scan::list_files(root) {
             Ok(v) => v,
             Err(e) => {
                 println!("{name:<16} error: {e}");
                 continue;
             }
         };
+        // `SANITY_IGNORED=n` adds up to n of the files git ignores, which is
+        // what the switch in the View menu does. Here so the cost of that
+        // switch can be measured rather than guessed.
+        if let Ok(cap) = std::env::var("SANITY_IGNORED").unwrap_or_default().parse::<usize>() {
+            let (extra, total) = scan::git_ignored_files(root, cap);
+            println!("{name:<16} ignored: {} of {total}, taken", extra.len());
+            listed.extend(extra);
+        }
         // Listing and reading are reported apart: one walks directories and
         // asks git what to ignore, the other reads and tokenises, and they are
         // two different costs when the question is where the time goes.

@@ -10,6 +10,17 @@
 
 export type ViewMode = 'full' | 'reduced' | 'off';
 
+/** Where the ignored-files switch is kept between sessions. */
+const IGNORED_KEY = 'sanity.includeIgnored';
+
+function storedFlag(key: string): boolean {
+	try {
+		return localStorage.getItem(key) === '1';
+	} catch {
+		return false;
+	}
+}
+
 export const VIEW_MODES: { id: ViewMode; label: string; title: string }[] = [
 	{ id: 'full', label: 'Full', title: 'Draw the file contents' },
 	{ id: 'reduced', label: 'Stub', title: 'Show that the file exists, without its contents' },
@@ -45,6 +56,36 @@ class ProjectState {
 	groups = $state<FileGroup[]>([]);
 	/** Recently opened folders, most recent first. */
 	recent = $state<string[]>([]);
+
+	/**
+	 * Take in the files git ignores.
+	 *
+	 * Off by default, and a filter rather than a wall: what git ignores is
+	 * usually build output, and this repository's is 83,014 files and ten
+	 * gigabytes of it. But "usually" is not "always", and a folder you cannot
+	 * see because of a rule in a file somewhere is the kind of thing this app
+	 * exists to prevent. Switching it on rescans, since the files have to be
+	 * read before they can be drawn.
+	 */
+	includeIgnored = $state(storedFlag(IGNORED_KEY));
+	/** How many files git ignores in the open folder, and how many of them the
+	 *  scan took; the cap is in the backend. */
+	ignoredTotal = $state(0);
+	ignoredShown = $state(0);
+
+	setIncludeIgnored(on: boolean) {
+		this.includeIgnored = on;
+		try {
+			localStorage.setItem(IGNORED_KEY, on ? '1' : '0');
+		} catch {
+			// A session without storage keeps it for as long as it runs.
+		}
+	}
+
+	setIgnoredCounts(total: number, shown: number) {
+		this.ignoredTotal = total;
+		this.ignoredShown = shown;
+	}
 
 	/** True while a file watcher is running on the open folder. Shown in the
 	 *  status bar, because the difference between a live view and a snapshot is
