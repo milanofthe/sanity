@@ -147,12 +147,37 @@ export function lodName(pxPerLine: number): LodName {
 /**
  * How tall a token bar should be, as a fraction of the line height.
  *
- * Shrinks as glyphs arrive. Without this the crossfade puts solid bars behind
- * partly drawn letters at the same weight, and since a bar covers far more of
- * its line than the glyphs do, the middle of the transition is visibly denser
- * than either end. Thinning the bars keeps the ink roughly constant.
+ * Full while the overview texture is still underneath it. The texture fills a
+ * line completely, one texel row per screen row, so a shorter bar is a
+ * different picture of the same code: through the crossfade the two only
+ * partly cover each other and the panel loses ink in the middle. Measured
+ * across the hand-over at 0.68: mean luminance fell from 58 to 51 and stayed
+ * there, which is the step you see as "the bars coming in".
+ *
+ * Past the hand-over there is no texture left to match, and thinning starts:
+ * first a little, then properly as glyphs arrive, because a solid bar behind
+ * half-drawn letters is denser than either representation on its own.
  */
 export function spanBarHeight(pxPerLine: number): number {
   const toText = smoothstep(lodBands.textFrom, lodBands.textTo, pxPerLine);
-  return 0.68 - 0.34 * toText;
+  return SPAN_BAR_FILL - 0.34 * toText;
 }
+
+/**
+ * How much of a line's height a token bar covers before glyphs arrive.
+ *
+ * Measured, not chosen. Three values were tried against the ink the panel
+ * carries from 1.4 to 4.4 pixels per line, which is the whole hand-over:
+ *
+ *   0.68   mean luminance 58.7 down to 49.5, a spread of 9.2, and it stays
+ *          low: the bars are visibly thinner than the texture they replace
+ *   1.00   58.3 to 61.4, a spread of 9.4, overshooting in the other direction
+ *          once the texture is gone
+ *   0.78   58.7 to 51.9, a spread of 6.8, the flattest of the three
+ *
+ * A flat line is not reachable: a bar covers its token's width exactly and the
+ * texture spreads it over 128 texels per panel, so the two never carry the
+ * same ink. The number that matters is how much the picture changes while the
+ * zoom is being turned, and that is what is minimised here.
+ */
+const SPAN_BAR_FILL = 0.78;

@@ -47,6 +47,12 @@ macOS, and More info then Run anyway on Windows. Building from source is
   the same share of the canvas is drawn afterwards. The View menu also copies
   the renderer, the device pixel ratio and the driver's limits, for a fault on
   a screen I do not have.
+- **What the token band costs**, since it is the expensive one: at 2 pixels
+  per line the bars are 54,561 quads and 2.54 ms of CPU where the texture
+  alone is 527 quads and 0.38 ms. It buys sharpness, not speed, and the
+  texture is the cheap representation by two orders of magnitude. The bar
+  height is set against `lod-check`, which measures how much the picture
+  changes while the zoom is turned across both hand-overs.
 - **Three levels of detail**, weighted as a partition of one so nothing
   double-draws through a transition. Below 1.8 pixels per line a file is one
   textured quad per column, sampled from a saturation-weighted mip chain.
