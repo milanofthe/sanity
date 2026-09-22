@@ -168,10 +168,6 @@
 			rebuild(false);
 			app.fit();
 			rememberDemo(id);
-			// Somebody arriving from a link has a wall of panels in front of
-			// them and no reason to know it moves. One line, in the place the
-			// app already puts its numbers, rather than an overlay to dismiss.
-			say('scroll to zoom, drag to pan, / to search, right click for more', 12000);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {

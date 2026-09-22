@@ -105,6 +105,11 @@ impl Default for Repo {
 pub struct AppState {
     repo: Mutex<Repo>,
     watch: watch::WatchSlot,
+    /// Where the next image goes, handed over by `stage_save` just before the
+    /// bytes arrive. It lives here because the bytes travel as a raw request
+    /// body, which carries no arguments of its own and whose headers are
+    /// ASCII, while a path is neither.
+    save_to: Mutex<Option<PathBuf>>,
 }
 
 /// 90th percentile of non-blank line widths.
@@ -692,44 +697,51 @@ async fn find_text(
     })
 }
 
-/// Write a PNG the window rendered, asking where through the native dialog.
+/// Name the file the next image goes to.
+///
+/// Its own command because of how the image itself travels: as a raw request
+/// body, which carries no arguments and whose headers are ASCII, while a path
+/// is neither. The window asks where through the same dialog plugin the folder
+/// picker uses, then calls this, then sends the bytes.
+#[tauri::command]
+fn stage_save(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("stage_save needs a path".into());
+    }
+    *state.save_to.lock().unwrap() = Some(PathBuf::from(path));
+    Ok(())
+}
+
+/// Write the PNG the window rendered to the staged path.
 ///
 /// The bytes arrive as the raw request body: a 4K image is a few megabytes,
 /// and the default IPC would turn them into a string of decimal numbers six
-/// times that size. The dialog is opened here rather than in the window so
-/// that the chosen path never has to travel back through the IPC, which for a
-/// raw body can only carry ASCII headers, and paths are not ASCII.
+/// times that size.
 ///
-/// Returns the path written, or None when the dialog was dismissed.
+/// The path is taken rather than read, so a second call without a dialog in
+/// front of it fails instead of overwriting the last file quietly.
 #[tauri::command]
-async fn save_png(
-    app: tauri::AppHandle,
-    request: tauri::ipc::Request<'_>,
-) -> Result<Option<String>, String> {
+fn save_png(request: tauri::ipc::Request<'_>, state: State<'_, AppState>) -> Result<String, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("save_png expects the image as a raw body".into());
     };
-    let name = request
-        .headers()
-        .get("x-name")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("sanity.png")
-        .to_owned();
+    let path = state.save_to.lock().unwrap().take();
+    write_image(path, bytes)
+}
 
-    // Blocking is right here and would not be on the main thread: this is an
-    // async command, so it runs on the async runtime, and the dialog has to
-    // be answered before there is anywhere to write.
-    let picked = tauri_plugin_dialog::DialogExt::dialog(&app)
-        .file()
-        .set_file_name(name)
-        .add_filter("PNG image", &["png"])
-        .blocking_save_file();
-    let Some(picked) = picked else {
-        return Ok(None);
-    };
-    let path = picked.into_path().map_err(|e| e.to_string())?;
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    Ok(Some(path.display().to_string()))
+/// The part of `save_png` that does not need a window: take the staged path,
+/// refuse the two ways this can be nothing, write the file.
+fn write_image(path: Option<PathBuf>, bytes: &[u8]) -> Result<String, String> {
+    let path = path.ok_or("no file was chosen for the image")?;
+    if bytes.is_empty() {
+        return Err("the image arrived empty".into());
+    }
+    std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Unconditional, unlike the watch diagnostics: writing a file is
+    // something the user asked for, and one line saying where it went is what
+    // makes an export that did not arrive debuggable at all.
+    eprintln!("sanity: wrote {} bytes to {}", bytes.len(), path.display());
+    Ok(path.display().to_string())
 }
 
 fn read_text(root: &Path, rel: &str) -> Result<String, String> {
@@ -752,6 +764,7 @@ pub fn run() {
             app.manage(AppState {
                 repo: Mutex::new(Repo::default()),
                 watch: watch::WatchSlot::default(),
+                save_to: Mutex::new(None),
             });
             Ok(())
         })
@@ -766,6 +779,7 @@ pub fn run() {
             stop_watch,
             drop_files,
             repo_index,
+            stage_save,
             save_png,
             log_line
         ])
@@ -776,6 +790,24 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The export failed twice by producing nothing and saying nothing, once
+    // per platform, so both ways of having nothing to write are errors here
+    // rather than a quiet return.
+    #[test]
+    fn an_image_needs_a_path_and_some_bytes() {
+        assert!(write_image(None, b"png").is_err());
+        let dir = std::env::temp_dir().join("sanity-write-image-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("out.png");
+        assert!(write_image(Some(file.clone()), b"").is_err());
+        assert!(!file.exists(), "an empty image must not leave a file behind");
+
+        let written = write_image(Some(file.clone()), b"\x89PNG-ish").unwrap();
+        assert_eq!(written, file.display().to_string());
+        assert_eq!(std::fs::read(&file).unwrap(), b"\x89PNG-ish");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn terminal_editors_are_recognised_by_basename() {

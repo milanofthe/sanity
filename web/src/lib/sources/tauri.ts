@@ -7,7 +7,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import type { CanvasApp } from '$lib/canvas/app';
 import type { FileHits } from '$lib/canvas/content';
 import { expandLines } from '$lib/canvas/data/tabs';
@@ -311,18 +311,26 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
 /**
  * Write a rendered PNG, asking where through the native dialog.
  *
- * The bytes go over as the raw request body rather than as a JSON array,
- * which for a 4K image is four megabytes instead of a twenty-four megabyte
- * string of decimal numbers. The dialog is opened in the backend, so the path
- * never has to come back through the IPC: only an ASCII header could carry
- * one, and paths are not ASCII. The suggested name does cross as a header,
- * which is safe because we build it, see lib/image.ts.
+ * Two calls, because of how the bytes travel. A 4K image is a few megabytes,
+ * and the default IPC would turn them into a string of decimal numbers six
+ * times that size, so they go over as the raw request body instead. A raw
+ * body carries no arguments and its headers are ASCII only, while a path is
+ * neither, so the path is handed over first in a call of its own and the
+ * backend holds it for the write that follows.
+ *
+ * The dialog itself is the same one the folder picker uses, which is the part
+ * of this that has been working since the first day.
  *
  * Returns the path written, or null if the dialog was dismissed.
  */
 export async function savePng(bytes: Uint8Array, name: string): Promise<string | null> {
-  const body = new Uint8Array(bytes);
-  return invoke<string | null>('save_png', body, { headers: { 'x-name': name } });
+  const path = await save({
+    defaultPath: name,
+    filters: [{ name: 'PNG image', extensions: ['png'] }],
+  });
+  if (!path) return null;
+  await invoke('stage_save', { path });
+  return invoke<string>('save_png', new Uint8Array(bytes));
 }
 
 export async function stopWatching(): Promise<void> {

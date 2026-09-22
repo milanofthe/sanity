@@ -20,16 +20,22 @@ import { inTauri, savePng } from '$lib/sources/tauri';
 export const IMAGE_WIDTH = 3840;
 export const IMAGE_HEIGHT = 2160;
 
-/** The project's name and the minute, which is enough to keep two exports
- *  apart without a counter. */
-export function imageName(): string {
+/**
+ * The project's name, what was framed, and the second.
+ *
+ * To the second rather than to the minute: two exports of the same project
+ * were coming out with the same name, which means one of them is gone, or
+ * silently becomes a copy with a number after it, depending on where it was
+ * being written.
+ */
+export function imageName(region: 'view' | 'project'): string {
   const root = project.root.split('/').filter(Boolean).pop() || 'sanity';
   const t = new Date();
   const p = (n: number) => `${n}`.padStart(2, '0');
   const stamp =
     `${t.getFullYear()}${p(t.getMonth() + 1)}${p(t.getDate())}` +
-    `-${p(t.getHours())}${p(t.getMinutes())}`;
-  return `${root}-${stamp}.png`;
+    `-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}`;
+  return `${root}-${region}-${stamp}.png`;
 }
 
 /**
@@ -47,7 +53,7 @@ export async function saveImage(
     height: IMAGE_HEIGHT,
     region,
   });
-  const name = imageName();
+  const name = imageName(region);
   if (inTauri()) {
     return savePng(new Uint8Array(await blob.arrayBuffer()), name);
   }
@@ -55,7 +61,13 @@ export async function saveImage(
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
+  // In the document before it is clicked. A click on a detached anchor does
+  // nothing in Firefox and is unreliable in Chromium, which is how an export
+  // came to report a file that was never written anywhere.
+  a.style.display = 'none';
+  document.body.append(a);
   a.click();
+  a.remove();
   // Held until the download has certainly started, then released: revoking it
   // in the same task cancels the download in Chromium.
   setTimeout(() => URL.revokeObjectURL(url), 10000);

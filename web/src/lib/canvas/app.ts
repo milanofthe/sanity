@@ -948,14 +948,25 @@ export class CanvasApp {
         await new Promise((r) => requestAnimationFrame(r));
       }
 
-      return await new Promise<Blob>((resolve, reject) => {
-        // preserveDrawingBuffer is on, see renderer/gl.ts, so the frame just
-        // drawn is still there to be read.
-        this.canvas.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error('the image could not be encoded'))),
-          'image/png',
-        );
+      // preserveDrawingBuffer is on, see renderer/gl.ts, so the frame just
+      // drawn is still there to be read.
+      const blob = await new Promise<Blob | null>((resolve) => {
+        this.canvas.toBlob((b) => resolve(b), 'image/png');
       });
+      if (blob && blob.size > 0) return blob;
+      // Some webviews hand back null for a canvas this size. A data URL is the
+      // same encoder by a slower road, and slower is better than an export
+      // that fails on one platform and works on the other.
+      const url = this.canvas.toDataURL('image/png');
+      const comma = url.indexOf(',');
+      if (!url.startsWith('data:image/png') || comma < 0) {
+        throw new Error('the image could not be encoded');
+      }
+      const raw = atob(url.slice(comma + 1));
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      if (bytes.length === 0) throw new Error('the image came out empty');
+      return new Blob([bytes], { type: 'image/png' });
     } finally {
       // resize() puts the canvas and the camera's viewport back from the
       // element's own size, which is the one thing that must not be guessed.
