@@ -106,27 +106,31 @@ export const columns = {
    * A panel wraps into newspaper columns to reach a shape the treemap can
    * place, and shape alone is happy to cut a short file into four columns of
    * twenty five: measured on pathsim, ten panels held fewer than forty lines
-   * a column, among them a 36 line workflow file in two columns of 23. None
-   * do now.
+   * a column, among them a 36 line workflow file in two columns of 23.
    * Reading those means jumping back to the top for something that would have
    * fitted on one screen.
    *
-   * Swept on pathsim (328 text panels) and the nine shapes layout-check
-   * covers, with the cost measured as how much larger a short file's panel is
-   * than the shape it prefers:
+   * It is a trade, and this is where to turn it. A crowded panel is offered
+   * exactly the area that would keep it whole, so the higher this is, the
+   * more of the canvas short files take and the fewer times a reader jumps.
+   * Swept on pathsim, counting column breaks and wrapped rows per hundred
+   * lines against the canvas area:
    *
-   *   40   61 panels in one column, cost up to 3.42, every case converges
-   *   50   99 panels in one column, cost up to 3.67, one case runs to the
-   *        pass limit with two panels narrower than preferred
-   *   60  138 panels in one column, and the cost stops being confined to
-   *        short files: long panels go from 0.99 to 1.47 at the 95th
-   *        percentile, three cases end with misfits, most run to the limit
+   *   off   18.7 breaks,  570 canvas,  26 of 186 short files in one column
+   *   40    17.9 breaks,  580 canvas,  45
+   *   50    16.1 breaks,  610 canvas,  61
+   *   60    14.0 breaks,  672 canvas,  98
+   *   70    12.4 breaks,  753 canvas, 111
+   *   100    6.8 breaks, 1128 canvas, 168
    *
-   * Fifty, because it is the largest value whose cost stays inside the short
-   * files it is spent on, and because a file of under a hundred lines then
-   * stays in one piece.
+   * Every value lays out cleanly in all nine shapes layout-check covers, no
+   * misfits and no unusable panels, so the choice is only about how much
+   * canvas fewer jumps are worth.
+   *
+   * Sixty: fewer jumps than the first version of this rule managed at fifty,
+   * 14.0 against 15.0, for four percent more canvas than it took.
    */
-  minPerColumn: 50,
+  minPerColumn: 60,
 } as const;
 
 

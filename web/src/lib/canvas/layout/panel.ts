@@ -241,6 +241,16 @@ export interface SlotFit extends PanelGeometry {
    * the panels did not grow to match, and 3557 lines fell off the bottom.
    */
   holdsAll: boolean;
+  /**
+   * Cut into more columns than its rows are worth; see `columnsWorth`.
+   *
+   * Kept apart from `ok` because it is a preference and `ok` is not. A panel
+   * that is too narrow or too short has to be given more room however much it
+   * costs, and the fitting pass nudges it until it gets it. A crowded panel is
+   * perfectly readable, just in more pieces than it needs to be, so it is
+   * offered the area that would let it stay whole and no more than that.
+   */
+  crowded: boolean;
 }
 
 /** Characters of code a column keeps before a line-number margin is worth
@@ -272,6 +282,7 @@ export function fillSlot(
       ok: false,
       usable: false,
       holdsAll: false,
+      crowded: false,
     };
   }
 
@@ -331,6 +342,7 @@ export function fillSlot(
       ok: false,
       usable: false,
       holdsAll: false,
+      crowded: false,
     };
   }
 
@@ -371,14 +383,10 @@ export function fillSlot(
     pitch,
     w: slotW,
     h: slotH,
-    // A panel cut into more columns than its length is worth counts as a
-    // misfit, the same as one too narrow to read. Both are answered the same
-    // way: the fitting pass asks for a slot that does not force it, and the
-    // shape it asks for is worked out with the same rule, so what it gets back
-    // is a slot where the preference holds.
-    ok: available >= PREFERRED_MIN_COLS && holdsAll && columns <= columnsWorth(neededRows),
+    ok: available >= PREFERRED_MIN_COLS && holdsAll,
     usable: available >= HARD_MIN_COLS,
     holdsAll,
+    crowded: columns > columnsWorth(neededRows),
   };
 }
 

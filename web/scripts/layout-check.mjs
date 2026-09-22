@@ -43,7 +43,12 @@ const CASES = [
   // whatever the file behind it, so a directory of them is mostly the space
   // between them. What has to hold is that none of them goes missing and that
   // the chips and the panels around them do not overlap.
-  { cfg: 'files=600&lines=200&stubs=0.66', fill: 0.9, bloat: 1.1 },
+  //
+  // Bloat here is 1.15 rather than 0.99, and that is the column rule, not a
+  // runaway: it applies to every file under about 1900 rows, not only to the
+  // short ones `shortShare` covers, and with a third of the files left as
+  // panels the ones it offers area to are a larger share of what is counted.
+  { cfg: 'files=600&lines=200&stubs=0.66', fill: 0.9, bloat: 1.25 },
   // An eighth of the files are pictures, which is roughly what pathsim has.
   //
   // A picture's panel keeps the picture's proportion and is at most one code
@@ -68,14 +73,14 @@ let failures = 0;
  * Ceiling on how much more of the canvas short files take than their lines
  * would give them; see `shortShare` in tree.ts.
  *
- * Measured across the nine shapes: 1.35, 1.36, 1.33, 1.44, 1.38, 1.05, 2.53,
- * 1.49, 1.51, and 1.42 on pathsim. Before short files were kept in fewer
- * columns it sat between 0.97 and 1.05. The 2.53 is the case of 200 files of
- * 4000 lines, where the handful of short ones are a rounding error of the
- * canvas; everywhere else this is what keeping them whole costs, and nothing
- * else in this check would notice it growing.
+ * Measured across the nine shapes: 1.42, 1.55, 1.46, 1.55, 1.59, 1.04, 1.99,
+ * 1.65, 1.60. Before short files were kept in fewer columns it sat between
+ * 0.97 and 1.05. The 1.99 is the case of 200 files of 4000 lines, where the
+ * handful of short ones are a rounding error of the canvas; everywhere else
+ * this is what keeping them whole costs, and nothing else in this check would
+ * notice it growing.
  */
-const SHORT_SHARE = 2.7;
+const SHORT_SHARE = 2.2;
 
 for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   lastLine = null;

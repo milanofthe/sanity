@@ -166,6 +166,9 @@ export interface FileNode {
   /** False when the slot did not reach the preferred column width; the fitting
    *  passes grow such a file's area and try again. */
   fits: boolean;
+  /** In more columns than its rows are worth. A preference, not a misfit; see
+   *  `SlotFit.crowded`. */
+  crowded: boolean;
   /** False when the panel is too narrow to draw at all. The layout check
    *  asserts this is never false. */
   usable: boolean;
@@ -382,6 +385,7 @@ function buildTree(entries: FileEntry[]): DirNode {
       stub: Boolean(e.stub),
       media: e.media,
       fits: true,
+      crowded: false,
       usable: true,
       holdsAll: true,
       // The treemap weight: a stub's fixed box, or the area the file needs
@@ -676,6 +680,7 @@ function placeFile(f: FileNode, slot: IntRect): void {
   f.w = w;
   f.h = h;
   f.fits = fit.ok;
+  f.crowded = fit.crowded;
   f.usable = fit.usable;
   f.holdsAll = fit.holdsAll;
 }
@@ -910,8 +915,10 @@ function fitPasses(
       b.area = Math.max(b.area, need) * 1.06;
     }
     for (const f of files) {
-      if (f.fits || f.stub) continue;
-      remaining++;
+      if (f.stub || (f.fits && !f.crowded)) continue;
+      // Only the column preference is missing; handled below.
+      const soft = f.fits;
+      if (!soft) remaining++;
       // Ask for the smallest slot of this aspect that the panel could fill in
       // *any* of the shapes it is allowed to take.
       //
@@ -972,11 +979,10 @@ function fitPasses(
       for (let c = natural.cols; ; c = Math.max(MIN_PANEL_COLS, Math.floor(c / 16) * 8)) {
         const rows = visualRowsCached(f.lineCols, c);
         const pitch = c * metrics.charWidth + COLUMN_GUTTER;
-        // Only as many columns as the rows are worth, the same rule `fillSlot`
-        // judges the result by. Searching past it asks for a slot whose shape
-        // only a panel with too many columns could fill, so the file would be
-        // handed exactly what it was just declared a misfit for.
-        const kMax = columnsWorth(rows);
+        // A crowded panel asks for a shape that keeps it in as few columns as
+        // its rows are worth, which is what it was found lacking. Anything
+        // else may take as many as it needs.
+        const kMax = soft ? columnsWorth(rows) : MAX_COLUMNS;
         for (let k = 1; k <= kMax; k++) {
           const w = k * pitch - COLUMN_GUTTER + 2 * metrics.panelPadX;
           const h =
@@ -986,6 +992,22 @@ function fitPasses(
           if (area < need) need = area;
         }
         if (c <= MIN_PANEL_COLS) break;
+      }
+      if (soft) {
+        // Exactly the area the preferred shape needs in a slot like this one,
+        // with no nudge on top and only if it is more than the file has.
+        //
+        // The nudge is what a misfit needs: without it a panel whose need
+        // equals its area gets the same slot back and stays unreadable. A
+        // preference has no such claim. With the nudge, a panel that stayed
+        // crowded for ten passes came out with 1.06^10 = 1.79 times its area,
+        // which is what the median short file on pathsim had, and the short
+        // files took 34 percent of the canvas for 24 percent of the lines.
+        if (need > f.area * 1.01) {
+          f.area = need;
+          remaining++;
+        }
+        continue;
       }
       f.area = Math.max(f.area, need) * 1.06;
     }
