@@ -46,6 +46,17 @@ const MAX_IN_FLIGHT = 4;
 /**
  * Main-thread milliseconds a frame may spend bringing pictures in.
  *
+ * Only the upload is charged against it. Decoding happens off the main thread
+ * and waiting for it blocks nothing, so charging the decode here was charging
+ * the budget for work the frame never did: a hundred thumbnails, whose
+ * uploads cost 1.3 ms each, were being paced as though they cost six.
+ *
+ * Twelve of a sixteen millisecond frame. Measured on a folder of 118
+ * pictures, from the canvas appearing to the last thumbnail on screen: 725 ms
+ * at eight, 528 at sixteen, and the frame times are the same either way. The
+ * two thirds is a floor under the rest of the scene rather than a number the
+ * pictures needed.
+ *
  * A budget rather than a fixed gap between starts. The gap was 16 ms, which
  * made sense when a decode meant reading a multi-megabyte source, and became
  * the only thing that mattered once the backend started handing over 128
@@ -54,7 +65,7 @@ const MAX_IN_FLIGHT = 4;
  * one actually costs, they arrive as fast as the frame can carry them and no
  * faster.
  */
-const FRAME_BUDGET_MS = 8;
+const FRAME_BUDGET_MS = 12;
 
 /** And a ceiling on the wait when a single decode is expensive, so a folder
  *  of very large sources still fills in rather than stalling. */
@@ -64,6 +75,19 @@ const MAX_GAP_MS = 200;
  *  second: long enough that a pan does not start work it will throw away,
  *  short enough that letting go of the trackpad feels immediate. */
 const QUIET_MS = 100;
+
+/**
+ * Level up to which a request ignores all of that and starts immediately.
+ *
+ * The waiting is there so a pan does not spend the frame decoding sources it
+ * will have moved past. That reasoning does not apply to a thumbnail: it
+ * costs about a millisecond, it is what every small panel is drawn from at
+ * any zoom, and it will not be thrown away by the next camera move. Measured
+ * on a folder of 118 pictures: with the wait, nothing started until the
+ * opening camera flight had finished and the first thumbnail appeared at 700
+ * milliseconds.
+ */
+const CHEAP_LEVEL = 128;
 
 /** The same, for a picture being drawn from far too little. Two frames, not
  *  zero: skipping the wait entirely meant a zoom sweep pulled full-size
@@ -312,7 +336,7 @@ export class MediaTextures {
   private request(path: string, level: number, width: number, urgent: boolean): void {
     if (this.failed.has(path)) return;
     if (this.loading.get(path) === level) return;
-    this.queued.set(path, { level, width, urgent });
+    this.queued.set(path, { level, width, urgent: urgent || level <= CHEAP_LEVEL });
     this.schedule();
   }
 
@@ -345,7 +369,7 @@ export class MediaTextures {
     if (this.timer !== null) return;
     if (this.queued.size === 0 || this.inFlight >= MAX_IN_FLIGHT) return;
     const now = performance.now();
-    const wait = this.hurry ? 0 : this.anyUrgent() ? URGENT_QUIET_MS : QUIET_MS;
+    const wait = this.hurry || this.anyCheap() ? 0 : this.anyUrgent() ? URGENT_QUIET_MS : QUIET_MS;
     const quiet = Math.max(0, this.movedAt + wait - now);
     const spaced = this.hurry ? 0 : Math.max(0, this.lastStart + this.gap() - now);
     this.timer = setTimeout(
@@ -363,9 +387,15 @@ export class MediaTextures {
     return false;
   }
 
+  /** Whether anything queued is small enough not to be worth waiting over. */
+  private anyCheap(): boolean {
+    for (const q of this.queued.values()) if (q.level <= CHEAP_LEVEL) return true;
+    return false;
+  }
+
   private pump(): void {
     const now = performance.now();
-    const wait = this.hurry ? 0 : this.anyUrgent() ? URGENT_QUIET_MS : QUIET_MS;
+    const wait = this.hurry || this.anyCheap() ? 0 : this.anyUrgent() ? URGENT_QUIET_MS : QUIET_MS;
     if (now - this.movedAt < wait || (!this.hurry && now - this.lastStart < this.gap())) {
       this.schedule();
       return;
@@ -422,6 +452,13 @@ export class MediaTextures {
       bitmap = await createImageBitmap(new Blob([bytes]), {
         resizeWidth: level,
         resizeQuality: 'high',
+        // Nothing converted on the way in or out. The default is for a
+        // bitmap that will be drawn into a 2D canvas: premultiplied and
+        // converted to the display's colour space, and both are undone again
+        // by the upload, which is what made a 128 pixel thumbnail cost
+        // milliseconds rather than the 0.09 the upload itself measures.
+        premultiplyAlpha: 'none',
+        colorSpaceConversion: 'none',
       });
     } catch {
       this.failed.add(path);
@@ -430,7 +467,6 @@ export class MediaTextures {
     const took = performance.now() - started;
     this.decodeMs += took;
     this.decodeEma = this.decodeEma * 0.7 + took * 0.3;
-    this.spentThisFrame += took;
     this.worstDecode = Math.max(this.worstDecode, took);
     const up = performance.now();
     this.upload(path, bitmap);
@@ -451,6 +487,10 @@ export class MediaTextures {
     }
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
+    // Taken as it is: the bitmap was decoded unpremultiplied and unconverted,
+    // and the shader blends it with the usual source-alpha equation.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
     // A mip chain, because a picture is drawn at every size between its panel
     // on screen and a thumbnail, and without it the overview zoom aliases into

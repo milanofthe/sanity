@@ -46,6 +46,11 @@ fn main() {
     let mut media_bytes = 0u64;
     let mut thumb_files = 0u32;
     let mut thumb_bytes = 0u64;
+    // Every thumbnail, to be written as one file. The app gets these from the
+    // `thumbs` command in batches; the demo has no backend to ask, and a
+    // hundred and sixteen separate requests is most of the time it takes to
+    // fill a canvas of pictures. One file, one request, same bytes.
+    let mut thumbs: Vec<(String, Vec<u8>)> = Vec::new();
 
     for rel in &listed {
         let Some((data, info)) = scan::read_file(&root, rel) else { continue };
@@ -109,15 +114,12 @@ fn main() {
             }
             if matches!(info.media, Some(sanity_core::media::Media::Image { .. })) {
                 if let Ok(bytes) = std::fs::read(root.join(rel)) {
-                    if let Some(small) = sanity_core::thumb::thumbnail(&bytes, sanity_core::thumb::THUMB_MAX) {
-                        let dst = out.join("thumbs").join(format!("{rel}.png"));
-                        if let Some(parent) = dst.parent() {
-                            std::fs::create_dir_all(parent).ok();
-                        }
-                        if std::fs::write(&dst, &small).is_ok() {
-                            thumb_files += 1;
-                            thumb_bytes += small.len() as u64;
-                        }
+                    if let Some(small) =
+                        sanity_core::thumb::thumbnail(&bytes, sanity_core::thumb::THUMB_MAX)
+                    {
+                        thumb_files += 1;
+                        thumb_bytes += small.len() as u64;
+                        thumbs.push((rel.to_string(), small));
                     }
                 }
             }
@@ -145,6 +147,9 @@ fn main() {
     );
     std::fs::write(out.join("scan.json"), scan_json).expect("write scan.json");
     std::fs::write(out.join("payloads.bin"), pack(&payloads)).expect("write payloads.bin");
+    // The same container as the payloads, so the frontend has one parser for
+    // both. Empty when a repository has no pictures, which is a valid file.
+    std::fs::write(out.join("thumbs.bin"), pack(&thumbs)).expect("write thumbs.bin");
 
     let texts_json: Vec<String> = texts
         .iter()

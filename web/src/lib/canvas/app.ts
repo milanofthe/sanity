@@ -356,7 +356,17 @@ export class CanvasApp {
           () => this.invalidate(),
         );
       }
-      this.pending = this.layout.files.map((f) => f.path);
+      // Pictures first, then the text files. A picture's panel costs nothing
+      // to create, since there is no texture to write, and until it exists
+      // the renderer cannot ask for its thumbnail: on a folder of 118
+      // pictures that put every one of them behind four hundred milliseconds
+      // of code textures. `pop` takes from the end, so the pictures go last
+      // in the list.
+      const files = this.layout.files;
+      this.pending = [
+        ...files.filter((f) => !f.media).map((f) => f.path),
+        ...files.filter((f) => f.media).map((f) => f.path),
+      ];
       this.fit();
     }
     this.uploaded = 0;

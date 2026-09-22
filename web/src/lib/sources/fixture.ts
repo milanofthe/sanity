@@ -41,6 +41,9 @@ let texts: Record<string, string[]> = {};
 /** Resolves when texts.json has arrived, so anything that needs the text can
  *  wait for it instead of finding nothing. */
 let textsReady: Promise<void> = Promise.resolve();
+/** Thumbnails by path, from thumbs.bin; see `openFixtureNamed`. */
+let thumbs = new Map<string, ArrayBuffer>();
+let thumbsReady: Promise<void> = Promise.resolve();
 /** Tells the canvas to draw again once the text is in. The render loop parks
  *  when nothing moves, so without this the glyphs would appear on the next
  *  pan rather than when they load. */
@@ -108,6 +111,18 @@ export async function loadFixture(
   ]);
   scan = s;
   payloads = unpack(blob);
+  // Every thumbnail in one file, in the same container as the payloads. One
+  // request rather than one per picture: on a folder of 116 the separate
+  // requests were most of the time the canvas took to fill in, and the app
+  // never had that problem because its backend answers in batches.
+  thumbs = new Map();
+  thumbsReady = fetch(`${base}/thumbs.bin`)
+    .then((r) => (r.ok ? r.arrayBuffer() : null))
+    .then((bin) => {
+      if (bin) thumbs = unpack(bin);
+      onTexts?.();
+    })
+    .catch(() => {});
   documents = new Set(
     s.files.filter((f) => f.media?.kind === "document").map((f) => f.path),
   );
@@ -143,7 +158,7 @@ export function openFixture(app: CanvasApp, keepView = false): void {
     payload: (p: string) => payloads.get(p),
     text,
     find,
-    ready: () => textsReady,
+    ready: () => Promise.all([textsReady, thumbsReady]).then(() => undefined),
     // The dump copies pictures in under media/ and their thumbnails under
     // thumbs/, so a fetch is all it takes. Up to a thumbnail's size that is
     // what is fetched, which is the same rule the app follows against its
@@ -151,27 +166,22 @@ export function openFixture(app: CanvasApp, keepView = false): void {
     // hundred pixels wide. A document is there as a pre-rendered first page,
     // with `.png` after its own name: the browser has no PDF renderer and the
     // dump was built on a machine that does. See scripts/demo.mjs.
-    imageBytes: (path: string, level: number) => {
+    imageBytes: async (path: string, level: number) => {
       const doc = documents.has(path);
-      const full = `${base(loaded)}/media/${path}${doc ? ".png" : ""}`;
-      const url =
-        !doc && level <= THUMB_MAX
-          ? `${base(loaded)}/thumbs/${path}.png`
-          : full;
-      return (
-        fetch(url)
-          // Not every picture has a thumbnail: an SVG is a picture the dump's
-          // decoder does not read, and the browser reads it fine. So a miss
-          // falls through to the source rather than marking the file broken.
-          .then((r) =>
-            r.ok
-              ? r.arrayBuffer()
-              : url === full
-                ? null
-                : fetch(full).then((f) => (f.ok ? f.arrayBuffer() : null)),
-          )
-          .catch(() => null)
-      );
+      // Up to a thumbnail's size, the thumbnail, which is already here: one
+      // file carried all of them when the repository opened.
+      if (!doc && level <= THUMB_MAX) {
+        await thumbsReady;
+        const held = thumbs.get(path);
+        if (held) return held;
+        // Not every picture has one: an SVG is a picture the dump's decoder
+        // does not read and the browser reads fine, so a miss falls through
+        // to the source rather than marking the file broken.
+      }
+      const full = `${base(loaded)}/media/${path}${doc ? '.png' : ''}`;
+      return fetch(full)
+        .then((r) => (r.ok ? r.arrayBuffer() : null))
+        .catch(() => null);
     },
   };
   app.open(source, keepView);

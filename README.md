@@ -123,13 +123,21 @@ macOS, and More info then Run anyway on Windows. Building from source is
   against the 96 MB its whole code costs, and the budget for all of it is
   64 MB, shared between what is on screen.
 
-  Decodes are paced rather than run as a burst, widest panel first, and none
-  start while the camera is moving, apart from a picture being drawn from so
-  little that waiting would show mush. Measured on a folder of 119 screenshots
-  in WebKit, which is the engine the app ships: opening it went from 6999 ms of
-  decoding and 69 MB read to 407 ms and 1.1 MB, a zoom sweep across the whole
-  project asks for nothing at all, and zooming into one picture has it at full
-  resolution 243 ms later.
+  Decodes are paced rather than run as a burst, widest panel first, and a
+  source decode waits for the camera to stop, since a pan would throw the work
+  away. A thumbnail does not wait for anything: it costs about a millisecond,
+  it is what every small panel is drawn from, and no camera move invalidates
+  it. What the frame budget is charged is the upload alone, because that is
+  the only part on the main thread.
+
+  Measured in WebKit, which is the engine the app ships, on a folder of 118
+  pictures, from the canvas appearing to the last thumbnail on it: 2.5 seconds
+  when every picture had its own timer and the decode was charged against the
+  frame, 527 ms now. The steps in between were each worth about the same: one
+  timer per picture instead of a loop (2.5 to 1.0 s), one file for all the
+  thumbnails instead of one request each (to 0.92), not charging off-thread
+  decoding to the main thread (to 0.83), and letting a thumbnail start during
+  the opening camera flight instead of after it (to 0.53).
 - **Notebooks as cells**, not as the JSON they are stored in. A `.ipynb` is
   read into its code cells, its prose cells and one line per output naming
   what it is, so what a panel shows is the notebook. On pathsim's 34 notebooks
