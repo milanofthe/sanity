@@ -83,15 +83,28 @@ export class MediaTextures {
   /** Paths that cannot be decoded, so a broken file is attempted once. */
   private failed = new Set<string>();
 
+  private gl: WebGL2RenderingContext;
+  private fetchBytes: (path: string, level: number) => Promise<ArrayBuffer | null>;
+  /** Called when a picture has arrived, so the frame loop draws again: it
+   *  parks when nothing moves, and an image that loaded into a parked canvas
+   *  would appear on the next pan. */
+  private onLoaded: () => void;
+  private budget: number;
+
+  // Written out rather than declared as constructor parameters, because
+  // parameter properties are not syntax Node can strip, and this module has
+  // unit tests that import it directly: see mediatex.test.ts.
   constructor(
-    private gl: WebGL2RenderingContext,
-    private fetchBytes: (path: string, level: number) => Promise<ArrayBuffer | null>,
-    /** Called when a picture has arrived, so the frame loop draws again: it
-     *  parks when nothing moves, and an image that loaded into a parked canvas
-     *  would appear on the next pan. */
-    private onLoaded: () => void,
-    private budget = BUDGET_BYTES,
-  ) {}
+    gl: WebGL2RenderingContext,
+    fetchBytes: (path: string, level: number) => Promise<ArrayBuffer | null>,
+    onLoaded: () => void,
+    budget = BUDGET_BYTES,
+  ) {
+    this.gl = gl;
+    this.fetchBytes = fetchBytes;
+    this.onLoaded = onLoaded;
+    this.budget = budget;
+  }
 
   /** A new frame: the clock eviction order is measured in, and the count the
    *  budget is divided between. */

@@ -915,6 +915,31 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    // The platform's PDF renderer, on the smallest valid document there is.
+    // Worth a test because it is a process call, and a process call is the
+    // kind of thing that works until a system update renames a flag.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_first_page_of_a_pdf_rasterises() {
+        let dir = std::env::temp_dir().join("sanity-pdf-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("one.pdf");
+        std::fs::write(&path, MINIMAL_PDF).unwrap();
+
+        let png = rasterise_first_page(&path, 200).expect("sips renders a page");
+        assert!(png.starts_with(&[0x89, b'P', b'N', b'G']), "not a png: {:?}", &png[..8.min(png.len())]);
+        // The width asked for, out of the header, so a silent fallback to the
+        // page's own size would fail here.
+        let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        assert_eq!(w, 200, "rendered at {w} pixels wide");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// One page, 200 by 100 points, with nothing on it. Hand-written because
+    /// a fixture file for this would be a binary in the repository.
+    #[cfg(target_os = "macos")]
+    const MINIMAL_PDF: &[u8] = b"%PDF-1.4\n1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n2 0 obj<< /Type /Pages /Count 1 /Kids [3 0 R] >>endobj\n3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>endobj\n4 0 obj<< /Length 44 >>stream\n1 0 0 RG 4 w 20 20 m 180 80 l S\nendstream\nendobj\ntrailer<< /Root 1 0 R >>\n";
+
     // The export failed twice by producing nothing and saying nothing, once
     // per platform, so both ways of having nothing to write are errors here
     // rather than a quiet return.
