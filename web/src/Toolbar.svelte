@@ -54,6 +54,11 @@
 		search?.focus();
 	}
 
+	/** Where the app itself lives. The demo is the only place anyone sees this
+	 *  without having cloned it first, so it is the one place that has to say
+	 *  where it came from. */
+	const REPO_URL = 'https://github.com/milanofthe/sanity';
+
 	const short = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
 	/** Thousands as k, so a hint stays a hint. */
 	const kilo = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
@@ -108,6 +113,17 @@
 						onclick={() => { ui.openMenu = null; onreload?.(path); }}
 					/>
 				{/each}
+			</MenuSection>
+		{/if}
+		{#if demos.length > 0}
+			<MenuSection title="sanity">
+				<div class="path">
+					Read only, and a snapshot rather than a live folder. The desktop app
+					opens any folder and watches it.
+					<a href={REPO_URL} target="_blank" rel="noreferrer">
+						{REPO_URL.replace('https://', '')}
+					</a>
+				</div>
 			</MenuSection>
 		{/if}
 		{#if shown}

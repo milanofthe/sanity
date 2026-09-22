@@ -1,0 +1,61 @@
+name: Deploy the demo to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'crates/**'
+      - 'scripts/demo.mjs'
+      - '.github/workflows/pages.yml'
+  # The dumps are made from the heads of four other repositories, so the site
+  # goes stale on its own. Once a week keeps it current without anyone pushing.
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The dumps are generated rather than committed: they are megabytes of
+      # somebody else's source and they go stale the moment those repositories
+      # move. This clones the four and runs the real scanner over them, so the
+      # site is built from their heads.
+      - name: Dump the demo repositories
+        run: npm run demo
+      - name: Install
+        working-directory: web
+        run: npm ci
+      - name: Build
+        working-directory: web
+        run: npm run build
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
