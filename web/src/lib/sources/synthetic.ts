@@ -11,6 +11,19 @@ import { PseudoText } from '$lib/canvas/data/pseudotext';
 import { project, type FileGroup } from '$lib/state/project.svelte';
 
 const params = new URLSearchParams(location.search);
+
+/**
+ * Whether the query asks for a generated repository of a particular shape.
+ *
+ * The layout check drives its cases through these, `?files=800&lines=12` and
+ * so on, so they have to win over anything the page would otherwise open. The
+ * web demo took that away for a while: every case loaded pathsim instead and
+ * the check reported the same numbers eight times, which is the sort of
+ * failure that looks like a layout regression.
+ */
+export function syntheticQuery(): boolean {
+  return ['files', 'lines', 'stubs', 'dirs', 'depth', 'seed'].some((k) => params.has(k));
+}
 const num = (k: string, d: number) => {
   const v = params.get(k);
   return v === null ? d : Number(v);
@@ -75,8 +88,35 @@ export function openSynthetic(app: CanvasApp, regenerate = false, keepView = fal
     return (h % 1000) / 1000 < stubbed;
   };
 
+  // `?media=<fraction>` turns that share of the files into pictures, so the
+  // layout check can hold its invariants over a project that has some. Sizes
+  // come from the path hash as well: a plot, a diagram, an icon, which is the
+  // spread a real repository has.
+  const pictures = num('media', 0);
+  const asPicture = (path: string) => {
+    if (pictures <= 0) return undefined;
+    let h = 2166136261;
+    for (let i = 0; i < path.length; i++) h = ((h ^ path.charCodeAt(i)) * 16777619) >>> 0;
+    if ((h % 1000) / 1000 >= pictures) return undefined;
+    const shapes = [
+      { w: 3900, h: 700 },
+      { w: 1600, h: 900 },
+      { w: 1024, h: 1024 },
+      { w: 256, h: 256 },
+      { w: 32, h: 32 },
+    ];
+    const pick = shapes[h % shapes.length];
+    return { kind: 'image' as const, w: pick.w, h: pick.h, pages: 0 };
+  };
+
   const entries = repo.entries
-    .map((e) => ({ ...e, stub: reduced(e.path) }))
+    .map((e) => {
+      const media = asPicture(e.path);
+      // A picture has no lines, so it arrives the way the backend sends one.
+      return media
+        ? { ...e, media, lineCount: 0, maxCols: 0, clipCols: 0, lineCols: undefined, stub: false }
+        : { ...e, stub: reduced(e.path) };
+    })
     .filter((e) => project.modeForPath(e.path) !== 'off');
 
   app.open(

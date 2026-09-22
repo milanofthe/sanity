@@ -11,6 +11,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import type { CanvasApp } from '$lib/canvas/app';
 import type { FileHits } from '$lib/canvas/content';
 import { expandLines } from '$lib/canvas/data/tabs';
+import type { MediaSize } from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
@@ -25,6 +26,8 @@ interface ScanFile {
   lineCount: number;
   maxCols: number;
   clipCols?: number;
+  /** Present when the file is a picture; see `sanity_core::media`. */
+  media?: MediaSize;
 }
 
 interface ScanResult {
@@ -198,6 +201,7 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       lineCount: f.lineCount,
       maxCols: f.maxCols,
       clipCols: f.clipCols,
+      media: f.media,
       stub: project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');

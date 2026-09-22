@@ -44,6 +44,12 @@ const CASES = [
   // between them. What has to hold is that none of them goes missing and that
   // the chips and the panels around them do not overlap.
   { cfg: 'files=600&lines=200&stubs=0.66', fill: 0.9, bloat: 1.1 },
+  // An eighth of the files are pictures, which is roughly what pathsim has.
+  // A picture's panel is judged by area rather than by shape, since the image
+  // is fitted into whatever it gets, so bloat is measured over the text
+  // panels only; what has to hold here is that nothing overlaps, nothing is
+  // unusable and the canvas is still full.
+  { cfg: 'files=500&lines=200&media=0.12', fill: 0.9, bloat: 1.2 },
 ];
 
 const browser = await launch();

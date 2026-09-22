@@ -12,6 +12,7 @@
 import type { CanvasApp } from '$lib/canvas/app';
 import { findInTexts, type FileHits } from '$lib/canvas/content';
 import { expandLines } from '$lib/canvas/data/tabs';
+import type { MediaSize } from '$lib/canvas/layout/tree';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
 import { unpack } from './payload.ts';
@@ -23,6 +24,7 @@ interface FixtureScan {
     lineCount: number;
     maxCols: number;
     clipCols?: number;
+    media?: MediaSize;
   }[];
   groups: Omit<FileGroup, 'mode'>[];
 }
@@ -120,6 +122,7 @@ export function openFixture(app: CanvasApp, keepView = false): void {
       lineCount: f.lineCount,
       maxCols: f.maxCols,
       clipCols: f.clipCols,
+      media: f.media,
       stub: project.modeForPath(f.path) === 'reduced',
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');

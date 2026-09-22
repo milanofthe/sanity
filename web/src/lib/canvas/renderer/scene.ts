@@ -1102,7 +1102,8 @@ export class Scene {
       }
 
       this.pushPanel(f);
-      this.pushColumnRules(f, cam.zoom);
+      if (f.node.media) this.pushMedia(f, cam.zoom);
+      else this.pushColumnRules(f, cam.zoom);
       this.pushHeader(f, cam.zoom, f.node.path === this.hoveredPath);
       this.pushPanelBorder(f, this.matched !== null && hit);
       if (overviewFade > 0.004) this.pushOverview(f, overviewFade);
@@ -1260,8 +1261,17 @@ export class Scene {
     const ext = dot > 0 ? n.name.slice(dot + 1) : '';
     const dir = n.path.slice(0, Math.max(0, n.path.length - n.name.length - 1));
     // The live count, for the same reason: the header would otherwise keep
-    // showing what the file had when it was laid out.
-    const lines = f.node.stub ? '' : compactCount(f.data.lineCount);
+    // showing what the file had when it was laid out. A picture has no lines,
+    // so it says what it is instead: pixels for an image, pages for a
+    // document.
+    const media = n.media;
+    const lines = f.node.stub
+      ? ''
+      : media
+        ? media.kind === 'document'
+          ? `${media.pages > 0 ? compactCount(media.pages) : '?'}p`
+          : `${media.w}x${media.h}`
+        : compactCount(f.data.lineCount);
 
     // Right-aligned, in order: the type badge, then the line count. Both are
     // dropped before the name when space runs short, the badge first because
@@ -1305,6 +1315,41 @@ export class Scene {
    * exactly the moment the overview matters. The floor is deliberately small:
    * any larger and stubs would out-shout the real files around them.
    */
+  /**
+   * The area a picture occupies, at the picture's own proportion.
+   *
+   * A placeholder, until the image itself is decoded and uploaded per level of
+   * detail; see issue #20. Drawn rather than left blank because a panel with
+   * nothing in it reads as a bug, which is exactly what an empty panel was
+   * until an hour ago, and because the shape is already information: you can
+   * see that a file is a wide plot or a portrait page before anything is
+   * loaded.
+   */
+  private pushMedia(f: SceneFile, zoom: number): void {
+    const n = f.node;
+    const m = n.media;
+    if (!m) return;
+    const availW = n.w - 2 * metrics.panelPadX;
+    const availH = n.h - metrics.titleHeight - 2 * metrics.panelPadY;
+    if (availW <= 0 || availH <= 0 || availH * zoom < 2) return;
+    const mw = m.w > 0 ? m.w : 595;
+    const mh = m.h > 0 ? m.h : 842;
+    // Contained, so the proportion is the picture's and the panel keeps its
+    // padding whichever way the two disagree.
+    const scale = Math.min(availW / mw, availH / mh);
+    const w = mw * scale;
+    const h = mh * scale;
+    const x = n.x + metrics.panelPadX + (availW - w) / 2;
+    const y = n.y + metrics.titleHeight + metrics.panelPadY + (availH - h) / 2;
+    this.pushRect(this.bgRects, x, y, w, h, this.pal.surface.reducedBg, 1, 0, 0);
+    if (h * zoom > 4) {
+      this.pushRect(
+        this.fgRects, x, y, w, h, this.pal.surface.reducedBg, 0,
+        this.pal.surface.border, 1,
+      );
+    }
+  }
+
   private pushStub(f: SceneFile, zoom: number): void {
     const n = f.node;
     const floor = STUB_MIN_PX / Math.max(zoom, 1e-6);

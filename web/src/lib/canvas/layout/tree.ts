@@ -7,7 +7,7 @@
 import { metrics } from '$lib/metrics';
 import {
   COLUMN_GUTTER, fillSlot, MAX_COLUMNS, MIN_PANEL_COLS, panelArea as panelArea_, panelGeometry,
-  stubArea, stubGeometry, type PanelGeometry,
+  mediaGeometry, stubArea, stubGeometry, type PanelGeometry,
 } from './panel';
 import { visualRowsCached } from './wrap';
 import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
@@ -74,6 +74,22 @@ const DIR_GAP_CELLS = 1;
  */
 const DIR_ASPECT_CAP = 10;
 
+/**
+ * Widest shape a picture's panel may be given.
+ *
+ * A picture has an aspect of its own, and it is tempting to hand that to the
+ * treemap as a hard bound. That makes it a fixed box, which is the thing
+ * stubs had to be lifted out of the treemap for. So a picture is bent like
+ * any other panel and fitted inside what it gets; this only keeps it from
+ * becoming a letterbox.
+ */
+const MEDIA_ASPECT_CAP = 6;
+
+/** How much smaller than it asked for a picture's panel may be before the
+ *  fitting pass grows it. Five percent, so a rounding of the cell grid is not
+ *  a reason to run another pass. */
+const MEDIA_FIT_SLACK = 0.95;
+
 export interface FileEntry {
   path: string;
   lineCount: number;
@@ -89,6 +105,37 @@ export interface FileEntry {
    *  structure, not drawn. Files that should not appear at all are filtered
    *  out before they get here. */
   stub?: boolean;
+  /** Set when the file is a picture rather than text: an image with pixel
+   *  dimensions, or a document with pages. It carries no lines, so its panel
+   *  is sized from this instead. See `sanity_core::media`. */
+  media?: MediaSize;
+}
+
+/** What the layout needs to know about a picture. */
+export interface MediaSize {
+  kind: 'image' | 'document';
+  /** Pixel size for an image, point size of a page for a document; 0 when
+   *  the file did not say. */
+  w: number;
+  h: number;
+  /** Pages, 0 for an image and for a document that hides its page tree. */
+  pages: number;
+}
+
+/** The panel a picture asks for. Deterministic, so the fitting pass and the
+ *  placement can both ask without storing it. */
+export function mediaWant(m: MediaSize): PanelGeometry {
+  const shape = mediaShape(m);
+  return mediaGeometry(shape.aspect, shape.pixels);
+}
+
+/** Preferred proportion of a picture's panel, and how much canvas it is
+ *  worth. A document with no page size of its own is treated as A4. */
+export function mediaShape(m: MediaSize): { aspect: number; pixels: number } {
+  const w = m.w > 0 ? m.w : 595;
+  const h = m.h > 0 ? m.h : 842;
+  const pages = m.kind === 'document' ? Math.max(1, m.pages) : 1;
+  return { aspect: w / h, pixels: w * h * pages };
 }
 
 export interface FileNode {
@@ -102,6 +149,8 @@ export interface FileNode {
   geom: PanelGeometry;
   /** Laid out as a fixed-size placeholder rather than drawn. */
   stub: boolean;
+  /** Set when the panel holds a picture instead of lines. */
+  media?: MediaSize;
   /** False when the slot did not reach the preferred column width; the fitting
    *  passes grow such a file's area and try again. */
   fits: boolean;
@@ -263,16 +312,33 @@ function buildTree(entries: FileEntry[]): DirNode {
     // A source without widths gets a flat profile, which reduces to the old
     // one-row-per-line behaviour rather than breaking.
     const lineCols = e.lineCols ?? new Uint16Array(e.lineCount).fill(e.maxCols);
-    const geom = e.stub ? stubGeometry() : panelGeometry(lineCols, e.maxCols);
-    const bounds = e.stub
+    // A picture is not a stub and not text: it has a size of its own, and a
+    // shape the layout is free to bend, since the picture is fitted into
+    // whatever panel it ends up with.
+    const shape = e.media && !e.stub ? mediaShape(e.media) : null;
+    const geom = shape
+      ? mediaGeometry(shape.aspect, shape.pixels)
+      : e.stub
+        ? stubGeometry()
+        : panelGeometry(lineCols, e.maxCols);
+    const bounds = shape
       ? {
-        // A stub is a fixed box: its minimum is its size and it has no other
-        // shape to offer.
-        minW: cells(geom.w) + PANEL_GAP_CELLS,
-        minH: cells(geom.h) + PANEL_GAP_CELLS,
-        maxAspect: geom.w / Math.max(1, geom.h),
+        minW: cells(MIN_PANEL_COLS * metrics.charWidth + 2 * metrics.panelPadX) + PANEL_GAP_CELLS,
+        minH: cells(metrics.titleHeight + 2 * metrics.panelPadY + metrics.lineHeight)
+          + PANEL_GAP_CELLS,
+        // The same bound a text panel gets, rather than the image's own
+        // proportion: a hard aspect here is a fixed box by another name.
+        maxAspect: MEDIA_ASPECT_CAP,
       }
-      : panelBounds(lineCols, geom);
+      : e.stub
+        ? {
+          // A stub is a fixed box: its minimum is its size and it has no other
+          // shape to offer.
+          minW: cells(geom.w) + PANEL_GAP_CELLS,
+          minH: cells(geom.h) + PANEL_GAP_CELLS,
+          maxAspect: geom.w / Math.max(1, geom.h),
+        }
+        : panelBounds(lineCols, geom);
     parent.children.push({
       kind: 'file',
       name: fileName,
@@ -286,12 +352,17 @@ function buildTree(entries: FileEntry[]): DirNode {
       minH: bounds.minH,
       maxAspect: bounds.maxAspect,
       stub: Boolean(e.stub),
+      media: e.media,
       fits: true,
       usable: true,
       holdsAll: true,
       // The treemap weight: a stub's fixed box, or the area the file needs
       // once its long lines have wrapped.
-      area: e.stub ? stubArea() : panelArea_(lineCols, e.maxCols),
+      area: shape
+        ? cells(geom.w) * cells(geom.h)
+        : e.stub
+          ? stubArea()
+          : panelArea_(lineCols, e.maxCols),
       slotW: 0,
       slotH: 0,
       x: 0,
@@ -534,6 +605,23 @@ function placeFile(f: FileNode, slot: IntRect): void {
     return;
   }
 
+  if (f.media) {
+    // A picture keeps the geometry it asked for and is fitted into whatever
+    // slot it got. `fits` is the question the fitting pass acts on, and for a
+    // picture it is whether the slot is as large as the picture wanted: a file
+    // with no lines fits every slot trivially, which is why 47 images ended up
+    // with a quarter of a percent of the canvas between them while every text
+    // panel grew around them.
+    const want = mediaWant(f.media);
+    f.geom = want;
+    f.w = w;
+    f.h = h;
+    f.fits = w * h >= want.w * want.h * MEDIA_FIT_SLACK;
+    f.usable = w > 0 && h > 0;
+    f.holdsAll = true;
+    return;
+  }
+
   // The panel is the slot. Everything about its text layout is derived from
   // the rectangle it was given, which is what makes the edges align.
   const fit = fillSlot(f.lineCols, f.clipCols, w, h);
@@ -705,6 +793,17 @@ function fitPasses(
       // literally, a sliver asks for an absurd area, and `Math.max` keeps it
       // for good: the same JSON file landed in a slot 42 by 1890 and
       // extrapolated a need of 33 million from that one pass.
+      if (f.media) {
+        // Area only, with no correction for the shape of the slot. A panel of
+        // text needs a *form*, because its lines have to wrap into it, and
+        // that is what the correction below is for. A picture is fitted into
+        // whatever it gets, so asking for a shape means asking for area it
+        // does not need: a 3927 by 697 plot in a narrow slot demanded 3010 by
+        // 5712 that way, larger than any source file in the project.
+        const want = mediaWant(f.media);
+        f.area = Math.max(f.area, want.w * want.h) * 1.06;
+        continue;
+      }
       const natural = panelGeometry(f.lineCols, f.maxCols);
       const raw = f.slotW / Math.max(1, f.slotH);
       const aspect = Math.min(ASPECT_TRUST, Math.max(1 / ASPECT_TRUST, raw));

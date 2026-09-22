@@ -29,6 +29,9 @@ export interface FileGroup {
 /** Groups below this share of the repository are folded into one row, so the
  *  picker does not become a list of forty one-file extensions. */
 const MINOR_LINE_SHARE = 0.005;
+/** And the same for file count, which is what a group of pictures has instead
+ *  of lines. */
+const MINOR_FILE_SHARE = 0.02;
 
 class ProjectState {
 	/** Absolute path of the open folder, or a label in synthetic mode. */
@@ -69,11 +72,16 @@ class ProjectState {
 		this.synthetic = synthetic;
 		this.demo = demo;
 		const total = rows.reduce((s, r) => s + r.lines, 0) || 1;
+		const totalFiles = rows.reduce((s, r) => s + r.files, 0) || 1;
 		const groups: FileGroup[] = [];
 		let minor: FileGroup | null = null;
 
 		for (const r of [...rows].sort((a, b) => b.lines - a.lines)) {
-			if (r.lines / total < MINOR_LINE_SHARE) {
+			// By lines, or by file count for the ones that have no lines at all:
+			// a project's 47 images are 0 percent of its text and an eighth of
+			// its files, and folding them into "other" would leave no way to
+			// turn them off.
+			if (r.lines / total < MINOR_LINE_SHARE && r.files / totalFiles < MINOR_FILE_SHARE) {
 				minor ??= { id: 'other', files: 0, lines: 0, mode: 'full' };
 				minor.files += r.files;
 				minor.lines += r.lines;

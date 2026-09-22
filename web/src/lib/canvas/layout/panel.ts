@@ -81,6 +81,53 @@ export interface PanelGeometry {
  * is that its size would otherwise dominate the layout. Scaling stubs by line
  * count would reintroduce exactly that problem.
  */
+/**
+ * How much canvas a picture is worth: this fraction of its own pixels, as
+ * area.
+ *
+ * A quarter linear, so a sixteenth by area. A 4000 by 1500 render then asks
+ * for about the room a 27 line file takes, and a 32 pixel icon for the
+ * minimum. Sizing them 1:1 would give pathsim's 47 images a third of its
+ * canvas; at a sixteenth they come to a few percent, which is what a picture
+ * beside its code is worth.
+ */
+const MEDIA_SCALE = 0.25;
+const MEDIA_MIN_LINES = 3;
+const MEDIA_MAX_LINES = 60;
+
+/**
+ * Size of a panel that holds a picture rather than text.
+ *
+ * The shape follows the layout, not the image: the panel is laid out like any
+ * other and the picture is fitted inside it, centred, which is why the aspect
+ * only sets the *preferred* proportion here. Binding the panel's shape to the
+ * image would be a fixed box in the treemap, and fixed boxes are what stubs
+ * had to be taken out of the treemap for.
+ */
+export function mediaGeometry(aspect: number, pixels: number): PanelGeometry {
+  // Area first, then the shape out of the aspect. The other way round, with
+  // the height scaled and the width following from it, made the area depend
+  // on the proportion: a 3927 by 697 plot asked for five times the room a
+  // square image of the same pixel count did.
+  const a = Math.max(0.1, Math.min(10, aspect));
+  const area = Math.max(1, pixels) * MEDIA_SCALE * MEDIA_SCALE;
+  const lines = Math.min(
+    MEDIA_MAX_LINES,
+    Math.max(MEDIA_MIN_LINES, Math.sqrt(area / a) / metrics.lineHeight),
+  );
+  const innerH = lines * metrics.lineHeight;
+  const innerW = Math.max(MIN_PANEL_COLS * metrics.charWidth, innerH * a);
+  return {
+    cols: MIN_PANEL_COLS,
+    numberCols: 0,
+    columns: 1,
+    linesPerColumn: 0,
+    pitch: innerW + COLUMN_GUTTER,
+    w: innerW + 2 * metrics.panelPadX,
+    h: innerH + metrics.titleHeight + 2 * metrics.panelPadY,
+  };
+}
+
 export function stubGeometry(): PanelGeometry {
   return {
     cols: MIN_PANEL_COLS,

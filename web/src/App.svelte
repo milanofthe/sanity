@@ -10,7 +10,7 @@
 	import type { CanvasApp, CanvasStats } from '$lib/canvas/app';
 	import { project } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
-	import { openSynthetic } from '$lib/sources/synthetic';
+	import { openSynthetic, syntheticQuery } from '$lib/sources/synthetic';
 	import {
 		fixtureLoaded, fixtureName, loadFixture, openFixture,
 	} from '$lib/sources/fixture';
@@ -205,6 +205,12 @@
 				})
 				.catch((e) => (error = e instanceof Error ? e.message : String(e)))
 				.finally(() => (busy = false));
+			return;
+		}
+		// A query that asks for a generated repository of a given shape wins
+		// over everything: that is how the layout check drives its cases.
+		if (syntheticQuery()) {
+			openSynthetic(app, true);
 			return;
 		}
 		// In a browser there is no folder to open, so the demo build shows one
