@@ -132,6 +132,9 @@ interface Slot {
   prevBytes: number;
   /** When this arrived, for the fade. */
   since: number;
+  /** Fading in over the placeholder, with nothing before it to fade from:
+   *  the first time a picture appears. */
+  fresh: boolean;
 }
 
 /** What `want` hands back when a picture is ready to draw. */
@@ -332,7 +335,7 @@ export class MediaTextures {
     // Fades that have run their course let go of what they were fading from.
     const now = performance.now();
     for (const slot of this.slots.values()) {
-      if (slot.prev && now - slot.since >= this.fadeMs) this.endFade(slot);
+      if ((slot.prev || slot.fresh) && now - slot.since >= this.fadeMs) this.endFade(slot);
     }
     this.schedule();
   }
@@ -340,18 +343,19 @@ export class MediaTextures {
   /** Whether a picture is still fading from one texture to the next, so the
    *  frame loop keeps drawing until it is done. */
   fading(): boolean {
-    for (const slot of this.slots.values()) if (slot.prev) return true;
+    for (const slot of this.slots.values()) if (slot.prev || slot.fresh) return true;
     return false;
   }
 
   /** How far the texture a picture is drawn with has faded in, 0 to 1. */
   mix(d: Drawable): number {
     const slot = d as Slot;
-    if (!slot.prev) return 1;
+    if (!slot.prev && !slot.fresh) return 1;
     return Math.min(1, (performance.now() - slot.since) / this.fadeMs);
   }
 
   private endFade(slot: Slot): void {
+    slot.fresh = false;
     if (!slot.prev) return;
     this.gl.deleteTexture(slot.prev);
     this.held -= slot.prevBytes;
@@ -678,7 +682,7 @@ export class MediaTextures {
     }
     this.slots.set(path, {
       tex, w, h, bytes, seen: this.clock, translucent: isTranslucent,
-      exact, native, prev, prevBytes, since: performance.now(),
+      exact, native, prev, prevBytes, since: performance.now(), fresh: !old,
     });
     this.held += bytes;
     this.trim();

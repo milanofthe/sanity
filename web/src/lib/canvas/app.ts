@@ -475,6 +475,9 @@ export class CanvasApp {
       this.pending.length > 0
       || (this.scene?.animating ?? false)
       || (this.scene?.changing ?? false)
+      // A picture still fading in: an export or a check reading pixels now
+      // would catch it half there.
+      || (this.scene?.media?.fading() ?? false)
       || this.cam.flying
     );
   }

@@ -1765,7 +1765,9 @@ export class Scene {
       gl.bindTexture(gl.TEXTURE_2D, d.tex);
       gl.uniform1f(this.uImage.uExact, d.exact ? 1 : 0);
       gl.uniform2f(this.uImage.uTexPx, d.tw, d.th);
-      gl.uniform1f(this.uImage.uFade, d.fade * (d.prev ? d.mix : 1));
+      // A picture appearing for the first time fades in over its
+      // placeholder the same way, with nothing underneath to fade from.
+      gl.uniform1f(this.uImage.uFade, d.fade * d.mix);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
   }
