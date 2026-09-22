@@ -123,6 +123,73 @@ for (const { id, label } of list) {
   previousId = label;
 }
 
+// --- and the preview in the menu is a preview of *that* theme ---
+//
+// The trap this exists for: a theme block's own properties re-resolve inside a
+// nested `data-theme`, but the derived aliases in `:root`, `--panel-bg` and
+// friends, are substituted where they are declared and inherited as finished
+// colours. A preview built from those shows the *active* theme's panel however
+// its own attribute reads, which is exactly what happened: every light preview
+// came out with a dark panel and the menu still looked plausible.
+await page.evaluate(() => {
+  document.documentElement.setAttribute('data-theme', 'sanity');
+  window.__sanity.app.refreshTheme();
+});
+await settled(page);
+await page.click('header button:has-text("Theme")');
+await page.waitForTimeout(300);
+const previews = await page.evaluate(() =>
+  [...document.querySelectorAll('.item.tall')].map((row) => {
+    const frame = row.querySelector('.frame');
+    const cs = (sel) => getComputedStyle(row.querySelector(sel)).backgroundColor;
+    return { id: frame.getAttribute('data-theme'), panel: cs('.panel'), ground: cs('.frame') };
+  }),
+);
+await page.keyboard.press('Escape');
+
+// What each theme's panel and canvas really are, read by mounting the theme.
+const truth = {};
+for (const { id } of list) {
+  truth[id] = await page.evaluate(async (t) => {
+    document.documentElement.setAttribute('data-theme', t);
+    const cs = getComputedStyle(document.documentElement);
+    return {
+      panel: cs.getPropertyValue('--bg-panel').trim(),
+      ground: cs.getPropertyValue('--bg').trim(),
+    };
+  }, id);
+}
+
+/** Both sides as comparable rgb triples, since one is a computed colour and
+ *  the other the declared token. */
+const rgbOf = async (value) =>
+  page.evaluate((v) => {
+    const probe = document.createElement('span');
+    probe.style.color = v;
+    document.body.append(probe);
+    const out = getComputedStyle(probe).color;
+    probe.remove();
+    return out;
+  }, value);
+
+let wrong = 0;
+for (const p of previews) {
+  const want = truth[p.id];
+  if (!want) continue;
+  const panel = await rgbOf(want.panel);
+  const ground = await rgbOf(want.ground);
+  if (panel !== p.panel || ground !== p.ground) {
+    wrong++;
+    fail(
+      `the ${p.id} preview draws ${p.panel} on ${p.ground} where the theme is ` +
+        `${panel} on ${ground}`,
+    );
+  }
+}
+if (wrong === 0) {
+  console.log(`ok    all ${previews.length} previews draw their own theme's panel and ground`);
+}
+
 await browser.close();
 console.log(failures === 0 ? '\nevery theme is complete and legible' : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

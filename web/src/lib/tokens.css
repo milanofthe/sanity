@@ -1,4 +1,10 @@
-:root {
+/* `:root` and the Mariana selector together, because Mariana *is* the default:
+   stating it twice would be two copies free to drift, and leaving the selector
+   off means a nested `data-theme="mariana"` matches nothing and inherits
+   whatever theme is active. That is what made the Mariana entry in the theme
+   menu preview the current theme instead of itself. */
+:root,
+[data-theme='mariana'] {
 	/* --- Mariana, the Sublime Text default ------------------------------------
 
 	   Values taken verbatim from Packages/Color Scheme - Default/Mariana

@@ -12,6 +12,15 @@
 	// `[data-theme='x']` rather than `:root[data-theme='x']`, so setting the
 	// attribute on this element resolves every token inside it to that theme
 	// without touching the app's own.
+	//
+	// With one catch, which cost a round: only the properties each theme block
+	// declares itself re-resolve here. The derived aliases in `:root`, such as
+	// `--panel-bg: var(--bg-panel)`, are substituted where they are declared
+	// and inherited as the finished colour, so a nested context gets the active
+	// theme's value however its own `data-theme` reads. Every light preview
+	// came out with a dark panel that way. So this uses the source properties,
+	// `--bg-panel` and `--bg-inset`, and theme-check asserts per row that the
+	// panel in the preview is that theme's panel.
 	let {
 		theme,
 		width = 132,
@@ -69,14 +78,14 @@
 		gap: 2px;
 		height: 100%;
 		padding: 0 3px 3px;
-		background: var(--panel-bg);
+		background: var(--bg-panel);
 		border: var(--sep-w) solid var(--border);
 	}
 	.head {
 		display: block;
 		height: 5px;
 		margin: 0 -3px 2px;
-		background: var(--panel-bg-alt);
+		background: var(--bg-inset);
 		border-bottom: var(--sep-w) solid var(--border);
 	}
 	.line {
