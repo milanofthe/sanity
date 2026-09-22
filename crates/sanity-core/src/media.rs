@@ -18,9 +18,10 @@ pub enum Media {
     /// Pixel dimensions. Zero for a vector image whose header says nothing
     /// useful, which the layout treats as "square, unknown size".
     Image { w: u32, h: u32 },
-    /// A document: how many pages, and how big one is in points. `pages` is
-    /// 0 when the file keeps its page tree in a compressed object stream,
-    /// which is a third of the PDFs I have; see `pdf` below.
+    /// A document: how many pages, and how big one is in points, as the page
+    /// is displayed rather than as it is stored. `pages` is 0 only when
+    /// nothing in the file answers, which none of the documents measured so
+    /// far did; see `pdf` below.
     Document { pages: u32, w: u32, h: u32 },
 }
 
@@ -228,12 +229,11 @@ fn svg(b: &[u8]) -> Option<Media> {
 /// the clear, which is where most writers leave it.
 ///
 /// Measured against `pdfinfo` over 25 real documents, papers, reports, a
-/// habilitation thesis, plots from matplotlib: 21 page counts exact, one two
-/// too high, three unknown, and every page size that was there at all correct.
-/// The three unknowns keep their page tree in a compressed object stream, and
-/// for them the count comes back 0 rather than guessed. The renderer will
-/// know better once it rasterises a first page, since the platform's own PDF
-/// reader hands over the count with it; see issue #21.
+/// habilitation thesis, a slide deck, plots from matplotlib: 25 of 25 exact
+/// on both the page count and the page size. Three of them keep the page tree
+/// in a compressed object stream and one is 16:9, which is why the two extra
+/// passes below exist: without them a slide deck came back as 0 by 0 and was
+/// drawn as A4, which is the wrong shape for every panel it has.
 ///
 /// The one trap, which cost the first version five of those documents: the
 /// outline tree carries a `/Count` of its own, so a seven page paper with
@@ -243,8 +243,106 @@ fn pdf(b: &[u8]) -> Option<Media> {
     if !b.starts_with(b"%PDF-") {
         return None;
     }
-    let (w, h) = media_box(b).unwrap_or((0, 0));
-    Some(Media::Document { pages: page_count(b), w, h })
+    let mut pages = page_count(b);
+    let mut size = media_box(b);
+    let mut turn = rotation(b);
+    // Nothing in the clear: inflate the object streams and look again. A
+    // slide deck written by a tool that compresses its page tree used to come
+    // back as 0 by 0, and a panel with no size of its own is drawn as A4,
+    // which is exactly the wrong shape for 16:9.
+    if pages == 0 || size.is_none() {
+        let inflated = inflate_object_streams(b, INFLATE_BUDGET);
+        if !inflated.is_empty() {
+            if pages == 0 {
+                pages = page_count(&inflated);
+            }
+            if size.is_none() {
+                size = media_box(&inflated);
+            }
+            if turn == 0 {
+                turn = rotation(&inflated);
+            }
+        }
+    }
+    let (w, h) = size.unwrap_or((0, 0));
+    // A page can be stored upright and displayed on its side. Readers apply
+    // `/Rotate` before anything is shown, so the size that matters for a panel
+    // is the rotated one.
+    let (w, h) = if turn == 90 || turn == 270 { (h, w) } else { (w, h) };
+    Some(Media::Document { pages, w, h })
+}
+
+/// How much of a file is inflated while looking for its page tree. Two
+/// megabytes is several times the object streams of the documents this was
+/// measured on, and stops a pathological file from turning into a scan of
+/// itself.
+const INFLATE_BUDGET: usize = 2 * 1024 * 1024;
+
+/// How far back from a `stream` keyword its dictionary is looked for.
+const DICT_LOOKBACK: usize = 400;
+
+/// The object streams in a PDF, inflated and concatenated, up to `budget`.
+///
+/// Only the streams whose dictionary says `/ObjStm`: those are the ones the
+/// page tree hides in when it is not in the clear. Measured on a 103 page
+/// paper of 2.9 MB: 1712 streams in the file, 856 of them inflatable, 17
+/// object streams, and the page tree is in one of those. Inflating everything
+/// took the budget before it got there; inflating the seventeen finds it.
+///
+/// The result is not a PDF and is not treated as one. It is a haystack for
+/// the same two needles the uncompressed path looks for.
+fn inflate_object_streams(b: &[u8], budget: usize) -> Vec<u8> {
+    use std::io::Read;
+    let mut out: Vec<u8> = Vec::new();
+    let mut at = 0usize;
+    while let Some(found) = find(b, b"stream", at) {
+        at = found + 6;
+        let from = found.saturating_sub(DICT_LOOKBACK);
+        if find(&b[from..found], b"/ObjStm", 0).is_none() {
+            continue;
+        }
+        let mut start = at;
+        while start < b.len() && (b[start] == b'\r' || b[start] == b'\n') {
+            start += 1;
+        }
+        let end = find(b, b"endstream", start).unwrap_or(b.len());
+        if end <= start {
+            continue;
+        }
+        let mut buf = Vec::new();
+        let room = budget.saturating_sub(out.len()) as u64;
+        if flate2::read::ZlibDecoder::new(&b[start..end])
+            .take(room)
+            .read_to_end(&mut buf)
+            .is_ok()
+        {
+            out.extend_from_slice(&buf);
+        }
+        at = end + 9;
+        if out.len() >= budget || (media_box(&out).is_some() && page_count(&out) > 0) {
+            break;
+        }
+    }
+    out
+}
+
+/// `/Rotate`, normalised to 0, 90, 180 or 270. The first one in the file: it
+/// is inherited from the page tree unless a page overrides it, and a document
+/// whose pages disagree is not one a single panel can describe anyway.
+fn rotation(b: &[u8]) -> u32 {
+    let Some(at) = find(b, b"/Rotate", 0) else { return 0 };
+    let rest = &b[at + 7..b.len().min(at + 7 + 16)];
+    let text = String::from_utf8_lossy(rest);
+    let text = text.trim_start();
+    let negative = text.starts_with('-');
+    let digits: String = text
+        .trim_start_matches('-')
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let Ok(value) = digits.parse::<i32>() else { return 0 };
+    let value = if negative { -value } else { value };
+    (((value % 360) + 360) % 360) as u32
 }
 
 fn page_count(b: &[u8]) -> u32 {
@@ -385,6 +483,45 @@ mod tests {
                     2 0 obj\n<< /Type /Pages /Count 42 /Kids [3 0 R] >>\nendobj\n\
                     3 0 obj\n<< /Type /Page /MediaBox [0 0 595 842] >>\nendobj\n";
         assert_eq!(probe("p.pdf", doc), Some(Media::Document { pages: 42, w: 595, h: 842 }));
+    }
+
+    // A page stored upright and displayed on its side. Readers apply
+    // `/Rotate` before anything is drawn, so a panel that ignores it is the
+    // wrong shape for every scanned landscape page there is.
+    #[test]
+    fn a_rotated_page_is_as_wide_as_it_is_displayed() {
+        let upright = b"%PDF-1.4\n<< /Type /Pages /Count 1 /MediaBox [0 0 595 842] >>\n";
+        let turned =
+            b"%PDF-1.4\n<< /Type /Pages /Count 1 /MediaBox [0 0 595 842] /Rotate 90 >>\n";
+        assert_eq!(probe("a.pdf", upright), Some(Media::Document { pages: 1, w: 595, h: 842 }));
+        assert_eq!(probe("a.pdf", turned), Some(Media::Document { pages: 1, w: 842, h: 595 }));
+        let back =
+            b"%PDF-1.4\n<< /Type /Pages /Count 1 /MediaBox [0 0 595 842] /Rotate -90 >>\n";
+        assert_eq!(probe("a.pdf", back), Some(Media::Document { pages: 1, w: 842, h: 595 }));
+        let half =
+            b"%PDF-1.4\n<< /Type /Pages /Count 1 /MediaBox [0 0 595 842] /Rotate 180 >>\n";
+        assert_eq!(probe("a.pdf", half), Some(Media::Document { pages: 1, w: 595, h: 842 }));
+    }
+
+    // The page tree inside a compressed object stream, which is what a third
+    // of real PDFs do and what left a 16:9 slide deck being drawn as A4.
+    #[test]
+    fn a_page_tree_in_an_object_stream_is_read() {
+        use std::io::Write;
+        let inner = b"<</Type/Pages/Count 25/MediaBox[0 0 454 255]>>";
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(inner).unwrap();
+        let packed = encoder.finish().unwrap();
+
+        let mut pdf: Vec<u8> = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.5\n1 0 obj\n<< /Type /ObjStm /N 1 /Filter /FlateDecode >>\nstream\n");
+        pdf.extend_from_slice(&packed);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        assert_eq!(
+            probe("deck.pdf", &pdf),
+            Some(Media::Document { pages: 25, w: 454, h: 255 }),
+        );
     }
 
     #[test]

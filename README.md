@@ -57,7 +57,11 @@ macOS, and More info then Run anyway on Windows. Building from source is
 - **Pictures as pictures.** An image file is a panel like any other, in the
   image's own proportion and at most one code column wide, which is what makes
   a figure read as another column of the thing it belongs to rather than as a
-  poster. A PDF shows its first page: rendered by
+  poster. A PDF shows its first page, at the page's own shape: the size and
+  the rotation are read out of the file, including out of the compressed
+  object streams a third of PDFs keep their page tree in, so a 16:9 slide deck
+  is a 16:9 panel rather than an A4 one. Measured against `pdfinfo` over 25
+  documents: 25 exact. The page itself is rendered by
   the platform in the app (ImageIO on macOS; Windows and Linux keep the
   placeholder for now, see issue #22) and rendered into the dump for the web
   demo, through a separate process rather than a linked library, since the

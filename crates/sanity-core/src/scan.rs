@@ -82,6 +82,38 @@ pub fn git_listed_files(root: &Path) -> Option<Vec<String>> {
     )
 }
 
+/// Every path git *does* ignore, capped.
+///
+/// The other half of `git_listed_files`, for the switch in the View menu that
+/// brings ignored files into the layout. Capped because the answer is not
+/// small: this repository ignores 83,014 files, nearly ten gigabytes of build
+/// output, and a monitor that reads all of them to show you that they exist
+/// has stopped being a monitor. Returns what fits and how many there were, so
+/// the UI can say which it is showing.
+pub fn git_ignored_files(root: &Path, cap: usize) -> (Vec<String>, usize) {
+    let Ok(out) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z", "--others", "--ignored", "--exclude-standard"])
+        .output()
+    else {
+        return (Vec::new(), 0);
+    };
+    if !out.status.success() {
+        return (Vec::new(), 0);
+    }
+    let all: Vec<String> = out
+        .stdout
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect();
+    let total = all.len();
+    let mut kept = all;
+    kept.truncate(cap);
+    (kept, total)
+}
+
 /// Fallback for a folder that is not a git repository. Skips the usual
 /// suspects by name, since without git there is no ignore file to consult.
 fn walk(root: &Path) -> Result<Vec<String>, ScanError> {
@@ -468,6 +500,20 @@ mod tests {
         assert_eq!(s1 - s0, 1);
         assert_eq!(crate::wire::span_kind(data.spans[s0]), Kind::Comment as u8);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_ignored_list_is_capped_and_says_how_many_there_were() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+        let (few, total) = git_ignored_files(root, 5);
+        // This repository ignores its build output, so there is something to
+        // find; if that ever stops being true the assertion says so.
+        assert!(total > 5, "expected ignored files in the repository, got {total}");
+        assert_eq!(few.len(), 5);
+        assert!(few.iter().all(|p| !p.is_empty()));
+        let (none, same) = git_ignored_files(root, 0);
+        assert!(none.is_empty());
+        assert_eq!(same, total);
     }
 
     #[test]
