@@ -4,12 +4,25 @@
 	let {
 		checked = $bindable(false),
 		label = '',
-		disabled = false
-	}: { checked?: boolean; label?: string; disabled?: boolean } = $props();
+		disabled = false,
+		onchange
+	}: {
+		checked?: boolean;
+		label?: string;
+		disabled?: boolean;
+		/** For a switch whose state lives somewhere else, where binding would
+		 *  write it in two places. */
+		onchange?: (on: boolean) => void;
+	} = $props();
 </script>
 
 <label class="toggle" class:on={checked} class:disabled>
-	<input type="checkbox" bind:checked {disabled} />
+	<input
+		type="checkbox"
+		bind:checked
+		{disabled}
+		onchange={(e) => onchange?.(e.currentTarget.checked)}
+	/>
 	<span class="box" aria-hidden="true">
 		<svg viewBox="0 0 10 10"><path d="M1.5 5.5 4 8 8.5 2" /></svg>
 	</span>

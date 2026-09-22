@@ -189,6 +189,11 @@
 		app?.refreshTheme();
 	});
 
+	// The language tint, which the renderer keeps across a reopen.
+	$effect(() => {
+		app?.setLanguageTint(ui.tintLanguages);
+	});
+
 	let started = false;
 	$effect(() => {
 		if (!app || started) return;

@@ -8,7 +8,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bandsFromQuery, lodBands, lodName, lodWeights, spanBarHeight } from './lod.ts';
+import {
+  bandsFromQuery,
+  languageTint,
+  lodBands,
+  lodName,
+  lodWeights,
+  spanBarHeight,
+} from './lod.ts';
 
 /** Zoom levels across the whole useful range, including both hand-overs. */
 const SAMPLES = (() => {
@@ -108,6 +115,25 @@ test('token bars thin out as glyphs arrive', () => {
   const after = spanBarHeight(lodBands.textTo + 1);
   assert.ok(after < before, 'bars should be thinner once text is up');
   assert.ok(after > 0, 'bars must not invert');
+});
+
+test('the language tint is gone before the token bars arrive', () => {
+  // The two must not overlap. A token bar already carries its own colour, so a
+  // language tint underneath it would colour the same pixels twice and the
+  // hand-over would change hue as well as representation.
+  assert.equal(languageTint(lodBands.tokensFrom), 0);
+});
+
+test('the language tint is full at the outermost zoom and falls monotonically', () => {
+  assert.equal(languageTint(0), 1);
+  assert.equal(languageTint(0.1), 1);
+  let prev = Infinity;
+  for (const ppl of SAMPLES) {
+    const t = languageTint(ppl);
+    assert.ok(t >= 0 && t <= 1, `tint is ${t} at ${ppl} px/line`);
+    assert.ok(t <= prev + 1e-9, `tint rose again at ${ppl} px/line`);
+    prev = t;
+  }
 });
 
 test('a query override is parsed, and nonsense is rejected', () => {

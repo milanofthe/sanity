@@ -101,16 +101,20 @@ export const overviewVS = `${HEAD}
 in vec2 aCorner;
 in vec4 aRect;
 in vec4 aUv;        // u0, v0, u1, v1
-in vec2 aLayerFade; // array layer, alpha
+in vec3 aMeta;      // array layer, alpha, language family
 uniform mat3 uView;
 out vec2 vUv;
 flat out float vLayer;
 flat out float vFade;
+flat out vec3 vLang;
+// The family's colour per unit of texture luminance; see familyTints.
+uniform vec3 uFamily[7];
 void main() {
   vec2 world = aRect.xy + aCorner * aRect.zw;
   vUv = mix(aUv.xy, aUv.zw, aCorner);
-  vLayer = aLayerFade.x;
-  vFade = aLayerFade.y;
+  vLayer = aMeta.x;
+  vFade = aMeta.y;
+  vLang = uFamily[int(aMeta.z)];
   gl_Position = vec4((uView * vec3(world, 1.0)).xy, 0.0, 1.0);
 }`;
 
@@ -126,10 +130,19 @@ uniform float uTexRows;
 // can be compared: scripts/sharp-check.mjs measures the vertical contrast
 // with it on and off, which is the difference this is for.
 uniform float uSharp;
+// How far the colour comes from the language rather than from the tokens.
+// Zero unless the tint is switched on and the zoom is far enough out that the
+// tokens have stopped saying anything; see languageTint in lod.ts. No
+// backticks in here: this GLSL is a template literal, so one ends the string
+// and the error arrives as a parse failure in the TypeScript.
+uniform float uLangTint;
 in vec2 vUv;
 flat in float vLayer;
 flat in float vFade;
+flat in vec3 vLang;
 out vec4 oColor;
+
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
 /**
  * Sample with the vertical interpolation sharpened where the texture is
@@ -157,7 +170,21 @@ void main() {
   float sharp = clamp((fy - 0.5) / max(k, 1e-3) + 0.5, 0.0, 1.0);
   float v = mix(vUv.y, (floor(ty) + 0.5 + sharp) / uTexRows, uSharp);
   vec4 t = texture(uTex, vec3(vUv.x, v, vLayer));
-  oColor = vec4(t.rgb, t.a * vFade);
+
+  // The language's colour at the texture's own luminance, so the shape of the
+  // code survives and only what it is made of changes. Measured on a real
+  // project: at a fifth of a pixel per line the luminance varies three times
+  // as much within a panel as it does between panels, so the structure is the
+  // part worth keeping and the identity is the part worth adding.
+  //
+  // vLang is the family's colour per unit of luminance, gain included, worked
+  // out once per theme in familyTints. So this is one multiply, where it used
+  // to divide by the family colour's luminance per texel.
+  float lum = dot(t.rgb, LUMA);
+  vec3 tinted = clamp(vLang * lum, 0.0, 1.0);
+  vec3 rgb = mix(t.rgb, tinted, uLangTint);
+
+  oColor = vec4(rgb, t.a * vFade);
 }`;
 
 /** One quad per token span. */

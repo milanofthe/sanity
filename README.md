@@ -31,6 +31,14 @@ macOS, and More info then Run anyway on Windows. Building from source is
   is more than a tenth larger than the file in it needs at the 95th
   percentile. Long lines wrap rather than clip; no character is dropped, and a
   tab is four columns in the wire format and on screen alike.
+- **Language tint, off by default.** A switch in the View menu colours the
+  outermost zoom by language family, at each texel's own luminance, so a
+  directory of YAML reads as a different kind of thing from a directory of
+  code. Measured by `lang-check`: colour predicts the family 8.5 times better
+  than it did untinted, and 100 percent of the within-panel structure
+  survives. Off unless asked for, because the thing this canvas is usually
+  watched for is where something changed, and a second colour scheme competes
+  with that.
 - **Three levels of detail**, weighted as a partition of one so nothing
   double-draws through a transition. Below 1.8 pixels per line a file is one
   textured quad per column, sampled from a saturation-weighted mip chain.

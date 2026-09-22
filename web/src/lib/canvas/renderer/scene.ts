@@ -15,7 +15,8 @@ import {
   type PanelAnim, type Rect as PanelRect, type Transform,
 } from '$lib/canvas/anim';
 import { diffLines, seams, signatures, type Seam, type Signature } from '$lib/canvas/linediff';
-import { lodWeights, spanBarHeight } from '$lib/canvas/lod';
+import { languageTint, lodWeights, spanBarHeight } from '$lib/canvas/lod';
+import { familyColours, FAMILY_COUNT, familyOf, familyTints } from '$lib/canvas/language';
 import { flashAt, markStep, recent } from '$lib/canvas/recency';
 import { bandColour, lerp, mixToward } from '$lib/canvas/colour';
 import { rgb, UiInk, type Palette } from '$lib/theme';
@@ -72,6 +73,8 @@ export interface SceneFile {
   shownMark: number;
   /** Aggregate git state of the file, drives the panel border. */
   state: LineState;
+  /** Which language family's colour this file takes at the outermost zoom. */
+  family: number;
   /** Settle animation, or null once it has finished. */
   anim: PanelAnim | null;
   /** Screen rows the texture was last written for, and the column width it
@@ -127,7 +130,7 @@ export interface FrameStats {
 }
 
 const RECT_STRIDE = 12;
-const OVERVIEW_STRIDE = 10;
+const OVERVIEW_STRIDE = 11;
 const SPAN_STRIDE = 6;
 const GLYPH_STRIDE = 6;
 
@@ -356,6 +359,17 @@ export class Scene {
   /** Sharpen the overview texture's vertical interpolation. Off only for the
    *  measurement that shows what it is worth. */
   sharpen = true;
+  /** Colour the overview by language family. Off by default: what the canvas
+   *  is for is the shape of a project and what changed in it, and a second
+   *  colour scheme on top of the syntax colours is a third thing competing for
+   *  the same pixels. Switched on from the View menu, and by lang-check, which
+   *  measures what it separates. */
+  tintLanguages = false;
+  /** How much of the overview's colour comes from the language rather than the
+   *  tokens on this frame. Written by `render` from the zoom. */
+  private langTint = 0;
+  /** One tint vector per language family, flattened for the uniform. */
+  private familyFlat = new Float32Array(FAMILY_COUNT * 3);
 
   /**
    * Paths matching the search, or null when nothing is being searched.
@@ -478,7 +492,9 @@ export class Scene {
     this.progSpan = createProgram(gl, spanVS, spanFS, 'span');
     this.progGlyph = createProgram(gl, glyphVS, glyphFS, 'glyph');
     this.uRect = uniforms(gl, this.progRect, ['uView', 'uViewport']);
-    this.uOverview = uniforms(gl, this.progOverview, ['uView', 'uTex', 'uTexRows', 'uSharp']);
+    this.uOverview = uniforms(gl, this.progOverview, [
+      'uView', 'uTex', 'uTexRows', 'uSharp', 'uLangTint', 'uFamily[0]',
+    ]);
     this.uImage = uniforms(gl, this.progImage, ['uView', 'uTex', 'uRect', 'uFade']);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
@@ -631,6 +647,12 @@ export class Scene {
       this.kindFlat[i * 3 + 1] = g;
       this.kindFlat[i * 3 + 2] = b;
     });
+    // One tint vector per language family, from the palette's data hues.
+    // Worked out here rather than per frame: it changes with the theme and
+    // nothing else.
+    this.familyFlat = familyTints(
+      familyColours(this.pal.data, this.pal.surface.reducedInk),
+    );
     // The damped palette the overview textures are rasterised with. Held
     // separately so the bars can start from it.
     this.pal.overview.forEach((hex, i) => {
@@ -680,6 +702,7 @@ export class Scene {
         slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0 },
         rows: new Uint32Array(1),
         since: Infinity, shownMark: 0, state: aggregateState(data), anim: this.animFor(node),
+        family: familyOf(data.langId),
         wroteRows: 0, wroteCols: 0,
         sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
         change: null,
@@ -694,6 +717,7 @@ export class Scene {
     this.textures.write(slot, data, node.geom.cols, rows);
     this.add(node.path, {
       node, data, slot, rows, since: Infinity, shownMark: 0, state: aggregateState(data),
+      family: familyOf(data.langId),
       anim: this.animFor(node),
       wroteRows: rows[data.lineCount], wroteCols: node.geom.cols,
       sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
@@ -717,6 +741,7 @@ export class Scene {
     f.node = node;
     f.data = data;
     f.state = aggregateState(data);
+    f.family = familyOf(data.langId);
     f.sig = signatures(data.lineCount, data.lineCols, data.spanStart, data.spans);
     if (node.stub) return;
     f.rows = wrapOffsets(data.lineCols, node.geom.cols);
@@ -1046,6 +1071,7 @@ export class Scene {
     // A partition of one across the three representations; see lod.ts for why
     // that property is worth having a module and a test for.
     const w = lodWeights(pxPerLine);
+    this.langTint = this.tintLanguages ? languageTint(pxPerLine) : 0;
     const overviewFade = w.overview;
     const spanFade = w.spans;
     const glyphFade = w.glyphs;
@@ -1622,6 +1648,7 @@ export class Scene {
       d[o + 4] = 0; d[o + 5] = v0; d[o + 6] = 1; d[o + 7] = v1;
       d[o + 8] = slot.layer;
       d[o + 9] = fade * tf.alpha;
+      d[o + 10] = f.family;
     }
   }
 
@@ -1635,6 +1662,8 @@ export class Scene {
     gl.uniformMatrix3fv(this.uOverview.uView, false, this.view);
     gl.uniform1i(this.uOverview.uTex, 0);
     gl.uniform1f(this.uOverview.uSharp, this.sharpen ? 1 : 0);
+    gl.uniform1f(this.uOverview.uLangTint, this.langTint);
+    gl.uniform3fv(this.uOverview['uFamily[0]'], this.familyFlat);
     gl.activeTexture(gl.TEXTURE0);
 
     for (const [key, b] of this.overviewByChunk) {
@@ -1646,7 +1675,7 @@ export class Scene {
       quadAttrib(gl, this.progOverview, this.quad);
       gl.bindBuffer(gl.ARRAY_BUFFER, b.buf);
       instanceAttribs(gl, this.progOverview, OVERVIEW_STRIDE, [
-        ['aRect', 4, 0], ['aUv', 4, 4], ['aLayerFade', 2, 8],
+        ['aRect', 4, 0], ['aUv', 4, 4], ['aMeta', 3, 8],
       ]);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.count);
     }

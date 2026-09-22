@@ -139,6 +139,8 @@ export class CanvasApp {
   readonly cam = new Camera();
   private gl: WebGL2RenderingContext;
   private scene: Scene | null = null;
+  /** Held here rather than on the scene, which is replaced on every open. */
+  private languageTint = false;
   private layout: Layout | null = null;
   private pal: Palette;
 
@@ -342,6 +344,7 @@ export class CanvasApp {
       // Every panel settles in as it arrives, staggered outward from the
       // centre. That is the load animation.
       this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
+      this.scene.tintLanguages = this.languageTint;
       // Pictures, when the source can hand their bytes over. Held by the
       // scene because it knows what is on screen and at what size, and it
       // wakes the loop when one arrives: the loop parks when nothing moves.
@@ -672,6 +675,19 @@ export class CanvasApp {
       this.running = true;
       this.raf = requestAnimationFrame(this.frame);
     }
+  }
+
+  /**
+   * Colour the outermost zoom by language family, or stop doing that.
+   *
+   * A method rather than a public field on the scene: the scene is rebuilt
+   * whenever a project opens, so the switch has to be held here and applied
+   * to whatever scene is current.
+   */
+  setLanguageTint(on: boolean): void {
+    this.languageTint = on;
+    if (this.scene) this.scene.tintLanguages = on;
+    this.invalidate();
   }
 
   /** Re-read the palette from CSS and push it into the scene. */

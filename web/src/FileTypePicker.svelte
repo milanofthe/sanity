@@ -12,7 +12,9 @@
 	// stubbed. The rows are the same control either way, and one list the user
 	// sets is better than two where half of them were set for him.
 	import Segmented from '$lib/ui/Segmented.svelte';
+	import Toggle from '$lib/ui/Toggle.svelte';
 	import { project, VIEW_MODES, type ViewMode } from '$lib/state/project.svelte';
+	import { ui } from '$lib/state/ui.svelte';
 
 	const n = (v: number) => v.toLocaleString('en-US');
 
@@ -58,6 +60,14 @@
 			</div>
 		{/each}
 
+		<div class="options">
+			<Toggle
+				checked={ui.tintLanguages}
+				label="Tint by language at the outermost zoom"
+				onchange={() => ui.setTintLanguages(!ui.tintLanguages)}
+			/>
+		</div>
+
 		<div class="foot">
 			<!-- A sentence, not a label, so it spans the three columns the rows
 			     use for a type and its counts. -->
@@ -94,6 +104,15 @@
 	   fixed width. It used to be `auto`, which resolved to the width of the
 	   segmented control in a row and to zero in the header, where that cell is
 	   empty: the column headings sat well left of the numbers they labelled. */
+	.options {
+		display: flex;
+		align-items: center;
+		gap: var(--sp-2);
+		min-height: var(--row-h);
+		padding: 0 var(--sp-3);
+		border-top: var(--sep-w) solid var(--border);
+		color: var(--text-dim);
+	}
 	.head,
 	.row,
 	.foot {
