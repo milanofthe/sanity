@@ -50,10 +50,13 @@ const shot = async (mode) => {
     // Until nothing is streaming in any more, so each way draws with the
     // same overview detail. A fixed number of frames compared two different
     // amounts of it and measured anything from 1.5 to 2.6.
-    for (let i = 0; i < 1200; i++) {
+    // Ten quiet frames in a row: WebKit's timers are coarser, and a single
+    // quiet frame there was sometimes one between two tiles being made.
+    let quiet = 0;
+    for (let i = 0; i < 1200 && quiet < 10; i++) {
       app.invalidate();
       await new Promise((q) => requestAnimationFrame(q));
-      if (i > 10 && !s.streamPending && !s.tilesPending) break;
+      quiet = !s.streamPending && !s.tilesPending ? quiet + 1 : 0;
     }
     // What a frame here costs once it is settled: the median of a few, since
     // the last one of the settling may be the rest image being drawn again.

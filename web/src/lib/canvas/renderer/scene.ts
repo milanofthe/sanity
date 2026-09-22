@@ -32,6 +32,7 @@ import { BASE_LEVEL, OverviewTextures, type Slot } from './codetex';
 import { MediaTextures } from './mediatex';
 import { SpatialGrid } from '$lib/canvas/spatial';
 import { TILE_GUTTER, TileCache, tileWorld } from './tiles';
+import { sharedPool, type RasterPool } from './rasterpool';
 import {
   createProgram, instanceAttribs, quadAttrib, uniforms, unitQuad,
   InstanceBuffer, type GL,
@@ -96,6 +97,9 @@ export interface SceneFile {
   /** Number of the frame that last drew this panel, so one that is both
    *  animating and in view is drawn once. */
   drawnAt: number;
+  /** Its overview has been written. Until then the panel is drawn without
+   *  one: the base is rasterised on a worker while a project opens. */
+  ready: boolean;
 }
 
 /**
@@ -925,9 +929,21 @@ export class Scene {
     this.ovFlat = new Float32Array(pal.token.length * 3);
     this.writeKindFlat();
     this.textures.setColors(pal.overview);
+    const pool = this.pool;
     for (const f of this.files.values()) {
       if (f.node.stub) continue;
-      this.textures.write(f.slot, f.data, f.node.geom.cols, f.rows);
+      // Every base again, on the workers when there are some: a theme
+      // switch on a hundred thousand files would otherwise hold the window
+      // for half a minute. Each panel keeps its old colours until its new
+      // ones are in.
+      if (pool) {
+        this.textures.writeAsync(pool, f.slot, f.data, f.node.geom.cols, f.rows, () => {
+          this.invalidateTiles(f);
+          this.onChange?.();
+        });
+      } else {
+        this.textures.write(f.slot, f.data, f.node.geom.cols, f.rows);
+      }
       if (f.detail) this.textures.write(f.detail, f.data, f.node.geom.cols, f.rows);
     }
     this.textures.finalize();
@@ -950,6 +966,7 @@ export class Scene {
         sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
         change: null,
         drawnAt: -1,
+        ready: true,
       });
       return;
     }
@@ -958,18 +975,45 @@ export class Scene {
     // so a row of the texture is a row of the panel either way.
     const slot = this.textures.allocate(rows[data.lineCount], BASE_LEVEL);
     node.layer = slot.layer;
-    this.textures.write(slot, data, node.geom.cols, rows);
+    const pool = this.pool;
+    if (!pool) this.textures.write(slot, data, node.geom.cols, rows);
     this.tiles.invalidate(node.x, node.y, node.w, node.h);
     if (this.rest) this.rest.dirty = true;
-    this.add(node.path, {
-      node, data, slot, detail: null, rows, since: Infinity, shownMark: 0, state: aggregateState(data),
+    const f: SceneFile = {
+      node, data, slot, detail: null, rows, ready: !pool, since: Infinity, shownMark: 0, state: aggregateState(data),
       family: familyOf(data.langId),
       anim: this.animFor(node),
       wroteRows: rows[data.lineCount], wroteCols: node.geom.cols,
       sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
       change: null,
       drawnAt: -1,
-    });
+    };
+    this.add(node.path, f);
+    if (pool) {
+      this.textures.writeAsync(pool, slot, data, node.geom.cols, rows, () => {
+        f.ready = true;
+        this.invalidateTiles(f);
+        this.onChange?.();
+      });
+    }
+  }
+
+  /** Rasterises the base overviews of a project being opened; see
+   *  rasterpool.ts. Null where workers are not available. */
+  private pool: RasterPool | null = sharedPool();
+
+  /** Called when something arrived that changes the picture, so the frame
+   *  loop, which parks when nothing moves, draws again. */
+  onChange: (() => void) | null = null;
+
+  /** The workers have as much as they can use; hand over more later. */
+  rasterSaturated(): boolean {
+    return this.pool?.saturated ?? false;
+  }
+
+  /** Overviews still out on a worker. */
+  rasterBusy(): boolean {
+    return (this.pool?.busy ?? 0) > 0;
   }
 
   /**
@@ -1002,6 +1046,7 @@ export class Scene {
     }
     f.slot.texRows = this.textures.rowsFor(f.slot, rows);
     this.textures.write(f.slot, data, node.geom.cols, f.rows);
+    f.ready = true;
     // The detail follows, or goes and is asked for again once it is drawn.
     if (f.detail && !this.textures.fitsSlot(f.detail, rows)) this.dropDetail(f);
     if (f.detail) {
@@ -1082,6 +1127,7 @@ export class Scene {
     if (f.node.stub) return;
     f.rows = wrapOffsets(data.lineCols, f.node.geom.cols);
     this.textures.write(f.slot, data, f.node.geom.cols, f.rows);
+    f.ready = true;
     if (f.detail) this.textures.write(f.detail, data, f.node.geom.cols, f.rows);
     f.wroteRows = f.rows[data.lineCount];
     f.wroteCols = f.node.geom.cols;
@@ -2090,6 +2136,8 @@ export class Scene {
   }
 
   private pushOverview(f: SceneFile, fade: number, pxPerLine: number, zoom: number): void {
+    // Not rasterised yet: the panel is drawn without it for the moment.
+    if (!f.ready && !f.detail) return;
     const { node: n } = f;
     const g = n.geom;
     // The detail when there is one, even a coarser one than this zoom asks
@@ -2569,6 +2617,13 @@ export class Scene {
     const wanted = this.wanted;
     this.streamPending = false;
     if (wanted.size === 0) return;
+    // Not while a project is still being opened: detail is written on this
+    // thread, for panels most of which have no base yet, and doing it then
+    // took a third of the main thread from the opening it was slowing down.
+    if (this.rasterBusy()) {
+      this.streamPending = true;
+      return;
+    }
     // Kept from one frame to the next until written, rather than rebuilt from
     // what each frame drew: at rest the far view draws its rest image and no
     // panels, so a list rebuilt per frame was empty after the first, and the

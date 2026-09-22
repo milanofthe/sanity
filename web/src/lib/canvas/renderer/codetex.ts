@@ -14,6 +14,7 @@ import { overview } from '$lib/metrics';
 import { rgb } from '$lib/theme';
 import type { FileData } from '$lib/canvas/data/wire';
 import { OverviewRaster } from './raster';
+import type { RasterPool } from './rasterpool';
 import type { GL } from './gl';
 
 /**
@@ -36,8 +37,13 @@ export interface Slot {
   /** Texel rows actually covered at full resolution, so the quad's v range can
    *  be exact. The same fraction of the layer at every mip level. */
   texRows: number;
-  /** Finest mip level this slot holds; see `DETAIL_LEVELS`. */
+  /** Finest mip level this slot holds; see `BASE_LEVEL`. */
   level: number;
+  /** Counts the writes, so a result from a worker that arrives after a newer
+   *  write, or after the slot was given back, is dropped rather than drawn
+   *  over what replaced it. */
+  gen?: number;
+  released?: boolean;
 }
 
 /**
@@ -255,6 +261,7 @@ export class OverviewTextures {
   release(slot: Slot): void {
     const chunk = this.classes[slot.classIdx]?.chunks[slot.chunkIdx];
     if (!chunk) return;
+    slot.released = true;
     if (chunk.free.includes(slot.layer)) return;
     chunk.free.push(slot.layer);
     chunk.live--;
@@ -291,8 +298,35 @@ export class OverviewTextures {
    * rather than snapping on or off, which is the difference between a stable
    * image and one that crawls while zooming.
    */
+  /**
+   * Rasterise a file into its layer on a worker, and upload it when it is
+   * back. `done` is called then, and not at all if the slot was written again
+   * or given back in the meantime.
+   */
+  writeAsync(
+    pool: RasterPool, slot: Slot, f: FileData, panelCols: number, rows: Uint32Array,
+    done: () => void,
+  ): void {
+    const gen = (slot.gen = (slot.gen ?? 0) + 1);
+    const cls = this.classes[slot.classIdx];
+    pool.submit(
+      {
+        lineCount: f.lineCount, spans: f.spans, spanStart: f.spanStart, rows, panelCols,
+        texelRows: slot.texRows, classRows: cls.baseRows, level: slot.level,
+        kindRgb: this.kindRgb,
+      },
+      (levels) => {
+        if (slot.released || slot.gen !== gen) return;
+        for (const l of levels) this.upload(slot, l.level, l.w, l.h, l.data);
+        done();
+      },
+    );
+  }
+
   write(slot: Slot, f: FileData, panelCols: number, rows: Uint32Array): void {
     const { gl } = this;
+    // A write here supersedes one still out on a worker.
+    slot.gen = (slot.gen ?? 0) + 1;
     const cls = this.classes[slot.classIdx];
     const chunk = cls.chunks[slot.chunkIdx];
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, chunk.tex);

@@ -357,6 +357,7 @@ export class CanvasApp {
       // Every panel settles in as it arrives, staggered outward from the
       // centre. That is the load animation.
       this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
+      this.scene.onChange = () => this.invalidate();
       this.scene.tintLanguages = this.languageTint;
       // Pictures, when the source can hand their bytes over. Held by the
       // scene because it knows what is on screen and at what size, and it
@@ -478,6 +479,8 @@ export class CanvasApp {
       // A picture still fading in: an export or a check reading pixels now
       // would catch it half there.
       || (this.scene?.media?.fading() ?? false)
+      // Overviews still being rasterised.
+      || (this.scene?.rasterBusy() ?? false)
       || this.cam.flying
     );
   }
@@ -928,7 +931,12 @@ export class CanvasApp {
   private uploadBudget(): void {
     if (!this.scene || !this.layout || this.pending.length === 0) return;
     const t0 = performance.now();
-    while (this.pending.length > 0 && performance.now() - t0 < UPLOAD_BUDGET_MS) {
+    while (
+      this.pending.length > 0 && performance.now() - t0 < UPLOAD_BUDGET_MS
+      // The workers rasterising the overviews are busy: the rest waits for a
+      // later frame rather than queueing copies of its token arrays.
+      && !this.scene.rasterSaturated()
+    ) {
       const path = this.pending.pop()!;
       const node = this.nodeByPath.get(path);
       const data = this.decoded.get(path);
