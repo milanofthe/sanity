@@ -13,6 +13,14 @@ agents work in the repository.
 Try it on four public repositories, in the browser, no install:
 [sanity.milanrother.com](https://sanity.milanrother.com/).
 
+## Install
+
+[Releases](https://github.com/milanofthe/sanity/releases) carry a `.dmg` for
+macOS, Intel and Apple Silicon in one file, and an installer for Windows.
+Neither build is signed, so the first launch needs a right click and Open on
+macOS, and More info then Run anyway on Windows. Building from source is
+`npm ci && npm ci --prefix web && npx tauri build`.
+
 ![the whole project at once](assets/screenshot-project.png)
 
 ## What it does
