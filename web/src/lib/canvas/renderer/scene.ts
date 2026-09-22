@@ -1370,19 +1370,24 @@ export class Scene {
     const onScreen = w * zoom * this.dpr;
     const held = this.media?.want(n.path, onScreen, mw / mh) ?? null;
 
-    // The area, always, and the picture over it. Not only a placeholder: most
-    // renders in a repository have a transparent background, so without
-    // something under them they are a few grey lines on the canvas. Measured
-    // on pathsim's figures: mean alpha 6.6 of 255, and only a sixth of their
-    // pixels opaque at all.
-    this.pushRect(this.bgRects, x, y, w, h, this.pal.surface.reducedBg, 1, 0, 0);
+    // What goes under it. Most of what a repository holds in pictures is ink
+    // with nothing behind it: a PDF page comes out of ImageIO as black type on
+    // transparency (measured: 98 percent of a page is fully clear), and
+    // pathsim's figures average an alpha of 6.6 of 255. On the canvas
+    // background those are invisible, so anything that carries no background
+    // of its own gets a sheet of paper instead. A document gets one before it
+    // has loaded, since a document always needs one and the placeholder then
+    // reads as a page.
+    const paper = m.kind === 'document' || held?.translucent === true;
+    const back = paper ? this.pal.surface.paper : this.pal.surface.reducedBg;
+    this.pushRect(this.bgRects, x, y, w, h, back, 1, 0, 0);
     if (held) {
       this.imageDraws.push({ tex: held.tex, x, y, w, h, fade: this.tf.alpha });
       return;
     }
     if (h * zoom > 4) {
       this.pushRect(
-        this.fgRects, x, y, w, h, this.pal.surface.reducedBg, 0,
+        this.fgRects, x, y, w, h, back, 0,
         this.pal.surface.border, 1,
       );
     }

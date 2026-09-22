@@ -111,6 +111,7 @@ const SURFACE_VARS = {
   accent: '--accent',
   reducedBg: '--reduced-bg',
   reducedInk: '--reduced-ink',
+  paper: '--paper',
 } as const;
 
 export type SurfaceKey = keyof typeof SURFACE_VARS;

@@ -100,6 +100,11 @@
 	/* a file kept only as a placeholder: present, deliberately not readable */
 	--reduced-bg: hsl(210, 14%, 16%);
 	--reduced-ink: hsl(210, 13%, 34%);
+	/* the sheet a document's page is drawn on. Kept light in every
+	   theme: a PDF is black ink on transparency, so what is behind it
+	   decides whether it can be read at all, and the same holds for the
+	   plots a repository is full of. */
+	--paper: hsl(210, 22%, 95%);
 
 	/* semantic status */
 	--ok: var(--data-3);
@@ -213,6 +218,7 @@
 	--dir-bg: hsl(70, 8%, 7%);
 	--reduced-bg: hsl(70, 8%, 12%);
 	--reduced-ink: hsl(55, 9%, 30%);
+	--paper: hsl(60, 16%, 94%);
 }
 
 [data-theme='breakers'] {
@@ -275,6 +281,7 @@
 	--dir-bg: hsl(195, 11%, 88%);
 	--reduced-bg: hsl(195, 11%, 90%);
 	--reduced-ink: hsl(200, 8%, 62%);
+	--paper: hsl(195, 30%, 98%);
 }
 
 [data-theme='sanity'] {
@@ -379,6 +386,7 @@
 	--dir-bg: #101214;
 	--reduced-bg: #191b1e;
 	--reduced-ink: #3d4348;
+	--paper: hsl(220, 8%, 95%);
 
 	--ok: var(--sage);
 	--warn: var(--amber);
@@ -448,6 +456,7 @@
 	--dir-bg: #22262f;
 	--reduced-bg: var(--nord1);
 	--reduced-ink: #5a657a;
+	--paper: #eceff4;
 }
 
 /* --- Gruvbox ---------------------------------------------------------------
@@ -512,6 +521,7 @@
 	--dir-bg: #191c1d;
 	--reduced-bg: var(--gb-bg1);
 	--reduced-ink: #7c6f64;
+	--paper: #fbf1c7;
 }
 
 /* --- One -------------------------------------------------------------------
@@ -573,6 +583,7 @@
 	--dir-bg: #181b1f;
 	--reduced-bg: #2c313a;
 	--reduced-ink: #565d6b;
+	--paper: hsl(220, 24%, 95%);
 }
 
 /* --- Solar -----------------------------------------------------------------
@@ -641,4 +652,5 @@
 	--dir-bg: #e7e0ca;
 	--reduced-bg: var(--sol-base2);
 	--reduced-ink: #a9b3b3;
+	--paper: #fdf6e3;
 }

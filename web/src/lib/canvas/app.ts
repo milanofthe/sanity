@@ -1026,6 +1026,7 @@ export class CanvasApp {
     return new Promise((resolve) => {
       const cpu: number[] = [];
       const wall: number[] = [];
+      let seen = this.drawn;
       const t0 = performance.now();
       const fitZoom = this.layout
         ? Math.min(this.cam.vw / this.layout.root.w, this.cam.vh / this.layout.root.h)
@@ -1052,8 +1053,20 @@ export class CanvasApp {
           this.cam.x = this.layout.root.w * (0.15 + 0.7 * t);
           this.cam.y = this.layout.root.h * (0.2 + 0.6 * Math.sin(t * Math.PI * 2) ** 2);
         }
-        cpu.push(this.stats.cpuMs);
-        wall.push(this.stats.frameMs);
+        // The loop draws on demand and parks when the picture holds still, and
+        // whether it sees this camera move depends on which callback the
+        // browser runs first. Without asking for the frame the benchmark
+        // measured the last frame before it started, over and over: 480 frames
+        // of identical numbers.
+        this.invalidate();
+        // Only frames that were actually drawn: a skipped frame keeps the
+        // previous timings, and counting those turns any pause into a run of
+        // whatever came before it.
+        if (this.drawn !== seen) {
+          seen = this.drawn;
+          cpu.push(this.stats.cpuMs);
+          wall.push(this.stats.frameMs);
+        }
         requestAnimationFrame(step);
       };
       requestAnimationFrame(step);

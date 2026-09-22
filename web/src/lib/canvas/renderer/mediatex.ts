@@ -44,6 +44,8 @@ interface Slot {
   bytes: number;
   /** Frame counter when this was last asked for, for eviction order. */
   seen: number;
+  /** Mostly transparent, so it needs a sheet under it; see `translucent`. */
+  translucent: boolean;
 }
 
 /** What `want` hands back when a picture is ready to draw. */
@@ -51,6 +53,44 @@ export interface Drawable {
   tex: WebGLTexture;
   w: number;
   h: number;
+  translucent: boolean;
+}
+
+/** Above this share of transparent area a picture is treated as ink on a page
+ *  rather than as a picture with a background of its own. A plot exported by
+ *  matplotlib and a PDF page rendered by ImageIO are both near 1.0; a
+ *  photograph or a screenshot is 0. */
+const TRANSLUCENT_SHARE = 0.5;
+
+/**
+ * Whether a picture relies on what is behind it.
+ *
+ * Measured on the decoded bitmap, scaled into a 16 by 16 canvas, so it costs
+ * one draw of 256 pixels rather than a second pass over the source. That is
+ * enough: the question is whether the background is there at all, not where.
+ *
+ * Returns false when the browser will not hand the pixels back, which is the
+ * safe answer: a picture on the canvas background is what this app always did.
+ */
+function translucent(bitmap: ImageBitmap): boolean {
+  try {
+    const probe =
+      typeof OffscreenCanvas === 'function'
+        ? new OffscreenCanvas(16, 16)
+        : Object.assign(document.createElement('canvas'), { width: 16, height: 16 });
+    const ctx = probe.getContext('2d', { willReadFrequently: true }) as
+      | CanvasRenderingContext2D
+      | null;
+    if (!ctx) return false;
+    ctx.clearRect(0, 0, 16, 16);
+    ctx.drawImage(bitmap, 0, 0, 16, 16);
+    const { data } = ctx.getImageData(0, 0, 16, 16);
+    let clear = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] < 128) clear++;
+    return clear / 256 > TRANSLUCENT_SHARE;
+  } catch {
+    return false;
+  }
 }
 
 /** Rounds a wanted width up to a level, inside the bounds: a picture should
@@ -82,6 +122,13 @@ export class MediaTextures {
   private askedBefore = 1;
   /** Paths that cannot be decoded, so a broken file is attempted once. */
   private failed = new Set<string>();
+  /** What the decoding has cost since the source was opened. Not diagnostics
+   *  for their own sake: the cost of a picture is the decode of its source,
+   *  which is the same whatever level comes out of it, so "how many decodes"
+   *  is the number any work on this has to move. */
+  private decodes = 0;
+  private fetched = 0;
+  private decodeMs = 0;
 
   private gl: WebGL2RenderingContext;
   private fetchBytes: (path: string, level: number) => Promise<ArrayBuffer | null>;
@@ -191,11 +238,14 @@ export class MediaTextures {
   private async decode(path: string, level: number): Promise<void> {
     // The level goes along: an image is resized while it is decoded, but a
     // document has to be rasterised at a size, and only the source knows how.
+    const started = performance.now();
     const bytes = await this.fetchBytes(path, level).catch(() => null);
     if (!bytes || bytes.byteLength === 0) {
       this.failed.add(path);
       return;
     }
+    this.decodes++;
+    this.fetched += bytes.byteLength;
     let bitmap: ImageBitmap;
     try {
       // Decoded straight to the level: a 3570 by 2369 render never exists as
@@ -208,6 +258,7 @@ export class MediaTextures {
       this.failed.add(path);
       return;
     }
+    this.decodeMs += performance.now() - started;
     this.upload(path, bitmap);
     bitmap.close();
     this.onLoaded();
@@ -243,6 +294,10 @@ export class MediaTextures {
       h: bitmap.height,
       bytes,
       seen: this.clock,
+      // Kept from the level before when there was one: the answer is about the
+      // picture, not about the size it was decoded to, and re-probing every
+      // level would ask the same question again.
+      translucent: old ? old.translucent : translucent(bitmap),
     });
     this.held += bytes;
     this.trim();
@@ -278,8 +333,22 @@ export class MediaTextures {
   }
 
   /** For the status bar and the checks. */
-  stats(): { count: number; bytes: number; loading: number } {
-    return { count: this.slots.size, bytes: this.held, loading: this.inFlight + this.queue.length };
+  stats(): {
+    count: number;
+    bytes: number;
+    loading: number;
+    decodes: number;
+    fetched: number;
+    decodeMs: number;
+  } {
+    return {
+      count: this.slots.size,
+      bytes: this.held,
+      loading: this.inFlight + this.queue.length,
+      decodes: this.decodes,
+      fetched: this.fetched,
+      decodeMs: this.decodeMs,
+    };
   }
 
   /** Resolves when nothing is in flight, so an export waits for its pictures
