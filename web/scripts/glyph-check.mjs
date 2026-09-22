@@ -145,8 +145,21 @@ const compare = async () =>
           }
           if (want.length === 0) continue;
 
-          const y = Math.round((sc.riY * tf.scale + tf.by) * 100) / 100;
-          const got = drawn.get(y) ?? [];
+          // Rows are matched by the nearest drawn y rather than an exact one:
+          // the renderer lifts a line by the descender overhang so the last
+          // line of a panel is not clipped, and a check that insists on the
+          // row's own y finds nothing at all. Half a line of tolerance is far
+          // less than the distance to the next row.
+          const y = sc.riY * tf.scale + tf.by;
+          let got = [];
+          let best = Infinity;
+          for (const [key, quads] of drawn) {
+            const d = Math.abs(key - y);
+            if (d < best && d < 7 * tf.scale) {
+              best = d;
+              got = quads;
+            }
+          }
           // The glyphs of this row and column range, by their x.
           const cw = 7;
           const mine = got.filter((q) => {

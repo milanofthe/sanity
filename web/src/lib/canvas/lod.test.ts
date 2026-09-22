@@ -117,11 +117,19 @@ test('token bars thin out as glyphs arrive', () => {
   assert.ok(after > 0, 'bars must not invert');
 });
 
-test('the language tint is gone before the token bars arrive', () => {
-  // The two must not overlap. A token bar already carries its own colour, so a
-  // language tint underneath it would colour the same pixels twice and the
-  // hand-over would change hue as well as representation.
-  assert.equal(languageTint(lodBands.tokensFrom), 0);
+test('the language tint is exactly the overview texture, and no more', () => {
+  // The tint colours the texture, so it lasts as long as the texture does and
+  // is gone the moment the token bars have it to themselves. Tied to the same
+  // band rather than to numbers of its own, which is what keeps a bar from
+  // ever being drawn over a fully tinted texture: the two weights sum to one.
+  assert.equal(languageTint(lodBands.tokensFrom), 1);
+  assert.equal(languageTint(lodBands.tokensTo), 0);
+  for (const ppl of SAMPLES) {
+    assert.ok(
+      Math.abs(languageTint(ppl) - lodWeights(ppl).overview) < 1e-9,
+      `tint ${languageTint(ppl)} against texture ${lodWeights(ppl).overview} at ${ppl}`,
+    );
+  }
 });
 
 test('the language tint is full at the outermost zoom and falls monotonically', () => {

@@ -36,9 +36,13 @@ macOS, and More info then Run anyway on Windows. Building from source is
   directory of YAML reads as a different kind of thing from a directory of
   code. Measured by `lang-check`: colour predicts the family 8.5 times better
   than it did untinted, and 100 percent of the within-panel structure
-  survives. Off unless asked for, because the thing this canvas is usually
-  watched for is where something changed, and a second colour scheme competes
-  with that. With the switch on, the bar behind each file type in that menu
+  survives. It lasts as long as the texture it colours: tied to the same band,
+  so it is there at every zoom where the texture is the picture and gone the
+  moment the token bars take over. It used to fade out at 1.6 pixels per line
+  while the texture ran to 3.2, which meant it was only ever visible with a
+  whole project on screen. Off unless asked for, because the thing this canvas
+  is usually watched for is where something changed, and a second colour
+  scheme competes with that. With the switch on, the bar behind each file type in that menu
   takes the same colour, which makes the list the legend: it is the type's
   share of the repository and its family at once. Off, the bar is a neutral
   fill again, since a colour that means nothing on the canvas has no business
@@ -98,6 +102,15 @@ macOS, and More info then Run anyway on Windows. Building from source is
   past its panel keeps its marks through the relayout. Then the canvas goes
   quiet and the frame loop stops: 42 frames for a change, against the 5400 a
   ninety second glow used to cost.
+- **Pictures in rows.** A directory that holds nothing but pictures is laid
+  out as justified rows, the way a gallery is, rather than as a treemap. A
+  treemap divides by area and leaves the shape to chance, which is right for
+  text and wrong for a picture: the panel has to keep the picture's own
+  proportion, so it sat inside its slot with space on all sides. Measured on a
+  directory of 41 plots: the pictures covered 39 percent of the box they were
+  given, and 83 percent once the rows were in. The panels themselves did not
+  change size, and 45 of 47 are within 11 percent of their picture's
+  proportion.
 - **Pictures as pictures.** An image file is a panel like any other, in the
   image's own proportion and at most one code column wide, which is what makes
   a figure read as another column of the thing it belongs to rather than as a

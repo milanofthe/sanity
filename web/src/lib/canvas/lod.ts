@@ -116,8 +116,7 @@ export function lodWeights(pxPerLine: number): LodWeights {
 }
 
 /**
- * How much of a file's colour comes from its language rather than its tokens,
- * over the range where the tokens stop being worth showing.
+ * How much of a file's colour comes from its language rather than its tokens.
  *
  * Measured on a 988 file project, 40 panels sampled at three zooms: with a
  * file a few pixels tall the luminance varies by 0.106 to 0.167 *within* a
@@ -127,11 +126,14 @@ export function lodWeights(pxPerLine: number): LodWeights {
  * questions are what language, how big, and has it moved: area answers the
  * second and the treemap already gives it.
  */
-const LANG_TINT_FROM = 0.5;
-const LANG_TINT_TO = 1.6;
-
 export function languageTint(pxPerLine: number): number {
-  return 1 - smoothstep(LANG_TINT_FROM, LANG_TINT_TO, pxPerLine);
+  // Tied to the texture rather than to a pair of numbers of its own: the tint
+  // is a property of the overview texture, so it is there for as long as the
+  // texture is and gone when the token bars take over. It used to fade out at
+  // 1.6 pixels per line while the texture ran to 3.2, which put the colour
+  // only at the zoom where a whole project is on screen and took it away
+  // again as soon as anyone looked closer.
+  return 1 - smoothstep(lodBands.tokensFrom, lodBands.tokensTo, pxPerLine);
 }
 
 /** Which representation dominates, for the status bar. */

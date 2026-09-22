@@ -387,6 +387,11 @@ export class Scene {
   /** Sharpen the overview texture's vertical interpolation. Off only for the
    *  measurement that shows what it is worth. */
   sharpen = true;
+  /** Rasterise the glyph atlas at the exact size the zoom asks for once the
+   *  camera is still. Off only for the measurement that shows what it is
+   *  worth: with it off, glyphs come from the nearest fixed level and are
+   *  scaled, which is what text-check compares against. */
+  exactGlyphAtlas = true;
   /** Colour the overview by language family. Off by default: what the canvas
    *  is for is the shape of a project and what changed in it, and a second
    *  colour scheme on top of the syntax colours is a third thing competing for
@@ -1337,6 +1342,25 @@ export class Scene {
     return top + (barH - (tail - cap)) / 2 - cap;
   }
 
+  /**
+   * How far a line of text is lifted inside its row, in world units.
+   *
+   * A glyph box is 1.4 em tall against a 14 unit line and is drawn downwards
+   * from the row's top, so a descender reaches past the row. On the last line
+   * of a panel that is past the panel's own bottom edge, where the frame and
+   * whatever is behind it cut it off. Lifted by exactly that overhang and no
+   * more: centring the line the way a header is centred moves it 2.3 units up
+   * in a 14 unit row, which reads as the text sitting in the wrong place and
+   * measurably softens it.
+   *
+   * Every pass that draws inside a row uses this, the line numbers included.
+   * They did not at first, which left the numbers a pixel below their code.
+   */
+  private lineLift(): number {
+    const em = metrics.charWidth / this.atlas.advanceRatio;
+    return -Math.max(0, em * (BASELINE_RATIO + this.atlas.descenderRatio) - metrics.lineHeight);
+  }
+
   private pushText(
     str: string, x: number, y: number, ink: number, fade: number, maxChars: number,
   ): number {
@@ -1947,7 +1971,7 @@ export class Scene {
         this.rowInfo(f, row, c);
         const line = this.riLine;
         const wrap = this.riWrap;
-        const y = this.riY;
+        const y = this.riY + this.lineLift();
         // Continuation rows carry no number: the number belongs to the source
         // line, and repeating it would claim there are more lines than there
         // are.
@@ -1976,6 +2000,17 @@ export class Scene {
     const by = this.tf.by;
     const em = (metrics.charWidth / this.atlas.advanceRatio) * scale;
     const alpha = fade * this.tf.alpha;
+    // A glyph box is 1.4 em tall against a 14 unit line and is drawn downwards
+    // from the row's top, so a descender reaches a little past the row. On the
+    // last line of a panel that is past the panel's bottom edge, where the
+    // frame and whatever is behind it cut it off.
+    //
+    // Lifted by exactly that overhang and no more. Centring the line the way
+    // the header is centred moves it 2.3 units up in a 14 unit row, which
+    // reads as the text sitting in the wrong place and measurably softens it:
+    // glyph-check lost every character and text-check went from 24.6 to 42.7
+    // percent half-tone.
+    const lift = this.lineLift() * scale;
 
     for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
       // One quad per character at most, over the rows this run covers.
@@ -1986,7 +2021,7 @@ export class Scene {
       for (let row = firstRow; row <= lastRow; row++) {
         this.rowInfo(f, row, c);
         const line = this.riLine;
-        const y = this.riY * scale + by;
+        const y = this.riY * scale + by + lift;
         const text = this.text.lineText(f.node.path, line);
         if (!text) continue;
         const from = this.riWrap * cols;
@@ -2042,7 +2077,7 @@ export class Scene {
     // While the camera is moving, one of the fixed levels: rasterising a new
     // atlas per zoom step would be a canvas of 95 glyphs every frame. Once it
     // is still, the exact size, which is what makes the text sharp.
-    const level = this.atlas.pick(em * dpr, this.cameraStill);
+    const level = this.atlas.pick(em * dpr, this.cameraStill && this.exactGlyphAtlas);
 
     gl.useProgram(this.progGlyph);
     gl.uniformMatrix3fv(this.uGlyph.uView, false, this.view);

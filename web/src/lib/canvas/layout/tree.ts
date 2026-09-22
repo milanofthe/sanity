@@ -633,8 +633,16 @@ function placeFile(f: FileNode, slot: IntRect): void {
     // Never much larger than it asked for, however large the slot is. A
     // picture has a size it is worth, and a slot that came out generous is
     // not a reason to draw a diagram across a quarter of the canvas.
-    const boxW = Math.min(w, h * a, want.w * MEDIA_OVERSHOOT);
-    const boxH = Math.min(h, w / a, want.h * MEDIA_OVERSHOOT);
+    //
+    // Unless the slot already has the picture's own shape, which is what the
+    // row layout hands out: there the size was decided by how many pictures
+    // share the row and how wide the directory is, and refusing to fill it
+    // leaves exactly the gaps the rows were there to close.
+    const slotAspect = h > 0 ? w / h : a;
+    const shaped = Math.abs(Math.log2(slotAspect / a)) < 0.15;
+    const cap = shaped ? Infinity : MEDIA_OVERSHOOT;
+    const boxW = Math.min(w, h * a, want.w * cap);
+    const boxH = Math.min(h, w / a, want.h * cap);
     f.geom = { ...want, w: boxW, h: boxH };
     f.w = boxW;
     f.h = boxH;
@@ -658,6 +666,97 @@ function placeFile(f: FileNode, slot: IntRect): void {
   f.fits = fit.ok;
   f.usable = fit.usable;
   f.holdsAll = fit.holdsAll;
+}
+
+
+/**
+ * Lay a directory of pictures out as justified rows, the way a gallery does.
+ *
+ * A squarified treemap divides by area and leaves the shape to chance, which
+ * is right for panels of text: they can be any proportion and still hold
+ * their lines. A picture cannot. Its panel has to keep the picture's own
+ * proportion, so whatever the slot's shape was, the panel sits inside it with
+ * space on all sides. Measured on a directory of 41 plots: the pictures
+ * covered 39 percent of the box they were given.
+ *
+ * Rows fix that, because a row fixes one dimension. Every picture in a row is
+ * drawn at the same height and keeps its own width, the row is then scaled so
+ * it spans the box exactly, and nothing is left over horizontally. The height
+ * to aim for comes from the area: at `sqrt(area / sum of aspects)` the rows
+ * come out roughly as tall as the box can take.
+ *
+ * Whole cells throughout, since the treemap's invariants are about cells: no
+ * gaps, no overlaps, nothing off the grid. The last cell of a row and the last
+ * row of the box take the rounding.
+ */
+function layoutPictureRows(
+  items: FileNode[],
+  rect: IntRect,
+  assign: (item: FileNode, r: IntRect) => void,
+): void {
+  const aspects = items.map((f) => {
+    const want = mediaWant(f.media!);
+    return Math.max(0.1, Math.min(10, want.w / Math.max(1, want.h)));
+  });
+
+  /** Break into rows at a target height, and say how tall that comes out. */
+  const rowsAt = (target: number) => {
+    const rows: { from: number; to: number; aspect: number }[] = [];
+    let from = 0;
+    let aspect = 0;
+    for (let i = 0; i < items.length; i++) {
+      const next = aspect + aspects[i];
+      if (aspect > 0 && next * target > rect.w) {
+        rows.push({ from, to: i, aspect });
+        from = i;
+        aspect = aspects[i];
+      } else {
+        aspect = next;
+      }
+    }
+    if (from < items.length) rows.push({ from, to: items.length, aspect });
+    // A justified row is as tall as spanning the box makes it, except the
+    // last, which keeps the target rather than stretching two pictures across
+    // the whole width.
+    const heights = rows.map((r, i) =>
+      i === rows.length - 1 && rows.length > 1
+        ? Math.min(target, rect.w / Math.max(0.01, r.aspect))
+        : rect.w / Math.max(0.01, r.aspect),
+    );
+    return { rows, heights, total: heights.reduce((s, h) => s + h, 0) };
+  };
+
+  // The target height that makes the rows add up to the box. Bisected rather
+  // than scaled afterwards: scaling the heights alone changes every picture's
+  // proportion, which is the one thing a picture panel may not do, and it was
+  // what left a row of logos 126 tall inside cells 578 wide.
+  let lo = 1;
+  let hi = Math.max(2, rect.h);
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (rowsAt(mid).total > rect.h) hi = mid;
+    else lo = mid;
+  }
+  const { rows, heights } = rowsAt(lo);
+
+  let y = rect.y;
+  rows.forEach((row, ri) => {
+    const last = ri === rows.length - 1;
+    const h = Math.max(1, last ? rect.y + rect.h - y : Math.round(heights[ri]));
+    let x = rect.x;
+    for (let i = row.from; i < row.to; i++) {
+      const lastInRow = i === row.to - 1;
+      const w = Math.max(
+        1,
+        lastInRow ? rect.x + rect.w - x : Math.round((aspects[i] / row.aspect) * rect.w),
+      );
+      assign(items[i], { x, y, w: Math.max(1, Math.min(w, rect.x + rect.w - x)), h });
+      x += w;
+      if (x >= rect.x + rect.w) break;
+    }
+    y += h;
+    if (y >= rect.y + rect.h) return;
+  });
 }
 
 function placeDir(dir: DirNode, slot: IntRect): void {
@@ -688,6 +787,14 @@ function placeDir(dir: DirNode, slot: IntRect): void {
     w: Math.max(1, own.w - 2 * pad),
     h: Math.max(1, own.h - 2 * pad - label),
   };
+
+  // A directory of nothing but pictures is laid out as rows rather than as a
+  // treemap; see `layoutPictureRows`.
+  const pictures = dir.children.every((c) => c.kind === 'file' && c.media);
+  if (pictures && dir.children.length > 1) {
+    layoutPictureRows(dir.children as FileNode[], inner, placeFile);
+    return;
+  }
 
   layoutTreemap(dir.children, inner, (child, childSlot) => {
     if (child.kind === 'file') placeFile(child, childSlot);
