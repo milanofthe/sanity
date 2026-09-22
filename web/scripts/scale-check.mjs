@@ -50,9 +50,13 @@ for (const n of SIZES) {
       app.cam.x = x;
       app.cam.y = y;
       let streamed = 0;
-      for (let i = 0; i < 120 && (i < 2 || app.scene.stats.streamMs > 0); i++) {
+      // Until the detail has streamed in and, in the far view, the tiles for
+      // this level exist: what is measured is looking at the view, not
+      // arriving at it.
+      for (let i = 0; i < 600; i++) {
         await frames(1);
         streamed += app.scene.stats.streamMs;
+        if (i > 2 && !app.scene.streamPending && !app.scene.tilesPending) break;
       }
       const xs = [];
       for (let i = 0; i < 21; i++) {

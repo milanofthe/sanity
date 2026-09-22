@@ -203,6 +203,12 @@ const TILE_RETRIES = 3;
  *  it, as opposed to the view moving; see `renderFar`. */
 const REST_MIN_MS = 250;
 
+/** Time a frame at rest may spend making the tiles for its view. */
+const REST_TILE_BUDGET_MS = 4;
+
+/** How long the camera has to be still before the rest image is drawn. */
+const REST_QUIET_MS = 150;
+
 const RECT_STRIDE = 12;
 const OVERVIEW_STRIDE = 11;
 const SPAN_STRIDE = 6;
@@ -1333,6 +1339,7 @@ export class Scene {
     const moving =
       cam.x !== this.camWas.x || cam.y !== this.camWas.y || cam.zoom !== this.camWas.zoom;
     this.cameraStill = !moving;
+    if (moving) this.movedAt = performance.now();
     this.camWas.x = cam.x;
     this.camWas.y = cam.y;
     this.camWas.zoom = cam.zoom;
@@ -2155,7 +2162,7 @@ export class Scene {
    */
   private rest: {
     tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number;
-    x: number; y: number; zoom: number; dirty: boolean;
+    x: number; y: number; zoom: number; dpr: number; dirty: boolean;
     lacking: boolean; renderedAt: number; retries: number;
   } | null = null;
 
@@ -2180,8 +2187,10 @@ export class Scene {
       const tex = gl.createTexture()!;
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      // Linear: drawn 1:1 at rest it samples texel centres and is exact, and
+      // drawn shifted or scaled under the tiles while moving it is smooth.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       const fbo = gl.createFramebuffer()!;
@@ -2189,7 +2198,7 @@ export class Scene {
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       r = {
-        tex, fbo, w, h, x: 0, y: 0, zoom: 0, dirty: true,
+        tex, fbo, w, h, x: 0, y: 0, zoom: 0, dpr: 1, dirty: true,
         lacking: false, renderedAt: 0, retries: 0,
       };
       this.rest = r;
@@ -2206,12 +2215,15 @@ export class Scene {
     r.x = cam.x;
     r.y = cam.y;
     r.zoom = cam.zoom;
+    r.dpr = cam.dpr;
     r.dirty = false;
     r.lacking = this.bakeLacking;
     r.renderedAt = performance.now();
   }
   /** Set while the rest image is drawn, so missing detail is noted. */
   private restDrawing = false;
+  /** When the camera last moved, for how long the view has been at rest. */
+  private movedAt = 0;
 
   /**
    * Whether this frame is drawn from tiles.
@@ -2277,6 +2289,11 @@ export class Scene {
     // Drawn live over the tiles or the rest image: what is changing, the
     // panel under the pointer, and the pictures.
     const [lx0, ly0, lx1, ly1] = cam.visibleRect(0);
+    // Tile indices covering the view at a level.
+    const range = (l: number): [number, number, number, number] => {
+      const s = tileWorld(l);
+      return [Math.floor(lx0 / s), Math.floor(ly0 / s), Math.floor(lx1 / s), Math.floor(ly1 / s)];
+    };
     const live = new Set<SceneFile>(this.active);
     if (this.hoveredPath) {
       const h = this.files.get(this.hoveredPath);
@@ -2293,7 +2310,15 @@ export class Scene {
       });
     };
 
-    if (this.cameraStill) {
+    // At rest only once it has stayed there a moment. A pan does not move
+    // the camera on every frame, since input arrives at its own rate, and a
+    // single frame without movement in the middle of one drew the rest image,
+    // a full live frame, 65 milliseconds at a hundred thousand files.
+    const quiet = this.cameraStill && performance.now() - this.movedAt >= REST_QUIET_MS;
+    // Still, but not for long enough: keep drawing, so the rest image is made
+    // once it has been without anyone having to move the camera again.
+    const settling = this.cameraStill && !quiet;
+    if (quiet) {
       const r = this.rest;
       // Drawn again once the detail it lacked has had time to arrive, as the
       // tiles are; see TILE_RETRY_MS.
@@ -2310,7 +2335,8 @@ export class Scene {
       // frame, for four minutes.
       const stale = r !== null && r.dirty && r.x === cam.x && r.y === cam.y
         && r.zoom === cam.zoom && now - r.renderedAt < REST_MIN_MS;
-      if (!stale && !this.restFits(cam)) this.renderRest(cam, (f) => live.has(f));
+      const drewRest = !stale && !this.restFits(cam);
+      if (drewRest) this.renderRest(cam, (f) => live.has(f));
       const rr = this.rest!;
       this.tilesPending = stale || rr.dirty || (rr.lacking && rr.retries < TILE_RETRIES);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -2336,61 +2362,23 @@ export class Scene {
       gl.enable(gl.BLEND);
       gl.uniform4f(this.uImage.uUv, 0, 0, 1, 1);
       drawLive();
+      // Tiles for this view, made while nothing else is happening, so the
+      // first pan away from it already has them. Not in a frame that just
+      // drew the rest image, which has spent its time.
+      if (!drewRest) {
+        const work = this.tileWork(this.tileLevel(cam), range, REST_TILE_BUDGET_MS, cam.dpr);
+        if (work.pending) this.tilesPending = true;
+      }
       return this.estimateInView(cam);
     }
-    const px = cam.zoom * cam.dpr;
-    // Down, not to the nearest: a tile is then never drawn larger than it
-    // was rendered, only up to half its size through its mip chain. Rounded
-    // to the nearest level it was magnified by up to 1.41, and the far view
-    // came out visibly softer than the live one.
-    const level = Math.floor(Math.log2(1 / px));
-    const [vx0, vy0, vx1, vy1] = cam.visibleRect(0);
-    const range = (l: number) => {
-      const s = tileWorld(l);
-      return [Math.floor(vx0 / s), Math.floor(vy0 / s), Math.floor(vx1 / s), Math.floor(vy1 / s)];
-    };
+    const level = this.tileLevel(cam);
 
-    // Render what is missing or out of date, nearest the middle first.
-    const [tx0, ty0, tx1, ty1] = range(level);
-    const todo: [number, number, number][] = [];
-    let missing = 0;
-    const cx = (tx0 + tx1) / 2;
-    const cy = (ty0 + ty1) / 2;
-    const now = performance.now();
-    let waiting = false;
-    for (let ty = ty0; ty <= ty1; ty++) {
-      for (let tx = tx0; tx <= tx1; tx++) {
-        const t = this.tiles.get(level, tx, ty);
-        if (!t) missing++;
-        // A tile drawn before its panels' detail was in is drawn again once
-        // it has had time to arrive, a few times at most: detail arriving
-        // does not mark tiles out of date by itself, since that made every
-        // layer written a tile rendered, which fed itself for twenty seconds
-        // on thirty thousand files.
-        const retry = t !== undefined && t.lacking && t.retries < TILE_RETRIES
-          && !this.streamPending;
-        if (t?.lacking && t.retries < TILE_RETRIES) waiting = true;
-        if (retry && now - t.renderedAt >= TILE_RETRY_MS) {
-          t.retries++;
-          t.dirty = true;
-        }
-        if (!t || t.dirty) todo.push([tx, ty, (t ? 1e6 : 0) + Math.hypot(tx - cx, ty - cy)]);
-      }
-    }
-    todo.sort((a, b) => a[2] - b[2]);
-    const t0 = performance.now();
-    let done = 0;
-    for (const [tx, ty] of todo) {
-      if (performance.now() - t0 > TILE_BUDGET_MS && done > 0) break;
-      const had = this.tiles.get(level, tx, ty);
-      this.renderTile(level, tx, ty, cam.dpr);
-      if (!had) missing--;
-      done++;
-    }
-    this.tilesPending = done < todo.length || waiting;
+    const work = this.tileWork(level, range, TILE_BUDGET_MS, cam.dpr);
+    const missing = work.missing;
+    this.tilesPending = work.pending || settling;
 
-    // Nothing covers the view yet: this frame live, as before tiles.
-    if (missing > 0 && this.tiles.size <= done) {
+    // Nothing at all covers the view: this frame live, as before tiles.
+    if (missing > 0 && !this.rest && this.tiles.size <= work.done) {
       this.tilesPending = true;
       return this.drawView(cam, dt, LIVE);
     }
@@ -2417,6 +2405,18 @@ export class Scene {
     gl.uniform4f(this.uImage.uUv, g, 1 - g, 1 - g, g);
     gl.activeTexture(gl.TEXTURE0);
     quadAttrib(gl, this.progImage, this.quad);
+    // The view as it was at rest, under everything, so a pan starting from
+    // rest has no holes while the tiles for it are still being made.
+    const rest = this.rest;
+    if (missing > 0 && rest && !rest.dirty) {
+      const ww = rest.w / (rest.zoom * rest.dpr);
+      const wh = rest.h / (rest.zoom * rest.dpr);
+      gl.uniform4f(this.uImage.uUv, 0, 1, 1, 0);
+      gl.bindTexture(gl.TEXTURE_2D, rest.tex);
+      gl.uniform4f(this.uImage.uRect, rest.x - ww / 2, rest.y - wh / 2, ww, wh);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.uniform4f(this.uImage.uUv, g, 1 - g, 1 - g, g);
+    }
     const levels = missing > 0 ? [level + 2, level + 1, level - 1, level] : [level];
     for (const l of levels) {
       const s = tileWorld(l);
@@ -2436,6 +2436,69 @@ export class Scene {
 
     drawLive();
     return this.estimateInView(cam);
+  }
+
+  /**
+   * Render the tiles of a level over the view that are missing or out of
+   * date, nearest the middle first, inside a time budget. At least one per
+   * call, so a tile slower than the budget still gets made.
+   */
+  private tileWork(
+    level: number,
+    range: (l: number) => [number, number, number, number],
+    budgetMs: number,
+    dpr: number,
+  ): { missing: number; done: number; pending: boolean } {
+    const [tx0, ty0, tx1, ty1] = range(level);
+    const todo: [number, number, number][] = [];
+    let missing = 0;
+    const cx = (tx0 + tx1) / 2;
+    const cy = (ty0 + ty1) / 2;
+    const now = performance.now();
+    let waiting = false;
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const t = this.tiles.get(level, tx, ty);
+        if (!t) missing++;
+        // A tile drawn before its panels' detail was in is drawn again once
+        // it has had time to arrive, a few times at most: detail arriving
+        // does not mark tiles out of date by itself, since that made every
+        // layer written a tile rendered, which fed itself for twenty seconds
+        // on thirty thousand files.
+        if (t?.lacking && t.retries < TILE_RETRIES) {
+          waiting = true;
+          if (!this.streamPending && now - t.renderedAt >= TILE_RETRY_MS) {
+            t.retries++;
+            t.dirty = true;
+          }
+        }
+        if (!t || t.dirty) todo.push([tx, ty, (t ? 1e6 : 0) + Math.hypot(tx - cx, ty - cy)]);
+      }
+    }
+    todo.sort((a, b) => a[2] - b[2]);
+    const t0 = performance.now();
+    let done = 0;
+    for (const [tx, ty] of todo) {
+      if (performance.now() - t0 > budgetMs && done > 0) break;
+      const had = this.tiles.get(level, tx, ty);
+      this.renderTile(level, tx, ty, dpr);
+      if (!had) missing--;
+      done++;
+    }
+    return { missing, done, pending: done < todo.length || waiting };
+  }
+
+  /**
+   * The tile level for a zoom: the one whose texels are nearest the screen's
+   * pixels. To the nearest rather than down, which would never magnify a
+   * tile but needs up to four times the tiles: tiles are what the view is
+   * drawn from while it moves, soft by construction, since they are
+   * resampled twice, and measured against the live frame the nearest level
+   * came out 7.3 off and the level below 8.5, the extra minification adding
+   * softness of its own. At rest the rest image is drawn instead.
+   */
+  private tileLevel(cam: Camera): number {
+    return Math.round(Math.log2(1 / (cam.zoom * cam.dpr)));
   }
 
   /** Panels in view, estimated from the share of the layout it covers. */
