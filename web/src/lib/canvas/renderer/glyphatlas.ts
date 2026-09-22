@@ -8,6 +8,7 @@
 // hides which of the two is in use.
 
 import { font } from '$lib/metrics';
+import { BASELINE_RATIO, CELL_RATIO, baselineAt, exactSize, oneToOne } from './glyphsize';
 
 /** First and last code point in the atlas. Printable ASCII covers essentially
  *  all of what code looks like at a glance; anything else renders as a box. */
@@ -38,11 +39,7 @@ interface Level {
   texH: number;
 }
 
-/** Cell height as a multiple of the em size, and where the baseline sits in
- *  the cell. Anything that places a glyph box has to use the same two
- *  numbers the cells were rasterised with. */
-export const CELL_RATIO = 1.4;
-export const BASELINE_RATIO = 1.05;
+export { BASELINE_RATIO, CELL_RATIO };
 
 export class GlyphAtlas {
   private levels: Level[] = [];
@@ -83,7 +80,7 @@ export class GlyphAtlas {
     ctx.font = `${size}px ${font.mono}`;
     ctx.fillStyle = '#fff';
     ctx.textBaseline = 'alphabetic';
-    const baseline = Math.round(size * BASELINE_RATIO);
+    const baseline = GlyphAtlas.baselineAt(size);
     for (let i = 0; i < GLYPH_COUNT; i++) {
       const gx = (i % GRID_COLS) * cellW;
       const gy = Math.floor(i / GRID_COLS) * cellH;
@@ -118,7 +115,7 @@ export class GlyphAtlas {
    * frame.
    */
   pick(emPixels: number, exact = false): Level {
-    const want = Math.max(8, Math.min(240, Math.round(emPixels)));
+    const want = GlyphAtlas.exactSize(emPixels);
     if (exact) {
       const held = this.exact.get(want);
       if (held) {
@@ -150,6 +147,10 @@ export class GlyphAtlas {
       this.exact.delete(size);
     }
   }
+
+  static readonly exactSize = exactSize;
+  static readonly oneToOne = oneToOne;
+  static readonly baselineAt = baselineAt;
 
   /** Index into the atlas for a code point, or -1 when it has no glyph. */
   static index(code: number): number {

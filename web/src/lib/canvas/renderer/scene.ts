@@ -1151,6 +1151,7 @@ export class Scene {
     this.camWas.zoom = cam.zoom;
     this.media?.tick(moving);
     this.dpr = cam.dpr;
+    this.measureInk(cam.zoom, cam.dpr);
     for (const b of this.overviewByChunk.values()) b.reset();
 
     let stillAnimating = false;
@@ -1335,11 +1336,36 @@ export class Scene {
    * descender, puts it back inside the bar and reads better besides.
    */
   private chromeTop(top: number, barH: number): number {
-    const em = metrics.charWidth / this.atlas.advanceRatio;
-    const baseline = em * BASELINE_RATIO;
-    const cap = baseline - em * this.atlas.capRatio;
-    const tail = baseline + em * this.atlas.descenderRatio;
+    const em = this.inkEm;
+    const cap = this.inkBaseline - em * this.atlas.capRatio;
+    const tail = this.inkBaseline + em * this.atlas.descenderRatio;
     return top + (barH - (tail - cap)) / 2 - cap;
+  }
+
+  /**
+   * The em and baseline glyphs are drawn at on this frame, in world units.
+   *
+   * The nominal ones while the camera moves, since a fixed level is scaled to
+   * exactly the nominal em. At rest the exact atlas is built at a whole pixel
+   * size and drawn 1:1, so the ink is up to half a pixel larger or smaller
+   * than nominal and its baseline sits wherever the cell's rounded baseline
+   * puts it. Placing text by the nominal numbers then let a descender on a
+   * panel's last line reach most of a pixel past the panel's edge.
+   */
+  private inkEm = 0;
+  private inkBaseline = 0;
+
+  private measureInk(zoom: number, dpr: number): void {
+    const nominal = metrics.charWidth / this.atlas.advanceRatio;
+    const scalePx = zoom * dpr;
+    if (this.cameraStill && this.exactGlyphAtlas && GlyphAtlas.oneToOne(nominal * scalePx)) {
+      const size = GlyphAtlas.exactSize(nominal * scalePx);
+      this.inkEm = size / scalePx;
+      this.inkBaseline = GlyphAtlas.baselineAt(size) / scalePx;
+    } else {
+      this.inkEm = nominal;
+      this.inkBaseline = nominal * BASELINE_RATIO;
+    }
   }
 
   /**
@@ -1357,8 +1383,8 @@ export class Scene {
    * They did not at first, which left the numbers a pixel below their code.
    */
   private lineLift(): number {
-    const em = metrics.charWidth / this.atlas.advanceRatio;
-    return -Math.max(0, em * (BASELINE_RATIO + this.atlas.descenderRatio) - metrics.lineHeight);
+    const bottom = this.inkBaseline + this.inkEm * this.atlas.descenderRatio;
+    return -Math.max(0, bottom - metrics.lineHeight);
   }
 
   private pushText(
@@ -1788,15 +1814,10 @@ export class Scene {
     }
   }
 
-  /** Which lines of which code columns of this file are on screen. */
-  /**
-   * Which lines of which code columns of this file are on screen.
-   *
-   * `colX` is where the column's text begins, past the line-number margin.
-   * The margin is part of the layout, so every pass that draws into a column
-   * has to skip it, and having `visibleRuns` return the text origin rather
-   * than the column origin means none of them can forget.
-   */
+  /** Reused by `visibleRuns`, which yields it rather than a fresh tuple: the
+   *  consumers destructure it immediately and none of them keeps it. */
+  private runTuple: [number, number, number, number] = [0, 0, 0, 0];
+
   /**
    * Which screen rows of which code columns of this file are on screen.
    *
@@ -1804,10 +1825,6 @@ export class Scene {
    * rows and the passes lay out by row. `colX` is where the column's text
    * begins, past the line-number margin, so no pass can forget the margin.
    */
-  /** Reused by `visibleRuns`, which yields it rather than a fresh tuple: the
-   *  consumers destructure it immediately and none of them keeps it. */
-  private runTuple: [number, number, number, number] = [0, 0, 0, 0];
-
   private *visibleRuns(
     f: SceneFile, vx0: number, vy0: number, vx1: number, vy1: number,
   ): Generator<[column: number, colX: number, firstRow: number, lastRow: number]> {
@@ -1839,10 +1856,6 @@ export class Scene {
     }
   }
 
-  /**
-   * The source line and wrap index at a screen row, and the row's y offset
-   * within its column.
-   */
   /**
    * Source line, wrapped row within it, and world y for a screen row.
    *
@@ -2111,7 +2124,7 @@ export class Scene {
     gl.uniform2f(this.uGlyph.uBoxPx, level.cellW, level.cellH);
     gl.uniform1f(
       this.uGlyph.uEmWorld,
-      exact
+      exact && GlyphAtlas.oneToOne(em * dpr)
         ? metrics.charWidth / this.atlas.advanceRatio
         : level.size / Math.max(1e-6, scalePx),
     );

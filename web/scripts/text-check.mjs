@@ -21,7 +21,7 @@ const ZOOMS = Array.from({ length: 12 }, (_, i) => 8 + i * 1.9);
 /**
  * Largest share of edge pixels that may sit mid-ramp at any one zoom.
  *
- * Measured, mean and worst over these zooms: 13.4 and 16.3 percent at dpr 1,
+ * Measured, mean and worst over these zooms: 13.8 and 18.0 percent at dpr 1,
  * 12.1 and 17.4 at dpr 2. With the cell scaled by the rounding of the atlas
  * size it was 14.8 and 18.9, 13.2 and 19.7, so this sits between the two.
  */
