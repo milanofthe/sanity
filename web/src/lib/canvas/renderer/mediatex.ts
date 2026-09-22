@@ -38,14 +38,26 @@ const BUDGET_BYTES = 64 * 1024 * 1024;
 const MIN_LEVEL = 32;
 const MAX_LEVEL = 2048;
 
-/** Decodes in flight. Two, because a decode is off-thread but the upload that
- *  follows is not, and a burst of them shows up as dropped frames. */
-const MAX_IN_FLIGHT = 2;
+/** Decodes in flight. The decode itself is off-thread, so this is about how
+ *  much upload work can be queued up behind it; four keeps the thread busy
+ *  without letting a burst of uploads land in one frame. */
+const MAX_IN_FLIGHT = 4;
 
-/** Bounds on the spacing between decode starts. The floor is a frame, so a
- *  handful of small pictures still arrive at once; the ceiling keeps a folder
- *  of very large ones from taking minutes to fill in. */
-const MIN_GAP_MS = 16;
+/**
+ * Main-thread milliseconds a frame may spend bringing pictures in.
+ *
+ * A budget rather than a fixed gap between starts. The gap was 16 ms, which
+ * made sense when a decode meant reading a multi-megabyte source, and became
+ * the only thing that mattered once the backend started handing over 128
+ * pixel thumbnails: 118 of them took 2.5 seconds to appear, arriving one per
+ * frame, while the work itself was under a second. Charged against what each
+ * one actually costs, they arrive as fast as the frame can carry them and no
+ * faster.
+ */
+const FRAME_BUDGET_MS = 8;
+
+/** And a ceiling on the wait when a single decode is expensive, so a folder
+ *  of very large sources still fills in rather than stalling. */
 const MAX_GAP_MS = 200;
 
 /** How long the camera has to be still before decoding resumes. A tenth of a
@@ -179,6 +191,7 @@ export class MediaTextures {
   private decodes = 0;
   private fetched = 0;
   private decodeMs = 0;
+  private fetchMs = 0;
   private uploadMs = 0;
   private worstUpload = 0;
   private worstDecode = 0;
@@ -220,6 +233,7 @@ export class MediaTextures {
     this.clock++;
     this.askedBefore = Math.max(1, this.askedNow);
     this.askedNow = 0;
+    this.spentThisFrame = 0;
     if (moving) this.movedAt = performance.now();
     this.schedule();
   }
@@ -302,12 +316,22 @@ export class MediaTextures {
     this.schedule();
   }
 
-  /** Milliseconds to leave between decode starts: half again what the last
-   *  ones cost, so a folder of large screenshots paces itself wider than a
-   *  folder of icons does, inside fixed bounds. */
+  /**
+   * How long to wait before the next start.
+   *
+   * Zero while this frame still has budget left: what a picture costs is
+   * charged against `FRAME_BUDGET_MS`, and cheap ones therefore come in
+   * several to a frame. Once the budget is spent the wait is the rest of the
+   * frame, and for a picture that costs more than a whole frame on its own it
+   * is what that one cost, capped.
+   */
   private gap(): number {
-    return Math.min(MAX_GAP_MS, Math.max(MIN_GAP_MS, this.decodeEma * 1.5));
+    if (this.spentThisFrame < FRAME_BUDGET_MS) return 0;
+    return Math.min(MAX_GAP_MS, Math.max(16, this.decodeEma));
   }
+
+  /** Main-thread time charged to pictures in the current frame. */
+  private spentThisFrame = 0;
 
   /**
    * Ask for the next start at the time it is due.
@@ -368,9 +392,13 @@ export class MediaTextures {
       void this.decode(path, next.level).finally(() => {
         this.inFlight--;
         this.loading.delete(path);
-        this.schedule();
+        // Straight back into the pump rather than through a timer: a timer
+        // per picture is a timer per picture, and nested `setTimeout(0)` is
+        // clamped to about four milliseconds, which on a folder of a hundred
+        // thumbnails was most of the time they took to appear.
+        this.pump();
       });
-      if (!this.hurry) break;
+      if (!this.hurry && this.spentThisFrame >= FRAME_BUDGET_MS) break;
     }
     this.schedule();
   }
@@ -380,6 +408,7 @@ export class MediaTextures {
     // document has to be rasterised at a size, and only the source knows how.
     const started = performance.now();
     const bytes = await this.fetchBytes(path, level).catch(() => null);
+    this.fetchMs += performance.now() - started;
     if (!bytes || bytes.byteLength === 0) {
       this.failed.add(path);
       return;
@@ -401,10 +430,12 @@ export class MediaTextures {
     const took = performance.now() - started;
     this.decodeMs += took;
     this.decodeEma = this.decodeEma * 0.7 + took * 0.3;
+    this.spentThisFrame += took;
     this.worstDecode = Math.max(this.worstDecode, took);
     const up = performance.now();
     this.upload(path, bitmap);
     this.uploadMs += performance.now() - up;
+    this.spentThisFrame += performance.now() - up;
     this.worstUpload = Math.max(this.worstUpload, performance.now() - up);
     bitmap.close();
     this.onLoaded();
@@ -486,6 +517,7 @@ export class MediaTextures {
     decodes: number;
     fetched: number;
     decodeMs: number;
+    fetchMs: number;
     uploadMs: number;
     worstUpload: number;
     worstDecode: number;
@@ -497,6 +529,7 @@ export class MediaTextures {
       decodes: this.decodes,
       fetched: this.fetched,
       decodeMs: this.decodeMs,
+      fetchMs: this.fetchMs,
       uploadMs: this.uploadMs,
       worstUpload: this.worstUpload,
       worstDecode: this.worstDecode,
