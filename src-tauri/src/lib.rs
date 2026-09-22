@@ -24,6 +24,10 @@ pub struct FileInfo {
     /// draw it as a placeholder: the contents were never read.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub ignored: bool,
+    /// Language the file was tokenised under. Taken from the payload rather
+    /// than from the extension, because a notebook says which language its
+    /// cells are in and the extension does not.
+    pub lang: u32,
     #[serde(rename = "lineCount")]
     pub line_count: u32,
     /// 90th percentile of line widths: what the panel is *sized* for. The
@@ -74,6 +78,10 @@ pub struct GroupInfo {
     pub id: String,
     pub files: u32,
     pub lines: u32,
+    /// Language id this extension is read under, 0 for one nothing claims.
+    /// The picker turns it into the same family colour the canvas tints with,
+    /// so the list of file types doubles as the legend for that.
+    pub lang: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -311,8 +319,20 @@ fn groups_from(files: &[FileInfo]) -> Vec<GroupInfo> {
             Some(g) => {
                 g.files += 1;
                 g.lines += f.line_count;
+                // The first file in the group that names a language speaks
+                // for it: a folder of `.ipynb` is Python because its
+                // notebooks say so, and one stray unreadable file should not
+                // decide the colour.
+                if g.lang == 0 {
+                    g.lang = f.lang;
+                }
             }
-            None => groups.push(GroupInfo { id: ext, files: 1, lines: f.line_count }),
+            None => groups.push(GroupInfo {
+                id: ext,
+                files: 1,
+                lines: f.line_count,
+                lang: f.lang,
+            }),
         }
     }
     groups.sort_by(|a, b| b.lines.cmp(&a.lines));
@@ -325,6 +345,7 @@ fn file_info(rel: &str, data: &FileData, info: &ScannedFile) -> FileInfo {
     FileInfo {
         path: rel.to_string(),
         ignored: false,
+        lang: data.lang_id,
         line_count: info.line_count,
         max_cols: width_percentile(&data.line_cols, 0.9),
         clip_cols: info.max_cols,
@@ -345,6 +366,10 @@ fn ignored_info(rel: &str) -> FileInfo {
     FileInfo {
         path: rel.to_string(),
         ignored: true,
+        // Never read, so the extension is all there is to go on.
+        lang: sanity_core::lang::lang_id_for_extension(
+            rel.rsplit('.').next().filter(|e| !e.contains('/')).unwrap_or(""),
+        ),
         line_count: 0,
         max_cols: 0,
         clip_cols: 0,

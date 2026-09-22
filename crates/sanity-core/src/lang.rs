@@ -387,6 +387,26 @@ pub fn syntax_for_extension(ext: &str) -> Option<(u32, &'static str, &'static Sy
         .map(|(id, name, _, syn)| (*id, *name, *syn))
 }
 
+/// The language id an extension is tokenised under, grammar or lexer, and 0
+/// for one nothing claims.
+///
+/// The ids are what the payload header carries and what the frontend maps to
+/// a language family, so this is how a file type in the picker can be shown
+/// in the same colour the canvas tints it with. Reads the entry table rather
+/// than the built grammars, so it costs nothing and works before any grammar
+/// has been loaded.
+pub fn lang_id_for_extension(ext: &str) -> u32 {
+    let lower = ext.to_ascii_lowercase();
+    if let Some(entry) = entries().iter().find(|e| e.extensions.contains(&lower.as_str())) {
+        return entry.id;
+    }
+    LEXED
+        .iter()
+        .find(|(_, _, exts, _)| exts.contains(&lower.as_str()))
+        .map(|(id, _, _, _)| *id)
+        .unwrap_or(0)
+}
+
 /// Registry name of whatever handles this extension, grammar or lexer. Used by
 /// the coverage report, which has to be able to name what it measured.
 pub fn language_name_for_extension(ext: &str) -> Option<&'static str> {
@@ -445,6 +465,23 @@ pub fn extension_of(path: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    // The picker colours a file type by the family its language belongs to,
+    // which needs the id an extension tokenises under without loading a
+    // grammar to find it.
+    #[test]
+    fn an_extension_reports_the_language_id_it_is_read_under() {
+        assert_eq!(lang_id_for_extension("rs"), lang_id_for_extension("rs"));
+        assert!(lang_id_for_extension("rs") > 0);
+        assert!(lang_id_for_extension("py") > 0);
+        assert_ne!(lang_id_for_extension("rs"), lang_id_for_extension("py"));
+        // A lexer language, whose ids continue the same sequence.
+        assert!(lang_id_for_extension("cir") > 0);
+        // And something no one claims.
+        assert_eq!(lang_id_for_extension("zzz"), 0);
+        // Case does not matter.
+        assert_eq!(lang_id_for_extension("PY"), lang_id_for_extension("py"));
+    }
+
     use super::*;
 
     #[test]

@@ -13,6 +13,7 @@
 	// sets is better than two where half of them were set for him.
 	import Segmented from '$lib/ui/Segmented.svelte';
 	import Switch from '$lib/ui/Switch.svelte';
+	import { familyOf } from '$lib/canvas/language';
 	import { project, VIEW_MODES, type ViewMode } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 
@@ -31,6 +32,22 @@
 	};
 	const share = (lines: number) =>
 		project.totalLines > 0 ? lines / project.totalLines : 0;
+
+	/**
+	 * The theme colour of a file type's language family.
+	 *
+	 * The same six data hues the canvas tints with at the outermost zoom, so
+	 * this list is the legend for that: a directory of YAML reads as a
+	 * different kind of thing there, and this says which kind. A type nothing
+	 * claims, and the folded `other` row, take the faint text colour rather
+	 * than a hue they do not have.
+	 */
+	const familyColour = (lang: number | undefined) => {
+		const family = familyOf(lang ?? 0);
+		return family >= 0 && (lang ?? 0) > 0
+			? `var(--data-${family + 1})`
+			: 'var(--reduced-ink)';
+	};
 </script>
 
 <div class="picker">
@@ -47,6 +64,7 @@
 		{#each project.groups as g (g.id)}
 			<div class="row" style:--share={`${(share(g.lines) * 100).toFixed(1)}%`}>
 				<span class="col-name">
+					<span class="family" style:background={familyColour(g.lang)}></span>
 					<span class="name">{g.id}</span>
 					{#if g.id === 'other'}
 						<span class="why">under 0.5%</span>
@@ -190,6 +208,14 @@
 		align-items: center;
 		gap: var(--sp-2);
 		min-width: 0;
+	}
+	/* The family's colour, as a mark in front of the type. Square and small:
+	   it is a legend entry, not a control. */
+	.family {
+		width: var(--sp-2);
+		height: var(--sp-2);
+		flex: none;
+		border-radius: var(--radius);
 	}
 	.name {
 		font-family: var(--font-mono);

@@ -34,7 +34,8 @@ fn main() {
     let listed = scan::list_files(&root).expect("list files");
 
     let mut files = Vec::new();
-    let mut groups: Vec<(String, u32, u32)> = Vec::new();
+    // Extension, files, lines, and the language its files are read under.
+    let mut groups: Vec<(String, u32, u32, u32)> = Vec::new();
     let mut texts: Vec<(String, String)> = Vec::new();
     // Payloads are held undecoded until the change state has been stamped in,
     // because the state is part of the payload and git answers for the whole
@@ -54,12 +55,15 @@ fn main() {
             continue;
         }
         let ext = extension_of(rel).unwrap_or("(none)").to_ascii_lowercase();
-        match groups.iter_mut().find(|(e, _, _)| *e == ext) {
+        match groups.iter_mut().find(|(e, _, _, _)| *e == ext) {
             Some(g) => {
                 g.1 += 1;
                 g.2 += info.line_count;
+                if g.3 == 0 {
+                    g.3 = data.lang_id;
+                }
             }
-            None => groups.push((ext, 1, info.line_count)),
+            None => groups.push((ext, 1, info.line_count, data.lang_id)),
         }
 
         let cols = percentile(&data.line_cols, 0.9);
@@ -126,7 +130,11 @@ fn main() {
     groups.sort_by_key(|g| std::cmp::Reverse(g.2));
     let groups_json: Vec<String> = groups
         .iter()
-        .map(|(id, f, l)| format!(r#"{{"id":{},"files":{f},"lines":{l}}}"#, json_string(id)))
+        // The language goes with the group, so the demo's picker colours a
+        // file type the way the app's does.
+        .map(|(id, f, l, lang)| {
+            format!(r#"{{"id":{},"files":{f},"lines":{l},"lang":{lang}}}"#, json_string(id))
+        })
         .collect();
 
     let scan_json = format!(

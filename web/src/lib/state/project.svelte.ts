@@ -32,6 +32,10 @@ export interface FileGroup {
 	id: string;
 	files: number;
 	lines: number;
+	/** Language id this extension is read under, 0 for one nothing claims.
+	 *  The picker turns it into a family colour, which is the same colour the
+	 *  canvas tints the file with. */
+	lang?: number;
 	/** Set by the scan when this group was classified as generated; the string
 	 *  is the reason, so the UI can say why rather than just hiding things. */
 	mode: ViewMode;
@@ -129,7 +133,7 @@ class ProjectState {
 			// its files, and folding them into "other" would leave no way to
 			// turn them off.
 			if (r.lines / total < MINOR_LINE_SHARE && r.files / totalFiles < MINOR_FILE_SHARE) {
-				minor ??= { id: 'other', files: 0, lines: 0, mode: 'full' };
+				minor ??= { id: 'other', files: 0, lines: 0, lang: 0, mode: 'full' };
 				minor.files += r.files;
 				minor.lines += r.lines;
 				continue;
