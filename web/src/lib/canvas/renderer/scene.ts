@@ -211,6 +211,30 @@ const FLASH_WASH = 0.55;
  *  renders. */
 const MEDIA_MIN_PX = 24;
 
+/**
+ * How much of a line box a token bar is worth, as ink.
+ *
+ * A bar stands in for a word, and a word is mostly background: rasterising
+ * the 86 characters code is made of at the atlas size puts the ink at 15.2
+ * percent of a character cell, which is 21.3 percent of a line box. So the
+ * bar's colour is the average of the glyph and what is behind it, and this is
+ * the weight.
+ *
+ * It is not that 21.3 percent, though, and the difference is worth stating:
+ * the overview texture the bars take over from is rasterised with its own
+ * saturation weighting and comes out far stronger than the ink alone. Averaged
+ * at the honest 0.21 the panel loses a third of its luminance the moment the
+ * bars arrive. Measured across the hand-over, as spread in mean luminance:
+ *
+ *   0.21   18.8, the bars are visibly weaker than both neighbours
+ *   0.30   16.0
+ *   0.42   12.3
+ *   0.55    8.8
+ *   0.68    6.7, flattest, and still an average rather than the flat token
+ *          colour a bar used to be drawn in
+ */
+const BAR_INK = 0.68;
+
 const STUB_MIN_PX = 1.5;
 
 /**
@@ -663,12 +687,33 @@ export class Scene {
     });
   }
 
-  /** Bar colours for this frame: the texture's palette, moving to the full one
-   *  as the glyphs come up. */
-  private writeSpanFlat(toGlyphs: number): void {
+  /**
+   * Bar colours for this frame.
+   *
+   * A bar stands in for a word, and a word is mostly background: the ink of
+   * the rasterised font covers 15.2 percent of a character cell, which is
+   * 21.3 percent of a line box. Drawn in the token's own colour a bar is
+   * therefore a solid block where the text it replaces is a few strokes, and
+   * that is the step you see at the hand-over, in both directions. So the
+   * colour is the average of the glyph and what is behind it, weighted by how
+   * much of the line the bar covers: a shorter bar has to be stronger to carry
+   * the same ink.
+   *
+   * From there it moves to the full token colour as the glyphs come up, since
+   * by then the glyphs are drawing the ink and the bars are only supporting
+   * them.
+   */
+  private writeSpanFlat(toGlyphs: number, barFill: number): void {
     const k = Math.min(1, Math.max(0, toGlyphs));
-    for (let i = 0; i < this.spanFlat.length; i++) {
-      this.spanFlat[i] = this.ovFlat[i] + (this.kindFlat[i] - this.ovFlat[i]) * k;
+    const mix = Math.min(1, BAR_INK / Math.max(0.05, barFill));
+    const [br, bg, bb] = rgb(this.pal.surface.panelBg);
+    for (let i = 0; i < this.spanFlat.length; i += 3) {
+      const back = [br, bg, bb];
+      for (let c = 0; c < 3; c++) {
+        // The bar as the average of glyph and background.
+        const averaged = back[c] + (this.kindFlat[i + c] - back[c]) * mix;
+        this.spanFlat[i + c] = averaged + (this.kindFlat[i + c] - averaged) * k;
+      }
     }
   }
 
@@ -1195,7 +1240,7 @@ export class Scene {
     this.drawRects(this.bgRects);
     this.drawOverview();
     this.drawImages();
-    this.writeSpanFlat(glyphFade);
+    this.writeSpanFlat(glyphFade, spanBarHeight(pxPerLine));
     this.drawSpans();
     this.drawGlyphs(pxPerLine, cam.dpr);
     this.drawRects(this.fgRects);
