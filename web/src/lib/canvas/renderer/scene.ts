@@ -26,7 +26,7 @@ import {
 } from '$lib/canvas/layout/panel';
 import { lineAtRow, visualRowsCached, wrapOffsets } from '$lib/canvas/layout/wrap';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
-import { GlyphAtlas } from './glyphatlas';
+import { BASELINE_RATIO, GlyphAtlas } from './glyphatlas';
 import { HEIGHT_CLASSES, OverviewTextures, type Slot } from './codetex';
 import { MediaTextures } from './mediatex';
 import {
@@ -1251,7 +1251,8 @@ export class Scene {
     if (room < 3) return;
     const shown = d.name.length <= room ? d.name : `${d.name.slice(0, Math.max(1, room - 2))}..`;
     this.pushText(
-      shown, d.x + metrics.dirPad, d.y + metrics.dirPad - metrics.dirLabelHeight + 1,
+      shown, d.x + metrics.dirPad,
+      this.chromeTop(d.y + metrics.dirPad - metrics.dirLabelHeight, metrics.dirLabelHeight),
       UiInk.DirLabel, fade, room,
     );
   }
@@ -1267,6 +1268,24 @@ export class Scene {
    *
    * Returns the width drawn, so runs can be laid out one after another.
    */
+  /**
+   * Top of a glyph box for a line of chrome text centred in a bar `barH` tall.
+   *
+   * The box is 1.4 em, which at the size the chrome is drawn at is 16.3 world
+   * units against a 14 unit title bar, and it is drawn downwards from the
+   * position given. So a name with a descender in it, `simulation.py` among
+   * them, had its tail land below the header's rule where the panel's own
+   * content paints over it. Centring what is actually visible, cap height to
+   * descender, puts it back inside the bar and reads better besides.
+   */
+  private chromeTop(top: number, barH: number): number {
+    const em = metrics.charWidth / this.atlas.advanceRatio;
+    const baseline = em * BASELINE_RATIO;
+    const cap = baseline - em * this.atlas.capRatio;
+    const tail = baseline + em * this.atlas.descenderRatio;
+    return top + (barH - (tail - cap)) / 2 - cap;
+  }
+
   private pushText(
     str: string, x: number, y: number, ink: number, fade: number, maxChars: number,
   ): number {
@@ -1322,7 +1341,7 @@ export class Scene {
     if (room <= 0) return;
 
     const x = n.x + metrics.panelPadX;
-    const y = n.y;
+    const y = this.chromeTop(n.y, metrics.titleHeight);
     const dot = n.name.lastIndexOf('.');
     const ext = dot > 0 ? n.name.slice(dot + 1) : '';
     const dir = n.path.slice(0, Math.max(0, n.path.length - n.name.length - 1));
@@ -1356,20 +1375,30 @@ export class Scene {
       right = room - (badge ? badge.length + 1 : 0);
     }
 
+    // The path as it would be typed, directory and name in one run, the
+    // directory dimmed. It used to be the name first and the directory after
+    // it, which reads backwards: `simulation.py src/pathsim` is not where the
+    // file is, it is two facts in the wrong order. The status bar already
+    // wrote it this way, so now both do.
     const budget = Math.max(1, right - 2);
-    const shown =
-      n.name.length <= budget ? n.name : `${n.name.slice(0, Math.max(1, budget - 2))}..`;
-    const used = this.pushText(shown, x, y, UiInk.Name, fade, budget);
-
-    // The path takes what is left, truncated from the front so the part
-    // nearest the file stays readable.
-    const pathBudget = budget - shown.length - 2;
-    if (dir && pathBudget > 4) {
-      const tail = dir.length <= pathBudget ? dir : `..${dir.slice(dir.length - pathBudget + 2)}`;
-      this.pushText(
-        tail, x + used + 2 * metrics.charWidth, y, UiInk.Path, fade * 0.8, pathBudget,
-      );
+    const shownName =
+      n.name.length <= budget ? n.name : `..${n.name.slice(-(Math.max(1, budget - 2)))}`;
+    // Whatever is left in front of the name, cut from the front so the part
+    // nearest the file survives.
+    const dirRoom = budget - shownName.length;
+    let shownDir = '';
+    if (dir && dirRoom > 3) {
+      const full = `${dir}/`;
+      shownDir =
+        full.length <= dirRoom ? full : `..${full.slice(full.length - (dirRoom - 2))}`;
     }
+    if (shownDir) {
+      this.pushText(shownDir, x, y, UiInk.Path, fade * 0.8, shownDir.length);
+    }
+    this.pushText(
+      shownName, x + shownDir.length * metrics.charWidth, y, UiInk.Name, fade,
+      shownName.length,
+    );
   }
 
   /**
@@ -1497,7 +1526,10 @@ export class Scene {
         // From the end, so the extension survives: `solver_esdirk43.py` says
         // more as `..dirk43.py` than as `solver_es..`.
         : `..${n.name.slice(-(room - 2))}`;
-      this.pushText(name, n.x + inset, n.y, UiInk.Path, fade * 0.85, room);
+      this.pushText(
+        name, n.x + inset, this.chromeTop(n.y, metrics.titleHeight),
+        UiInk.Path, fade * 0.85, room,
+      );
       return;
     }
     this.pushRect(

@@ -228,6 +228,7 @@ export class CanvasApp {
     this.observer.observe(canvas);
     this.resize();
     this.attachInput();
+    this.watchContext();
     this.running = true;
     this.raf = requestAnimationFrame(this.frame);
 
@@ -666,6 +667,73 @@ export class CanvasApp {
       if (wx >= f.x && wx <= f.x + f.w && wy >= f.y && wy <= f.y + f.h) return f;
     }
     return null;
+  }
+
+  /**
+   * Survive a lost WebGL context.
+   *
+   * A driver can take the context away at any time: a GPU reset, a laptop
+   * switching cards, a Windows TDR under a large window. Everything on the
+   * GPU is gone with it, which on a canvas that draws a whole repository from
+   * textures means panels that are simply empty, with nothing saying why. The
+   * browser only attempts to restore a context if the loss event is cancelled,
+   * which is what the first listener is for; the second rebuilds the scene
+   * from the source it was opened from, since every texture, buffer and
+   * program has to be made again.
+   */
+  private watchContext(): void {
+    this.canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.contextLost = true;
+      this.running = false;
+      cancelAnimationFrame(this.raf);
+      this.onContext?.(true);
+      console.warn('webgl context lost, waiting for it to come back');
+    });
+    this.canvas.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false;
+      this.onContext?.(false);
+      console.warn('webgl context restored, rebuilding the scene');
+      this.scene = null;
+      this.resize();
+      if (this.lastSource) this.open(this.lastSource, true);
+      this.running = true;
+      this.raf = requestAnimationFrame(this.frame);
+    });
+  }
+
+  /** True while the GPU has taken the context away. */
+  contextLost = false;
+  /** Told when that changes, so the status bar can say so rather than leaving
+   *  an empty canvas to be read as a bug in the layout. */
+  onContext: ((lost: boolean) => void) | null = null;
+
+  /**
+   * What this machine is drawing with, for a report from a screen I do not
+   * have. Everything here has been the cause of a rendering difference at
+   * some point: the ANGLE backend, the device pixel ratio, the size of the
+   * drawing buffer, and the limits a layered texture has to fit inside.
+   */
+  diagnostics(): string {
+    const gl = this.gl;
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const lines = [
+      `sanity ${location.href}`,
+      `renderer   ${dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown'}`,
+      `vendor     ${dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : 'unknown'}`,
+      `window     ${window.innerWidth}x${window.innerHeight} css at dpr ${window.devicePixelRatio}`,
+      `drawing    ${gl.drawingBufferWidth}x${gl.drawingBufferHeight}`,
+      `limits     texture ${gl.getParameter(gl.MAX_TEXTURE_SIZE)}, `
+        + `array layers ${gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS)}, `
+        + `units ${gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS)}, `
+        + `uniform vectors ${gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS)}`,
+      `context    ${this.contextLost ? 'LOST' : 'ok'}`,
+      `scene      ${this.stats.files} files, ${this.stats.visibleFiles} visible, `
+        + `${this.stats.lod} at ${this.stats.pxPerLine.toFixed(2)} px/line`,
+      `frame      ${this.stats.quads} quads, ${this.stats.cpuMs.toFixed(2)} ms cpu, `
+        + `${this.stats.frameMs.toFixed(1)} ms, ${this.stats.vramMb.toFixed(0)} MB`,
+    ];
+    return lines.join('\n');
   }
 
   /** Redraw, starting the loop again if it had stopped. */

@@ -5,9 +5,11 @@
 	import { onMount } from 'svelte';
 	import { CanvasApp, type CanvasStats } from '$lib/canvas/app';
 
-	let { app = $bindable(), onstats, onhover, onopenfile, oncontextmenu }: {
+	let { app = $bindable(), onstats, onhover, onopenfile, oncontextmenu, oncontext }: {
 		app?: CanvasApp;
 		onstats?: (s: CanvasStats) => void;
+		/** The GPU took the context away, or gave it back. */
+		oncontext?: (lost: boolean) => void;
 		onhover?: (path: string | null) => void;
 		onopenfile?: (path: string) => void;
 		oncontextmenu?: (at: { x: number; y: number; path: string | null }) => void;
@@ -21,6 +23,7 @@
 		if (onhover) instance.onHover = onhover;
 		if (onopenfile) instance.onOpenFile = onopenfile;
 		if (oncontextmenu) instance.onContextMenu = oncontextmenu;
+		if (oncontext) instance.onContext = oncontext;
 		app = instance;
 		return () => instance.destroy();
 	});

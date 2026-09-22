@@ -39,6 +39,14 @@ macOS, and More info then Run anyway on Windows. Building from source is
   survives. Off unless asked for, because the thing this canvas is usually
   watched for is where something changed, and a second colour scheme competes
   with that.
+- **It survives a lost context.** A driver can take the WebGL context away at
+  any time, and everything on the GPU goes with it: on this canvas that is
+  every panel at once, empty, with nothing saying why. The loss is caught, the
+  status bar says so, and the scene is rebuilt when the context comes back.
+  `context-check` takes it away through `WEBGL_lose_context` and measures that
+  the same share of the canvas is drawn afterwards. The View menu also copies
+  the renderer, the device pixel ratio and the driver's limits, for a fault on
+  a screen I do not have.
 - **Three levels of detail**, weighted as a partition of one so nothing
   double-draws through a transition. Below 1.8 pixels per line a file is one
   textured quad per column, sampled from a saturation-weighted mip chain.

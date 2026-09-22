@@ -20,7 +20,12 @@
 
 	/** Switching the ignored files on or off means another scan, which only
 	 *  the app knows how to run. */
-	let { onignored }: { onignored?: (on: boolean) => void } = $props();
+	let { onignored, ondiagnostics }: {
+		onignored?: (on: boolean) => void;
+		/** Copy what this machine is drawing with, for a report from a screen
+		 *  the author does not have. */
+		ondiagnostics?: () => void;
+	} = $props();
 
 	/** The mode a set of rows agrees on, or '' when they differ. A control
 	 *  showing one of several states as selected would be a lie. */
@@ -81,6 +86,9 @@
 					<span class="why">taking the first {n(project.ignoredShown)}</span>
 				{/if}
 			{/if}
+			<button class="diag" type="button" onclick={() => ondiagnostics?.()}>
+				Copy graphics diagnostics
+			</button>
 		</div>
 
 		<div class="foot">
@@ -119,6 +127,19 @@
 	   fixed width. It used to be `auto`, which resolved to the width of the
 	   segmented control in a row and to zero in the header, where that cell is
 	   empty: the column headings sat well left of the numbers they labelled. */
+	.diag {
+		font: inherit;
+		color: var(--text-dim);
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+	.diag:hover {
+		color: var(--text);
+	}
 	.options {
 		display: flex;
 		flex-direction: column;

@@ -9,7 +9,8 @@
 		stats,
 		hover = null,
 		error = null,
-		notice = null
+		notice = null,
+		contextLost = false
 	}: {
 		stats: CanvasStats | null;
 		/** Path under the pointer, or null. */
@@ -18,11 +19,32 @@
 		/** Something that just happened and is worth one line, such as where an
 		 *  image was written. Cleared by whoever set it. */
 		notice?: string | null;
+		/** The GPU has taken the WebGL context away. The canvas is empty until
+		 *  it comes back, and an empty canvas with no explanation reads as a
+		 *  bug in the layout rather than as a driver event. */
+		contextLost?: boolean;
 	} = $props();
 
+	/** Longest path shown before the directory is cut from the front. */
+	const CRUMB_CHARS = 44;
 	const cut = $derived(hover ? hover.lastIndexOf('/') + 1 : 0);
-	const hoverDir = $derived(hover ? hover.slice(0, cut) : '');
 	const hoverName = $derived(hover ? hover.slice(cut) : '');
+	/**
+	 * The directory in front of the name, shortened from its front.
+	 *
+	 * Shortened here rather than by CSS. It used to be `direction: rtl` on the
+	 * element with `text-overflow: ellipsis`, which cuts a path at the correct
+	 * end and also reverses the order of the two spans inside it: the bar read
+	 * `simulation.py src/pathsim/` while the markup said
+	 * `src/pathsim/simulation.py`.
+	 */
+	const hoverDir = $derived.by(() => {
+		if (!hover) return '';
+		const dir = hover.slice(0, cut);
+		const room = CRUMB_CHARS - hoverName.length;
+		if (dir.length <= room) return dir;
+		return room > 3 ? `..${dir.slice(dir.length - (room - 2))}` : '';
+	});
 
 	const n = (v: number) => v.toLocaleString('en-US');
 
@@ -80,6 +102,9 @@
 			</span>
 		{/if}
 		<span class="spacer"></span>
+		{#if contextLost}
+			<span class="group accent">graphics context lost, waiting for it to come back</span>
+		{/if}
 		{#if hover}
 			<!-- Where the pointer is. Out at the structural zoom levels the
 			     directory labels are gone and a panel header is a hairline, so
@@ -139,15 +164,7 @@
 	}
 	.crumb {
 		font-family: var(--font-mono);
-		max-width: 44ch;
-		overflow: hidden;
 		white-space: nowrap;
-		text-overflow: ellipsis;
-		direction: rtl;
-		text-align: right;
-	}
-	.crumb > * {
-		direction: ltr;
 	}
 	.dot {
 		color: var(--text-faint);

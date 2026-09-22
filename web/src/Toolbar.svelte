@@ -22,6 +22,7 @@
 		onreload,
 		ondemo,
 		onignored,
+		ondiagnostics,
 		demos = [],
 		onsearch,
 		onnext,
@@ -37,6 +38,7 @@
 		ondemo?: (id: string) => void;
 		/** The ignored-files switch in the View menu, which costs a rescan. */
 		onignored?: (on: boolean) => void;
+		ondiagnostics?: () => void;
 		/** Repositories baked into the build, empty in the desktop app. */
 		demos?: DemoRepo[];
 		onsearch?: (q: string) => void;
@@ -150,7 +152,10 @@
 		ontoggle={toggle('view')}
 		onclose={close}
 	>
-		<FileTypePicker onignored={(on: boolean) => onignored?.(on)} />
+		<FileTypePicker
+			onignored={(on: boolean) => onignored?.(on)}
+			ondiagnostics={() => ondiagnostics?.()}
+		/>
 	</Menu>
 
 	<Menu

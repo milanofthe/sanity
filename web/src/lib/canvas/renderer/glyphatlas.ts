@@ -29,10 +29,22 @@ interface Level {
   texH: number;
 }
 
+/** Cell height as a multiple of the em size, and where the baseline sits in
+ *  the cell. Anything that places a glyph box has to use the same two
+ *  numbers the cells were rasterised with. */
+export const CELL_RATIO = 1.4;
+export const BASELINE_RATIO = 1.05;
+
 export class GlyphAtlas {
   private levels: Level[] = [];
   /** Glyph advance divided by em size, for the rasterised font. */
   advanceRatio = 0.6;
+  /** How far a capital reaches above the baseline, and a descender below it,
+   *  as multiples of the em size. Measured off the font rather than assumed,
+   *  because what needs them is the chrome: a name centred in a title bar by
+   *  guessed metrics is a name with its descenders clipped. */
+  capRatio = 0.72;
+  descenderRatio = 0.21;
 
   constructor(private gl: WebGL2RenderingContext) {
     for (const size of SIZES) this.levels.push(this.build(size));
@@ -44,19 +56,25 @@ export class GlyphAtlas {
     const ctx = canvas.getContext('2d')!;
     ctx.font = `${size}px ${font.mono}`;
     const advance = ctx.measureText('M').width;
-    if (size === SIZES[SIZES.length - 1]) this.advanceRatio = advance / size;
+    if (size === SIZES[SIZES.length - 1]) {
+      this.advanceRatio = advance / size;
+      const caps = ctx.measureText('M');
+      const tails = ctx.measureText('gyjpq');
+      this.capRatio = caps.actualBoundingBoxAscent / size;
+      this.descenderRatio = tails.actualBoundingBoxDescent / size;
+    }
 
     // Generous cell padding: descenders and the odd wide glyph must not bleed
     // into the neighbouring cell once the texture is filtered.
     const cellW = Math.ceil(advance) + 4;
-    const cellH = Math.ceil(size * 1.4);
+    const cellH = Math.ceil(size * CELL_RATIO);
     canvas.width = cellW * GRID_COLS;
     canvas.height = cellH * GRID_ROWS;
 
     ctx.font = `${size}px ${font.mono}`;
     ctx.fillStyle = '#fff';
     ctx.textBaseline = 'alphabetic';
-    const baseline = Math.round(size * 1.05);
+    const baseline = Math.round(size * BASELINE_RATIO);
     for (let i = 0; i < GLYPH_COUNT; i++) {
       const gx = (i % GRID_COLS) * cellW;
       const gy = Math.floor(i / GRID_COLS) * cellH;
