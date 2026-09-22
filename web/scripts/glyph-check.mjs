@@ -108,7 +108,7 @@ const compare = async () =>
     };
     const tf = { scale: 1, bx: 0, by: 0 };
 
-    for (const f of sc.fileList) {
+    for (const f of sc.files.values()) {
       if (f.node.stub) continue;
       const n = f.node;
       if (n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0) continue;

@@ -108,8 +108,10 @@ else console.log('ok    a drag draws');
 const warm = await page.evaluate(async () => {
   const app = window.__sanity.app;
   const f = app.scene.files.get([...app.scene.files.keys()][0]);
-  f.since = 0;
-  f.shownMark = 1;
+  // Through `touch`, the way the watcher reports a write. Setting the clock
+  // on the file directly used to work and no longer does: the scene only
+  // advances files it knows have something running.
+  app.scene.touch(f.node.path);
   app.invalidate();
   app.drawn = 0;
   app.skipped = 0;

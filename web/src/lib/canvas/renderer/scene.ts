@@ -2,8 +2,9 @@
 // builds this frame's instance data.
 //
 // The load-bearing property is that detail and count trade off against each
-// other. Zoomed out, every file is a handful of textured quads, so the frame
-// cost is proportional to the file count and nothing else. Zoomed in, token
+// other. Zoomed out, every file in view is a handful of textured quads, so the
+// frame cost is proportional to the files on screen and nothing else; a
+// spatial grid finds them without walking the rest. Zoomed in, token
 // and glyph geometry appears, but by then only a few files intersect the
 // viewport and only a few hundred of their lines do, so the instance count
 // stays in the tens of thousands no matter how large the repository is.
@@ -29,6 +30,7 @@ import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { BASELINE_RATIO, GlyphAtlas } from './glyphatlas';
 import { HEIGHT_CLASSES, OverviewTextures, type Slot } from './codetex';
 import { MediaTextures } from './mediatex';
+import { SpatialGrid } from '$lib/canvas/spatial';
 import {
   createProgram, instanceAttribs, quadAttrib, uniforms, unitQuad,
   InstanceBuffer, type GL,
@@ -58,7 +60,6 @@ export interface SceneFile {
    * whenever the layout changes the width.
    */
   rows: Uint32Array;
-  /** Recency of the last change, 1 right after an edit, decaying to 0. */
   /**
    * Seconds since this file last changed, or Infinity if it has not changed
    * while the canvas has been open.
@@ -87,6 +88,9 @@ export interface SceneFile {
   sig: Signature;
   /** A change being shown, or null. */
   change: LineChangeAnim | null;
+  /** Number of the frame that last drew this panel, so one that is both
+   *  animating and in view is drawn once. */
+  drawnAt: number;
 }
 
 /**
@@ -370,15 +374,34 @@ export class Scene {
 
   files = new Map<string, SceneFile>();
   /**
-   * The same files as an array, for iterating.
+   * What is where, so a frame asks for what is in view instead of walking
+   * the project.
    *
-   * The map is for looking one up by path, which the watcher and the hover do.
-   * Every frame walks the whole set several times, and iterating a Map costs
-   * noticeably more than an array: measured at 0.40 milliseconds a frame for a
-   * view with 34 panels in it out of 989, almost all of it the walking rather
-   * than the drawing.
+   * It used to walk every file and directory and test each against the view,
+   * which is linear in the project whatever is on screen: measured with
+   * nothing in view at all, 1.5 milliseconds a frame at ten thousand files
+   * and 2.3 at thirty thousand. Built from the layout, so it is rebuilt on a
+   * relayout and nowhere else.
    */
-  private fileList: SceneFile[] = [];
+  private fileGrid = new SpatialGrid([]);
+  private dirGrid = new SpatialGrid([]);
+  /** Scene file per layout node, by the node's index in `layout.files`, which
+   *  is what the grid answers with. Empty until the file has been added. */
+  private byNode: (SceneFile | undefined)[] = [];
+  private nodeIndex = new Map<string, number>();
+  private dirIndex = new Map<string, number>();
+  /**
+   * Panels in a settle animation. Drawn from this list rather than found in
+   * the grid, because an animating panel is drawn away from the rectangle the
+   * grid knows it by, sliding in from wherever it was.
+   */
+  private animated = new Set<SceneFile>();
+  /** Files with a clock running: a flash, marks fading, or a change playing.
+   *  `advance` walks these instead of every file. */
+  private active = new Set<SceneFile>();
+  private nearFiles: number[] = [];
+  private nearDirs: number[] = [];
+  private frameNo = 0;
   /** Whether anything was moving on the last frame drawn; see `moving`. */
   private wasMoving = false;
   /** Path whose header the pointer is over, for the hover highlight. */
@@ -542,6 +565,7 @@ export class Scene {
 
     this.writeKindFlat();
     this.measureSpread();
+    this.index();
 
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -594,9 +618,10 @@ export class Scene {
       this.files.delete(path);
       gone = true;
     }
-    // Rebuilt once rather than filtered per removal, which would be quadratic
-    // on a relayout that drops a third of the files.
-    if (gone) this.fileList = [...this.files.values()];
+    if (gone) {
+      for (const f of [...this.animated]) if (!this.files.has(f.node.path)) this.animated.delete(f);
+      for (const f of [...this.active]) if (!this.files.has(f.node.path)) this.active.delete(f);
+    }
 
     const rewrite: string[] = [];
     for (const node of layout.files) {
@@ -636,20 +661,39 @@ export class Scene {
       f.node = node;
       node.layer = f.slot.layer;
     }
+    this.index();
     return rewrite;
   }
 
-  /** Put a file in both the map and the iteration array. */
+  /** Rebuild the grids and the node lookup from the current layout. */
+  private index(): void {
+    const { files, dirs } = this.layout;
+    this.fileGrid = new SpatialGrid(files);
+    this.dirGrid = new SpatialGrid(dirs);
+    this.nodeIndex.clear();
+    files.forEach((n, i) => this.nodeIndex.set(n.path, i));
+    this.dirIndex.clear();
+    dirs.forEach((d, i) => this.dirIndex.set(d.path, i));
+    this.byNode = new Array(files.length);
+    for (const [path, f] of this.files) {
+      const i = this.nodeIndex.get(path);
+      if (i !== undefined) this.byNode[i] = f;
+    }
+    this.animated.clear();
+    for (const f of this.files.values()) if (f.anim) this.animated.add(f);
+  }
+
+  /** Put a file in the map and where the grid's answers find it. */
   private add(path: string, file: SceneFile): void {
     const existing = this.files.get(path);
-    this.files.set(path, file);
     if (existing) {
-      const i = this.fileList.indexOf(existing);
-      if (i >= 0) this.fileList[i] = file;
-      else this.fileList.push(file);
-    } else {
-      this.fileList.push(file);
+      this.animated.delete(existing);
+      this.active.delete(existing);
     }
+    this.files.set(path, file);
+    const i = this.nodeIndex.get(path);
+    if (i !== undefined) this.byNode[i] = file;
+    if (file.anim) this.animated.add(file);
   }
 
   /** Half the layout's diagonal, which the appearance stagger is spread over. */
@@ -761,6 +805,7 @@ export class Scene {
         wroteRows: 0, wroteCols: 0,
         sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
         change: null,
+        drawnAt: -1,
       });
       return;
     }
@@ -777,6 +822,7 @@ export class Scene {
       wroteRows: rows[data.lineCount], wroteCols: node.geom.cols,
       sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
       change: null,
+      drawnAt: -1,
     });
   }
 
@@ -825,6 +871,7 @@ export class Scene {
   touch(path: string, data?: FileData, warm = true): void {
     const f = this.files.get(path);
     if (!f) return;
+    this.active.add(f);
     if (!data) {
       if (warm) {
         f.since = 0;
@@ -977,6 +1024,7 @@ export class Scene {
     for (const path of paths) {
       const f = this.files.get(path);
       if (!f) continue;
+      this.active.add(f);
       f.since = 0;
       f.shownMark = 1;
       f.data.lineState.fill(LineState.Added);
@@ -1066,7 +1114,7 @@ export class Scene {
     let redraw = false;
     let ticking = false;
     let changing = false;
-    for (const f of this.fileList) {
+    for (const f of this.active) {
       // Gated on the clock existing at all, not on it being inside the
       // window: a file whose window has passed still has marks to clear, and
       // gating on the window meant it only ever got cleared by the one tick
@@ -1105,6 +1153,10 @@ export class Scene {
         }
         redraw = true;
       }
+      // Nothing left to run: the window is over, or the marks were cleared.
+      // A touch puts it back. Deleting the current entry while iterating a
+      // Set is defined: the iteration carries on with the next one.
+      if (!f.change && (f.since === Infinity || !recent(f.since))) this.active.delete(f);
     }
     // Reported apart from the glow, which also ticks but for ninety seconds:
     // `settling` means a motion is in progress, and something waiting for the
@@ -1156,9 +1208,22 @@ export class Scene {
 
     let stillAnimating = false;
 
-    // Directory boxes. Already outermost first from the layout, so there is
-    // nothing to copy or sort here.
-    for (const d of this.layout.dirs) {
+    // Directory boxes, outermost first, which is the layout's order: a child
+    // drawn before its parent would be washed over by the parent's fill. So
+    // the ones in view and the ones sliding are gathered by index and sorted.
+    const dirs = this.layout.dirs;
+    const dirIdx = this.dirGrid.near(vx0, vy0, vx1, vy1, this.nearDirs);
+    if (this.dirAnims.size > 0) {
+      // A relayout can slide every directory at once, so not `includes`.
+      const have = new Set(dirIdx);
+      for (const path of this.dirAnims.keys()) {
+        const i = this.dirIndex.get(path);
+        if (i !== undefined && !have.has(i)) dirIdx.push(i);
+      }
+    }
+    dirIdx.sort((a, b) => a - b);
+    for (const i of dirIdx) {
+      const d = dirs[i];
       this.tf = IDENTITY;
       const anim = this.dirAnims.get(d.path);
       if (anim) {
@@ -1183,8 +1248,10 @@ export class Scene {
     }
     this.tf = IDENTITY;
 
+    const frame = ++this.frameNo;
     let visibleFiles = 0;
-    for (const f of this.fileList) {
+    const draw = (f: SceneFile): void => {
+      if (f.drawnAt === frame) return;
       const n = f.node;
 
       // Advance the settle animation and work out the transform before
@@ -1196,11 +1263,15 @@ export class Scene {
         f.anim.t += dt;
         if (finished(f.anim)) {
           f.anim = null;
+          this.animated.delete(f);
         } else {
           stillAnimating = true;
           this.tf = transformFor(n, f.anim);
         }
       }
+      // Marked before culling: advancing the animation twice in one frame,
+      // once from each list, would run it at double speed.
+      f.drawnAt = frame;
 
       // The rect as it will actually be drawn.
       const drawn = this.tf === IDENTITY ? n : applyTo(this.tf, n);
@@ -1208,7 +1279,7 @@ export class Scene {
         drawn.x > vx1 || drawn.y > vy1
         || drawn.x + drawn.w < vx0 || drawn.y + drawn.h < vy0
       ) {
-        continue;
+        return;
       }
       visibleFiles++;
 
@@ -1220,7 +1291,7 @@ export class Scene {
       // area proportional to its size. That is the whole point of the mode.
       if (f.node.stub) {
         this.pushStub(f, cam.zoom);
-        continue;
+        return;
       }
 
       this.pushPanel(f);
@@ -1239,6 +1310,13 @@ export class Scene {
         this.pushChangeBands(f, vy0, vy1);
         this.pushHits(f, vy0, vy1);
       }
+    };
+    // Sliding panels first, from their own list, then whatever else is in
+    // view. A panel in both is drawn once.
+    for (const f of this.animated) draw(f);
+    for (const i of this.fileGrid.near(vx0, vy0, vx1, vy1, this.nearFiles)) {
+      const f = this.byNode[i];
+      if (f) draw(f);
     }
     this.tf = IDENTITY;
     this.animating = stillAnimating;
