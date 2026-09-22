@@ -76,13 +76,46 @@ const render = (region, width, height) =>
       // empty export is not a black image, it is the theme's background, and
       // that is exactly what a blank one would be full of.
       let top = 0;
-      for (const c of seen.values()) top = Math.max(top, c);
+      let ground = 0;
+      for (const [key, c] of seen) {
+        if (c > top) {
+          top = c;
+          ground = key;
+        }
+      }
+
+      // Padding, measured: rows and columns at the edge that hold nothing but
+      // the background. The image is supposed to end where the project does,
+      // so the answer is zero on every side.
+      const edge = (px, py, dx, dy, steps) => {
+        let bands = 0;
+        for (let b = 0; b < steps; b++) {
+          let flat = true;
+          for (let i = 0; i < (dx === 0 ? bmp.width : bmp.height) && flat; i += 3) {
+            const x = dx === 0 ? i : px + dx * b;
+            const y = dx === 0 ? py + dy * b : i;
+            const o = (y * bmp.width + x) * 4;
+            const key = (data[o] << 16) | (data[o + 1] << 8) | data[o + 2];
+            if (key !== ground) flat = false;
+          }
+          if (!flat) break;
+          bands++;
+        }
+        return bands;
+      };
+      const pad = {
+        left: edge(0, 0, 1, 0, 64),
+        right: edge(bmp.width - 1, 0, -1, 0, 64),
+        top: edge(0, 0, 0, 1, 64),
+        bottom: edge(0, bmp.height - 1, 0, -1, 64),
+      };
       return {
         bytes: blob.size,
         width: bmp.width,
         height: bmp.height,
         colours: seen.size,
         drawnFrac: 1 - top / n,
+        pad,
         ms,
         pxPerLine,
       };
@@ -90,13 +123,35 @@ const render = (region, width, height) =>
     [region, width, height],
   );
 
+// What the project's own aspect is, so the image can be held to it.
+const bounds = await page.evaluate(() => {
+  const [x0, y0, x1, y1] = window.__sanity.app.layout.bounds;
+  return { w: x1 - x0, h: y1 - y0 };
+});
+
 const whole = await render('project', 3840, 2160);
 console.log(
   `project  ${whole.width}x${whole.height} · ${(whole.bytes / 1048576).toFixed(1)} MB · ` +
-    `${whole.colours} colours · ${(whole.drawnFrac * 100).toFixed(0)}% not background · ${whole.ms} ms`,
+    `${whole.colours} colours · ${(whole.drawnFrac * 100).toFixed(0)}% not background · ` +
+    `padding ${whole.pad.left}/${whole.pad.right}/${whole.pad.top}/${whole.pad.bottom} px · ${whole.ms} ms`,
 );
-if (whole.width !== 3840 || whole.height !== 2160) {
-  fail(`asked for 3840x2160 and got ${whole.width}x${whole.height}`);
+// Inside the box, on the box on one side, and at the aspect of the thing it
+// frames. A fixed 16:9 frame around a project that is not 16:9 is a border,
+// which is what this replaced.
+if (whole.width > 3840 || whole.height > 2160) {
+  fail(`the image is ${whole.width}x${whole.height}, which is outside the 3840x2160 box`);
+}
+if (whole.width !== 3840 && whole.height !== 2160) {
+  fail(`the image is ${whole.width}x${whole.height}, so it fills neither side of the box`);
+}
+const want = bounds.w / bounds.h;
+const got = whole.width / whole.height;
+if (Math.abs(want - got) / want > 0.002) {
+  fail(`the image is ${got.toFixed(3)} wide for one high where the project is ${want.toFixed(3)}`);
+}
+const padded = Object.entries(whole.pad).filter(([, v]) => v > 0);
+if (padded.length > 0) {
+  fail(`the image has background padding: ${padded.map(([k, v]) => `${v} px ${k}`).join(', ')}`);
 }
 if (whole.colours < 40) fail(`only ${whole.colours} colours in the image, so it is not a render`);
 if (whole.drawnFrac < 0.2) {
@@ -165,8 +220,11 @@ console.log(
 if (!/\.png$/.test(download.suggestedFilename())) {
   fail(`the download is called ${download.suggestedFilename()}`);
 }
-if (png.width !== 3840 || png.height !== 2160) {
-  fail(`the downloaded file is ${png.width}x${png.height}`);
+if (png.width !== whole.width || png.height !== whole.height) {
+  fail(
+    `the downloaded file is ${png.width}x${png.height} where the render was ` +
+      `${whole.width}x${whole.height}`,
+  );
 }
 rmSync(to, { force: true });
 

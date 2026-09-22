@@ -15,8 +15,14 @@ import type { CanvasApp } from '$lib/canvas/app';
 import { project } from '$lib/state/project.svelte';
 import { inTauri, savePng } from '$lib/sources/tauri';
 
-/** 4K in 16:9. Fixed rather than taken from the window, so an image does not
- *  need cropping before it can be posted or set as a background. */
+/**
+ * The box an image is rendered into, 4K in 16:9.
+ *
+ * A bound rather than a size: the image comes out at the aspect of what it
+ * frames, filling this box on its longer side, so a project wider than 16:9
+ * is 3840 across and shorter than 2160 rather than 3840 by 2160 with the
+ * background showing above and below it.
+ */
 export const IMAGE_WIDTH = 3840;
 export const IMAGE_HEIGHT = 2160;
 

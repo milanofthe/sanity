@@ -103,7 +103,12 @@ export interface ContentResult {
 
 /** What a PNG export asks for. */
 export interface ImageRequest {
-  /** Size of the image in pixels. */
+  /**
+   * Largest image wanted, in pixels. The one produced fits inside this box at
+   * the aspect of what is being framed, so nothing is padded and nothing is
+   * cut: a wide project comes out 3840 by 2021 rather than 3840 by 2160 with
+   * a strip of background at the top and bottom.
+   */
   width: number;
   height: number;
   /** What to frame: what is on screen, or the whole project. */
@@ -892,19 +897,22 @@ export class CanvasApp {
   async renderToBlob(req: ImageRequest): Promise<Blob> {
     if (!this.scene || !this.layout) throw new Error('nothing to render');
     const [maxW, maxH] = this.gl.getParameter(this.gl.MAX_VIEWPORT_DIMS) as Int32Array;
-    const width = Math.max(64, Math.min(req.width, maxW, MAX_IMAGE_EDGE));
-    const height = Math.max(64, Math.min(req.height, maxH, MAX_IMAGE_EDGE));
+    const boxW = Math.max(64, Math.min(req.width, maxW, MAX_IMAGE_EDGE));
+    const boxH = Math.max(64, Math.min(req.height, maxH, MAX_IMAGE_EDGE));
 
-    // The world rect to frame, then widened to the image's aspect, so asking
-    // for 16:9 never cuts anything off what was on screen.
-    const [rx0, ry0, rx1, ry1] = req.region === 'project'
-      ? this.layout.bounds
-      : this.cam.visibleRect();
-    const pad = req.region === 'project' ? 0.02 : 0;
+    // What to frame, exactly: the project's own bounds or what the window
+    // shows. No margin either way, and the image takes the rect's aspect
+    // instead of the rect being widened to the image's, since a fixed 16:9
+    // frame around a project that is not 16:9 is a border on two sides of it.
+    const [rx0, ry0, rx1, ry1] =
+      req.region === 'project' ? this.layout.bounds : this.cam.visibleRect();
     const cx = (rx0 + rx1) / 2;
     const cy = (ry0 + ry1) / 2;
-    const rw = (rx1 - rx0) * (1 + pad * 2);
-    const rh = (ry1 - ry0) * (1 + pad * 2);
+    const rw = rx1 - rx0;
+    const rh = ry1 - ry0;
+    const scale = Math.min(boxW / rw, boxH / rh);
+    const width = Math.max(64, Math.round(rw * scale));
+    const height = Math.max(64, Math.round(rh * scale));
 
     const keep = { x: this.cam.x, y: this.cam.y, zoom: this.cam.zoom };
     cancelAnimationFrame(this.raf);
@@ -919,7 +927,7 @@ export class CanvasApp {
       // the level this size of text actually needs.
       this.cam.dpr = 1;
       this.cam.stop();
-      this.cam.zoom = Math.min(width / rw, height / rh);
+      this.cam.zoom = scale;
       this.cam.x = cx;
       this.cam.y = cy;
 

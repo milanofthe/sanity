@@ -56,7 +56,7 @@
 	 */
 	async function save(region: 'view' | 'project') {
 		if (!app) return;
-		say(`rendering ${IMAGE_WIDTH} x ${IMAGE_HEIGHT}…`, 0);
+		say(`rendering up to ${IMAGE_WIDTH} x ${IMAGE_HEIGHT}…`, 0);
 		try {
 			const to = await saveImage(app, region);
 			say(to ? `wrote ${to}` : 'not saved');

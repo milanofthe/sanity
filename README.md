@@ -62,10 +62,11 @@ Try it on four public repositories, in the browser, no install:
   put through the treemap, since a placeholder has a fixed size and carries no
   information about how large its file is.
 - **Export to PNG**, from the right click menu: the view, or the whole project,
-  at 3840 by 2160. Not a screenshot of the window, since level of detail
-  follows from pixels per line: the same rect rendered into a 4K frame draws at
-  1.5 pixels per line where the window had 0.5, so the image has three times
-  the detail in it rather than three times the pixels. Takes about 130 ms.
+  into a 4K box at the aspect of what it frames, so there is no border around
+  it. Not a screenshot of the window, since level of detail follows from pixels
+  per line: the same rect rendered into a 4K frame draws at 1.5 pixels per line
+  where the window had 0.5, so the image has three times the detail in it
+  rather than three times the pixels. Takes about 130 ms.
 - Read-only. A panel's header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
   `$EDITOR`, or the platform handler.
 
@@ -153,7 +154,8 @@ Mariana for whatever its block forgot, and that the text on screen is the text
 in the file, character for character, compared against the bytes on disk rather
 than against the canvas's own copy of them, and that the
 demo opens every repository it lists with its text in place, and that a PNG
-export is a 4K picture of the project that leaves the canvas as it found it.
+export is a 4K picture of the project, at the project's aspect with no
+padding on any side, and that it leaves the canvas as it found it.
 The layout case list includes a project two thirds reduced to placeholders. Last, a
 pass over this repository asserting that every language gets a colour on at
 least as much of its text as it should.
