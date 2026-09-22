@@ -144,3 +144,7 @@ web/scripts            the browser checks and the icon generator
 
 Design decisions and measurements are tracked as GitHub issues, not as files
 here.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE).
