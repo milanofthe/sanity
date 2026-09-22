@@ -65,22 +65,17 @@ page.on('pageerror', (e) => console.log(`[error] ${e.message}`));
 
 let failures = 0;
 /**
- * Bound on how much larger a short file's panel is than its preferred shape.
+ * Ceiling on how much more of the canvas short files take than their lines
+ * would give them; see `shortShare` in tree.ts.
  *
- * Loose, because the room is the decision. A file is cut into another column
- * only once that column would hold fifty lines, so a short file ends up in one
- * or two columns whatever shape its slot has, and the slot's surplus width
- * stays empty beside the text instead of turning into columns nobody asked
- * for. Measured across the nine shapes: 2.62, 3.06, 3.10, 3.67, 3.63, 2.76,
- * 2.61, 3.63, 3.32.
- *
- * The room is horizontal, which is why it does not show up as panels with
- * empty bottoms: of the rows a short panel has, the median short file fills 76
- * percent of them, against 67 before the rule. Fill is unchanged to a few
- * tenths of a point everywhere except the all-tiny-files case, where it rises
- * by three.
+ * Measured across the nine shapes: 1.35, 1.36, 1.33, 1.44, 1.38, 1.05, 2.53,
+ * 1.49, 1.51, and 1.42 on pathsim. Before short files were kept in fewer
+ * columns it sat between 0.97 and 1.05. The 2.53 is the case of 200 files of
+ * 4000 lines, where the handful of short ones are a rounding error of the
+ * canvas; everywhere else this is what keeping them whole costs, and nothing
+ * else in this check would notice it growing.
  */
-const SMALL_BLOAT = 3.8;
+const SHORT_SHARE = 2.7;
 
 for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   lastLine = null;
@@ -114,13 +109,11 @@ for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   if (fill < minFill) problems.push(`fill=${(fill * 100).toFixed(1)}% < ${minFill * 100}%`);
   const bloat = num('bloat p95');
   if (!(bloat <= maxBloat)) problems.push(`bloat p95=${bloat.toFixed(2)} > ${maxBloat}`);
-  // Short files are held to their own, looser bound: they are deliberately
-  // kept in fewer columns than their slot would take, so the room left inside
-  // them is the decision rather than a fault. Still bounded, because "kept in
-  // one piece" is not a licence for a panel twice the size of its file.
-  const smallBloat = num('small bloat p95');
-  if (!(smallBloat <= SMALL_BLOAT)) {
-    problems.push(`small bloat p95=${smallBloat.toFixed(2)} > ${SMALL_BLOAT}`);
+  // What short files cost the canvas for staying in fewer columns. Bounded,
+  // because nothing else in this check would notice it growing.
+  const shortShare = num('short share');
+  if (!(shortShare <= SHORT_SHARE)) {
+    problems.push(`short share=${shortShare.toFixed(2)} > ${SHORT_SHARE}`);
   }
   // The pass count is reported, not asserted: the pathological case converges
   // on its last allowed pass, and the layout it produces is still valid. What

@@ -1094,10 +1094,28 @@ export interface LayoutStats {
    */
   bloatP95: number;
   bloatMax: number;
-  /** The same for files short enough to be kept in one piece; see
-   *  `SMALL_FILE_LINES`. Reported apart because the room they leave is a
-   *  decision rather than a fault. */
-  smallBloatP95: number;
+  /**
+   * Share of the panel area short files take, over their share of the lines.
+   * One means area follows size, which is what a treemap promises.
+   *
+   * What keeping short files in fewer columns costs, and the number that was
+   * missing when that was first built. Fill cannot see it, since the extra
+   * area is still panel, and a bloat percentile against each file's own
+   * preferred shape cannot either, since the preferred shape is what changed.
+   * The first version reported both as unchanged while short files took 34
+   * percent of pathsim's canvas for 24 percent of its lines.
+   */
+  shortShare: number;
+  /**
+   * Column breaks plus wrapped rows, per hundred lines of text: how often a
+   * reader has to jump. The other side of `shortShare`.
+   *
+   * Wrapped rows are nearly all of it. On pathsim before any of this there
+   * were 1.3 column breaks per hundred lines of short files and 23 wraps, and
+   * nearly every wrap came from a column narrower than the file's own longest
+   * line rather than from a line longer than any column could be.
+   */
+  breaks: number;
   /** The directory with the most children among those that had an overlap,
    *  with its size in cells. Points straight at whether the integer split ran
    *  out of cells or got the arithmetic wrong. */
@@ -1113,7 +1131,11 @@ export function layoutStats(l: Layout): LayoutStats {
   let overflowing = 0;
   let hiddenStubs = 0;
   const bloat: number[] = [];
-  const smallBloat: number[] = [];
+  let shortArea = 0;
+  let textArea = 0;
+  let shortLines = 0;
+  let textLines = 0;
+  let jumps = 0;
   for (const f of l.files) {
     panelArea += f.w * f.h;
     aspectSum += f.w / Math.max(1, f.h);
@@ -1122,18 +1144,27 @@ export function layoutStats(l: Layout): LayoutStats {
     if (!f.usable && !f.stub) unusable++;
     if (!f.holdsAll) overflowing++;
     if (f.stub && !f.usable) hiddenStubs++;
-    // Short files are excluded on purpose. They are kept in fewer columns
-    // than their slot would like, which leaves room inside the panel by
-    // design: measuring that as bloat would report the decision as a fault
-    // and hide a real one behind it. `smallBloatP95` reports them separately.
+    // Short files are excluded on purpose. They are offered area to stay in
+    // fewer columns, which is a decision, and `shortShare` accounts for it.
+    // Counting it here as well would report the decision as a fault and hide
+    // a real one behind it.
     if (!f.stub) {
       const b = (f.w * f.h) / Math.max(1, panelArea_(f.lineCols, f.maxCols));
       if (f.lineCount > SMALL_FILE_LINES) bloat.push(b);
-      else smallBloat.push(b);
+    }
+    if (!f.stub && !f.media) {
+      const a = f.w * f.h;
+      textArea += a;
+      textLines += f.lineCount;
+      if (f.lineCount <= SMALL_FILE_LINES) {
+        shortArea += a;
+        shortLines += f.lineCount;
+      }
+      jumps += f.geom.columns - 1
+        + visualRowsCached(f.lineCols, f.geom.cols) - f.lineCount;
     }
   }
   bloat.sort((a, b) => a - b);
-  smallBloat.sort((a, b) => a - b);
 
   let overlaps = 0;
   let offGrid = 0;
@@ -1179,9 +1210,10 @@ export function layoutStats(l: Layout): LayoutStats {
 
   return {
     bloatP95: bloat.length ? bloat[Math.floor(0.95 * (bloat.length - 1))] : 1,
-    smallBloatP95: smallBloat.length
-      ? smallBloat[Math.floor(0.95 * (smallBloat.length - 1))]
+    shortShare: shortLines > 0 && textArea > 0
+      ? (shortArea / textArea) / (shortLines / textLines)
       : 1,
+    breaks: (100 * jumps) / Math.max(1, textLines),
     bloatMax: bloat.length ? bloat[bloat.length - 1] : 1,
     fill: panelArea / Math.max(1, l.root.w * l.root.h),
     aspect: l.root.w / Math.max(1, l.root.h),

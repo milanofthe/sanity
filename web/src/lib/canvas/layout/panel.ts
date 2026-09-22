@@ -26,7 +26,7 @@ export const MIN_COLUMN_LINES = colBounds.minLines;
 /** Fewest lines worth splitting a column into; see `columns.minPerColumn`. */
 export const MIN_LINES_PER_COLUMN = colBounds.minPerColumn;
 /** Up to this many lines a file counts as short in the layout statistics. It
- *  changes no layout, it only says which panels `smallBloatP95` is about. */
+ *  changes no layout, it only says which panels `shortShare` is about. */
 export const SMALL_FILE_LINES = 150;
 /**
  * How many columns a file of this many rows is worth cutting into.
