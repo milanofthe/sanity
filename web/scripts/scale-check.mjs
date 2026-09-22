@@ -33,20 +33,39 @@ for (const n of SIZES) {
   const r = await page.evaluate(async () => {
     const app = window.__sanity.app;
     const root = app.layout.root;
-    /** Median frame cost over a short pan at this zoom. */
+    const frames = async (n) => {
+      for (let i = 0; i < n; i++) {
+        app.invalidate();
+        await new Promise((q) => requestAnimationFrame(q));
+      }
+    };
+    /**
+     * Median frame cost over a short pan at this zoom, once the detail for
+     * the view has streamed in. The frames straight after a jump are the
+     * streaming's, reported apart: what the view costs to look at is the
+     * drawing alone.
+     */
     const at = async (zoom, x, y) => {
       app.cam.zoom = zoom;
       app.cam.x = x;
       app.cam.y = y;
+      let streamed = 0;
+      for (let i = 0; i < 120 && (i < 2 || app.scene.stats.streamMs > 0); i++) {
+        await frames(1);
+        streamed += app.scene.stats.streamMs;
+      }
       const xs = [];
       for (let i = 0; i < 21; i++) {
         app.cam.x += 1 / zoom;
-        app.invalidate();
-        await new Promise((q) => requestAnimationFrame(q));
-        xs.push(app.stats.cpuMs);
+        await frames(1);
+        xs.push(app.scene.stats.cpuMs);
       }
       xs.sort((a, b) => a - b);
-      return { ms: xs[10], visible: app.scene.stats.visibleFiles };
+      const d = app.scene.detailStats();
+      return {
+        ms: xs[10], streamed, visible: app.scene.stats.visibleFiles,
+        detail: d.bytes, detailed: d.files,
+      };
     };
     const fit = Math.min(app.cam.vw / root.w, app.cam.vh / root.h);
     // Well outside the project, at reading zoom.
@@ -61,10 +80,12 @@ for (const n of SIZES) {
     return { empty, one, some, all, tex: app.scene.textures.stats().bytes };
   });
 
-  const f = (x) => `${x.ms.toFixed(2)} ms (${x.visible} panels)`;
+  const f = (x) =>
+    `${x.ms.toFixed(2)} ms (${x.visible} panels, ${x.streamed.toFixed(0)} ms streaming` +
+    ` to ${(x.detail / 1e6).toFixed(0)} MB of detail for ${x.detailed})`;
   console.log(
     `${String(n).padStart(7)} files  empty ${r.empty.ms.toFixed(2)} ms · one panel ${f(r.one)} · some ${f(r.some)} · all ${f(r.all)}` +
-      ` · overview texture ${(r.tex / 1e6).toFixed(0)} MB · layout ${stat?.match(/(\d+) ms$/)?.[1] ?? '?'} ms`,
+      ` · overview texture ${(r.tex / 1e6).toFixed(0)} MB allocated · layout ${stat?.match(/(\d+) ms$/)?.[1] ?? '?'} ms`,
   );
   if (r.empty.ms > EMPTY_MS) {
     console.log(`FAIL  ${n} files: ${r.empty.ms.toFixed(2)} ms a frame with nothing in view, over ${EMPTY_MS}`);

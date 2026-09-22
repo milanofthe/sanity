@@ -32,9 +32,27 @@ export interface Slot {
   classIdx: number;
   chunkIdx: number;
   layer: number;
-  /** Texel rows actually covered, so the quad's v range can be exact. */
+  /** Texel rows actually covered at full resolution, so the quad's v range can
+   *  be exact. The same fraction of the layer at every mip level. */
   texRows: number;
+  /** Finest mip level this slot holds; see `DETAIL_LEVELS`. */
+  level: number;
 }
+
+/**
+ * Mip levels a file's overview can be held from.
+ *
+ * Level 0 is the full texture, 128 texels across; each level after it halves
+ * both sides and quarters the memory. Every file always holds `BASE_LEVEL`,
+ * 8 texels across, a 256th of the full size, which is all a panel a few
+ * pixels wide can show anyway. Finer levels are held only for panels large
+ * enough on screen to need them, under a budget, so the memory follows the
+ * screen rather than the project: measured before this, one full layer per
+ * file came to 204 KB a file, 6.1 GB at thirty thousand files, and at a
+ * hundred thousand the context gave up and nothing was drawn at all.
+ */
+export const BASE_LEVEL = 4;
+
 
 /**
  * Storage budget for one array texture. Layer counts are derived from it, so
@@ -87,9 +105,17 @@ interface Chunk {
    *  leaks a layer every time, and a project being watched relayouts on every
    *  save. */
   free: number[];
+  /** Layers occupied right now: `used` minus what is on the free list. */
+  live: number;
 }
 
 interface TexClass {
+  /** Mip level the class's layers start at. */
+  level: number;
+  /** Texel rows of a layer at full resolution, which is what a file's rows
+   *  are measured against, and the texture's own size at its level. */
+  baseRows: number;
+  texCols: number;
   texRows: number;
   chunks: Chunk[];
 }
@@ -132,7 +158,19 @@ export class OverviewTextures {
   constructor(private gl: GL, overviewColors: number[]) {
     this.kindRgb = flatColours(overviewColors);
     this.maxLayers = Math.min(512, gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS) as number);
-    this.classes = HEIGHT_CLASSES.map((texRows) => ({ texRows, chunks: [] }));
+    // One class per mip level and height, flattened: level * heights + height.
+    this.classes = [];
+    for (let level = 0; level <= BASE_LEVEL; level++) {
+      for (const baseRows of HEIGHT_CLASSES) {
+        this.classes.push({
+          level,
+          baseRows,
+          texCols: Math.max(1, overview.texCols >> level),
+          texRows: Math.max(1, baseRows >> level),
+          chunks: [],
+        });
+      }
+    }
     const maxTexels = overview.texCols * HEIGHT_CLASSES[HEIGHT_CLASSES.length - 1];
     this.acc = new Float32Array(maxTexels * 3);
     this.cov = new Float32Array(maxTexels);
@@ -166,30 +204,36 @@ export class OverviewTextures {
     this.kindRgb = flatColours(overviewColors);
   }
 
-  private classFor(lineCount: number): number {
+  private heightFor(lineCount: number): number {
     for (let i = 0; i < HEIGHT_CLASSES.length; i++) {
       if (lineCount <= HEIGHT_CLASSES[i]) return i;
     }
     return HEIGHT_CLASSES.length - 1;
   }
 
-  private layersFor(texRows: number): number {
-    const bytesPerLayer = overview.texCols * texRows * 4 * 1.34;
-    return Math.max(4, Math.min(this.maxLayers, Math.floor(CHUNK_BUDGET_BYTES / bytesPerLayer)));
+  private bytesPerLayer(cls: TexClass): number {
+    return cls.texCols * cls.texRows * 4 * 1.34;
   }
 
-  private newChunk(texRows: number): Chunk {
+  private layersFor(cls: TexClass): number {
+    return Math.max(
+      4,
+      Math.min(this.maxLayers, Math.floor(CHUNK_BUDGET_BYTES / this.bytesPerLayer(cls))),
+    );
+  }
+
+  private newChunk(cls: TexClass): Chunk {
     const { gl } = this;
-    const layers = this.layersFor(texRows);
+    const layers = this.layersFor(cls);
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
-    const levels = 1 + Math.floor(Math.log2(Math.max(overview.texCols, texRows)));
+    const levels = 1 + Math.floor(Math.log2(Math.max(cls.texCols, cls.texRows)));
     gl.texStorage3D(
       gl.TEXTURE_2D_ARRAY,
       levels,
       gl.RGBA8,
-      overview.texCols,
-      texRows,
+      cls.texCols,
+      cls.texRows,
       layers,
     );
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
@@ -211,27 +255,31 @@ export class OverviewTextures {
     if (this.maxAnisotropy > 1) {
       gl.texParameterf(gl.TEXTURE_2D_ARRAY, TEXTURE_MAX_ANISOTROPY, this.maxAnisotropy);
     }
-    return { tex, layers, used: 0, dirty: false, free: [] };
+    return { tex, layers, used: 0, dirty: false, free: [], live: 0 };
   }
 
-  allocate(lineCount: number): Slot {
-    const classIdx = this.classFor(lineCount);
+  /** A layer for a file of this many screen rows, holding mip `level` and
+   *  everything coarser. */
+  allocate(lineCount: number, level: number): Slot {
+    const classIdx = level * HEIGHT_CLASSES.length + this.heightFor(lineCount);
     const cls = this.classes[classIdx];
-    const texRows = Math.min(cls.texRows, Math.max(1, lineCount));
+    const texRows = Math.min(cls.baseRows, Math.max(1, lineCount));
 
     // A released layer first, then a chunk with room, then a new chunk.
     let chunkIdx = cls.chunks.findIndex((c) => c.free.length > 0);
     if (chunkIdx >= 0) {
       const chunk = cls.chunks[chunkIdx];
-      return { classIdx, chunkIdx, layer: chunk.free.pop()!, texRows };
+      chunk.live++;
+      return { classIdx, chunkIdx, layer: chunk.free.pop()!, texRows, level };
     }
     chunkIdx = cls.chunks.findIndex((c) => c.used < c.layers);
     if (chunkIdx < 0) {
-      cls.chunks.push(this.newChunk(cls.texRows));
+      cls.chunks.push(this.newChunk(cls));
       chunkIdx = cls.chunks.length - 1;
     }
     const chunk = cls.chunks[chunkIdx];
-    return { classIdx, chunkIdx, layer: chunk.used++, texRows };
+    chunk.live++;
+    return { classIdx, chunkIdx, layer: chunk.used++, texRows, level };
   }
 
   /** Hand a layer back. The pixels are left alone; `write` clears a layer
@@ -241,18 +289,29 @@ export class OverviewTextures {
     if (!chunk) return;
     if (chunk.free.includes(slot.layer)) return;
     chunk.free.push(slot.layer);
+    chunk.live--;
   }
 
   /** Whether a file of this many rows still fits the slot it has, so a
    *  relayout can keep the layer instead of taking another. */
   fitsSlot(slot: Slot, lineCount: number): boolean {
-    return this.classFor(lineCount) === slot.classIdx;
+    return slot.classIdx === slot.level * HEIGHT_CLASSES.length + this.heightFor(lineCount);
   }
 
   /** Texel rows a file of this many rows covers in the slot's class. */
   rowsFor(slot: Slot, lineCount: number): number {
     const cls = this.classes[slot.classIdx];
-    return Math.min(cls.texRows, Math.max(1, lineCount));
+    return Math.min(cls.baseRows, Math.max(1, lineCount));
+  }
+
+  /** Bytes a layer for a file of this many rows would take at `level`. */
+  bytesFor(lineCount: number, level: number): number {
+    return this.bytesPerLayer(this.classes[level * HEIGHT_CLASSES.length + this.heightFor(lineCount)]);
+  }
+
+  /** Bytes a layer of this slot's class takes, mip chain included. */
+  slotBytes(slot: Slot): number {
+    return this.bytesPerLayer(this.classes[slot.classIdx]);
   }
 
   /**
@@ -268,7 +327,7 @@ export class OverviewTextures {
     const { gl } = this;
     const cls = this.classes[slot.classIdx];
     const tw = overview.texCols;
-    const th = cls.texRows;
+    const th = cls.baseRows;
     const texelRows = slot.texRows;
     const texels = tw * texelRows;
 
@@ -360,13 +419,18 @@ export class OverviewTextures {
     // allocation did.
     full.fill(0, tw * texelRows * 4, tw * th * 4);
 
-    gl.texSubImage3D(
-      gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot.layer,
-      tw, th, 1,
-      gl.RGBA, gl.UNSIGNED_BYTE,
-      full, 0,
-    );
-    this.uploadMips(slot.layer, full, tw, th, texelRows);
+    // Always rasterised at full resolution and reduced from there, whatever
+    // level the slot starts at, so a coarse layer is exactly the mip a full
+    // one would have had and swapping between them changes nothing on screen.
+    if (slot.level === 0) {
+      gl.texSubImage3D(
+        gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot.layer,
+        tw, th, 1,
+        gl.RGBA, gl.UNSIGNED_BYTE,
+        full, 0,
+      );
+    }
+    this.uploadMips(slot.layer, slot.level, full, tw, th, texelRows);
     chunk.dirty = true;
   }
 
@@ -459,7 +523,7 @@ export class OverviewTextures {
 
   /** Build and upload the whole mip chain for one layer. */
   private uploadMips(
-    layer: number, base: Uint8Array, w: number, h: number, usedRows: number,
+    layer: number, from: number, base: Uint8Array, w: number, h: number, usedRows: number,
   ): void {
     const { gl } = this;
     let src = base;
@@ -474,13 +538,17 @@ export class OverviewTextures {
       const next = this.reduce(src, sw, sh, toB ? this.mipB : this.mipA, used);
       toB = !toB;
       used = next.used;
-      gl.texSubImage3D(
-        gl.TEXTURE_2D_ARRAY, level, 0, 0, layer,
-        next.w, next.h, 1,
-        gl.RGBA, gl.UNSIGNED_BYTE,
-        // A view of the scratch buffer, since only its head is this level.
-        next.data.subarray(0, next.w * next.h * 4), 0,
-      );
+      // Levels finer than the slot holds are computed, since the coarser ones
+      // are reduced from them, and not uploaded.
+      if (level >= from) {
+        gl.texSubImage3D(
+          gl.TEXTURE_2D_ARRAY, level - from, 0, 0, layer,
+          next.w, next.h, 1,
+          gl.RGBA, gl.UNSIGNED_BYTE,
+          // A view of the scratch buffer, since only its head is this level.
+          next.data.subarray(0, next.w * next.h * 4), 0,
+        );
+      }
       src = next.data;
       sw = next.w;
       sh = next.h;
@@ -502,7 +570,13 @@ export class OverviewTextures {
 
   /** Fraction of the class's texel rows that this file occupies. */
   vExtent(slot: Slot): number {
-    return slot.texRows / this.classes[slot.classIdx].texRows;
+    return slot.texRows / this.classes[slot.classIdx].baseRows;
+  }
+
+  /** Texel rows of the texture a class is drawn from, for the shader's
+   *  vertical sharpening. */
+  texRowsOf(classIdx: number): number {
+    return this.classes[classIdx].texRows;
   }
 
   chunkKeys(): [number, number][] {
@@ -511,16 +585,23 @@ export class OverviewTextures {
     return keys;
   }
 
-  stats(): { layers: number; bytes: number } {
+  /**
+   * Layers in use, and allocated storage in bytes, mip chains included, in
+   * all and for the finer levels alone. The finer levels are what the budget
+   * in the scene bounds; the base level is one small layer per file.
+   */
+  stats(): { layers: number; bytes: number; detailBytes: number } {
     let layers = 0;
     let bytes = 0;
+    let detailBytes = 0;
     for (const cls of this.classes) {
       for (const c of cls.chunks) {
-        layers += c.used;
-        // Allocated storage, mip chain included.
-        bytes += overview.texCols * cls.texRows * 4 * c.layers * 1.34;
+        layers += c.live;
+        const b = this.bytesPerLayer(cls) * c.layers;
+        bytes += b;
+        if (cls.level < BASE_LEVEL) detailBytes += b;
       }
     }
-    return { layers, bytes: Math.round(bytes) };
+    return { layers, bytes: Math.round(bytes), detailBytes: Math.round(detailBytes) };
   }
 }

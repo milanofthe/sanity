@@ -10,7 +10,7 @@
 // stays in the tens of thousands no matter how large the repository is.
 
 import { Camera } from '$lib/canvas/camera';
-import { metrics, timing } from '$lib/metrics';
+import { metrics, overview, timing } from '$lib/metrics';
 import {
   applyTo, finished, IDENTITY, same, settleIn, slideFrom, transformFor,
   type PanelAnim, type Rect as PanelRect, type Transform,
@@ -28,7 +28,7 @@ import {
 import { lineAtRow, visualRowsCached, wrapOffsets } from '$lib/canvas/layout/wrap';
 import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
 import { BASELINE_RATIO, GlyphAtlas } from './glyphatlas';
-import { HEIGHT_CLASSES, OverviewTextures, type Slot } from './codetex';
+import { BASE_LEVEL, OverviewTextures, type Slot } from './codetex';
 import { MediaTextures } from './mediatex';
 import { SpatialGrid } from '$lib/canvas/spatial';
 import {
@@ -50,7 +50,11 @@ export interface TextSource {
 export interface SceneFile {
   node: FileNode;
   data: FileData;
+  /** The overview at `BASE_LEVEL`, which every file holds. */
   slot: Slot;
+  /** A finer level of the same overview, held while the panel is large
+   *  enough on screen to need it; see `pushOverview`. */
+  detail: Slot | null;
   /**
    * Screen row each source line starts on, at this panel's column width.
    *
@@ -124,6 +128,8 @@ interface LineChangeAnim {
 
 
 export interface FrameStats {
+  /** Time spent writing overview detail after the frame was drawn. */
+  streamMs: number;
   visibleFiles: number;
   overviewQuads: number;
   spanQuads: number;
@@ -132,6 +138,24 @@ export interface FrameStats {
   pxPerLine: number;
   cpuMs: number;
 }
+
+/**
+ * Time a frame may spend writing overview detail for panels that just grew
+ * large enough on screen to need it. Spent after the frame is drawn, so what
+ * is on screen never waits for it; what it writes shows on the next frame.
+ */
+const STREAM_BUDGET_MS = 4;
+
+/**
+ * Bytes of overview detail held per device pixel of the canvas.
+ *
+ * The budget follows the screen because what needs detail is what is on it:
+ * a panel is given the level at which its texels are no denser than its
+ * pixels, so at any zoom the detail in use is about as many texels as there
+ * are pixels showing code. The factor covers the mip chain, the rounding of
+ * each panel to a whole level, and the axis that needs less.
+ */
+const DETAIL_BYTES_PER_PIXEL = 64;
 
 const RECT_STRIDE = 12;
 const OVERVIEW_STRIDE = 11;
@@ -402,6 +426,17 @@ export class Scene {
   private nearFiles: number[] = [];
   private nearDirs: number[] = [];
   private frameNo = 0;
+
+  /** Files holding a detail level, for eviction. */
+  private detailed = new Set<SceneFile>();
+  /** What those detail layers take, in bytes. */
+  private detailBytes = 0;
+  /** Panels this frame found needing a finer level than they hold, with the
+   *  level and how large they are on screen, which decides who goes first. */
+  private wanted: { f: SceneFile; level: number; area: number }[] = [];
+  /** Set while there is streaming left to do or a layer was just written,
+   *  so the loop draws another frame. */
+  private streamPending = false;
   /** Whether anything was moving on the last frame drawn; see `moving`. */
   private wasMoving = false;
   /** Path whose header the pointer is over, for the hover highlight. */
@@ -530,7 +565,7 @@ export class Scene {
   changing = false;
   stats: FrameStats = {
     visibleFiles: 0, overviewQuads: 0, spanQuads: 0, glyphQuads: 0,
-    rectQuads: 0, pxPerLine: 0, cpuMs: 0,
+    rectQuads: 0, pxPerLine: 0, cpuMs: 0, streamMs: 0,
   };
 
   constructor(gl: GL, public layout: Layout, private text: TextSource, private pal: Palette) {
@@ -615,6 +650,7 @@ export class Scene {
     for (const [path, f] of [...this.files]) {
       if (byPath.has(path)) continue;
       if (!f.node.stub) this.textures.release(f.slot);
+      this.dropDetail(f);
       this.files.delete(path);
       gone = true;
     }
@@ -788,6 +824,7 @@ export class Scene {
     for (const f of this.files.values()) {
       if (f.node.stub) continue;
       this.textures.write(f.slot, f.data, f.node.geom.cols, f.rows);
+      if (f.detail) this.textures.write(f.detail, f.data, f.node.geom.cols, f.rows);
     }
     this.textures.finalize();
   }
@@ -798,7 +835,8 @@ export class Scene {
     if (node.stub) {
       this.add(node.path, {
         node, data,
-        slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0 },
+        slot: { classIdx: 0, chunkIdx: 0, layer: 0, texRows: 0, level: BASE_LEVEL },
+        detail: null,
         rows: new Uint32Array(1),
         since: Infinity, shownMark: 0, state: aggregateState(data), anim: this.animFor(node),
         family: familyOf(data.langId),
@@ -812,11 +850,11 @@ export class Scene {
     const rows = wrapOffsets(data.lineCols, node.geom.cols);
     // The texture is as tall as the file is on screen, wrapped rows included,
     // so a row of the texture is a row of the panel either way.
-    const slot = this.textures.allocate(rows[data.lineCount]);
+    const slot = this.textures.allocate(rows[data.lineCount], BASE_LEVEL);
     node.layer = slot.layer;
     this.textures.write(slot, data, node.geom.cols, rows);
     this.add(node.path, {
-      node, data, slot, rows, since: Infinity, shownMark: 0, state: aggregateState(data),
+      node, data, slot, detail: null, rows, since: Infinity, shownMark: 0, state: aggregateState(data),
       family: familyOf(data.langId),
       anim: this.animFor(node),
       wroteRows: rows[data.lineCount], wroteCols: node.geom.cols,
@@ -852,10 +890,16 @@ export class Scene {
       // than when the relayout decided so, because until this point the old
       // layer is what the panel is drawing.
       this.textures.release(f.slot);
-      f.slot = this.textures.allocate(rows);
+      f.slot = this.textures.allocate(rows, BASE_LEVEL);
     }
     f.slot.texRows = this.textures.rowsFor(f.slot, rows);
     this.textures.write(f.slot, data, node.geom.cols, f.rows);
+    // The detail follows, or goes and is asked for again once it is drawn.
+    if (f.detail && !this.textures.fitsSlot(f.detail, rows)) this.dropDetail(f);
+    if (f.detail) {
+      f.detail.texRows = this.textures.rowsFor(f.detail, rows);
+      this.textures.write(f.detail, data, node.geom.cols, f.rows);
+    }
     f.wroteRows = f.rows[data.lineCount];
     f.wroteCols = node.geom.cols;
     node.layer = f.slot.layer;
@@ -929,6 +973,7 @@ export class Scene {
     if (f.node.stub) return;
     f.rows = wrapOffsets(data.lineCols, f.node.geom.cols);
     this.textures.write(f.slot, data, f.node.geom.cols, f.rows);
+    if (f.detail) this.textures.write(f.detail, data, f.node.geom.cols, f.rows);
     f.wroteRows = f.rows[data.lineCount];
     f.wroteCols = f.node.geom.cols;
   }
@@ -1162,7 +1207,7 @@ export class Scene {
     // `settling` means a motion is in progress, and something waiting for the
     // canvas to come to rest must not wait for a fade.
     this.changing = changing;
-    if (this.animating) {
+    if (this.animating || this.streamPending) {
       ticking = true;
       redraw = true;
     }
@@ -1299,7 +1344,7 @@ export class Scene {
       else this.pushColumnRules(f, cam.zoom);
       this.pushHeader(f, cam.zoom, f.node.path === this.hoveredPath);
       this.pushPanelBorder(f, this.matched !== null && hit);
-      if (overviewFade > 0.004) this.pushOverview(f, overviewFade);
+      if (overviewFade > 0.004) this.pushOverview(f, overviewFade, pxPerLine, cam.zoom);
       if (spanFade > 0.004) this.pushSpans(f, spanFade, pxPerLine, vx0, vy0, vx1, vy1);
       if (glyphFade > 0.004) {
         this.pushGlyphs(f, glyphFade, vx0, vy0, vx1, vy1);
@@ -1345,7 +1390,12 @@ export class Scene {
       rectQuads: this.bgRects.count + this.fgRects.count,
       pxPerLine,
       cpuMs: performance.now() - t0,
+      streamMs: 0,
     };
+    // After the frame is drawn and measured: what it writes shows next frame.
+    const ts = performance.now();
+    this.stream(frame);
+    this.stats.streamMs = performance.now() - ts;
   }
 
   /**
@@ -1819,9 +1869,34 @@ export class Scene {
     return b;
   }
 
-  private pushOverview(f: SceneFile, fade: number): void {
-    const { node: n, slot } = f;
+  /**
+   * The finest mip level a panel can show at this zoom, `BASE_LEVEL` at most.
+   *
+   * The level at which the texture has no more texels than the panel has
+   * pixels, on whichever axis gives out first. Vertically a texel row stands
+   * for one or more screen rows, horizontally 128 texels span a column.
+   */
+  private levelNeeded(f: SceneFile, pxPerLine: number, zoom: number, totalRows: number): number {
+    const scale = this.dpr * this.tf.scale;
+    const rowPx = pxPerLine * scale;
+    const colPx = columnWidth(f.node.geom) * zoom * scale;
+    const texPerRow = f.slot.texRows / Math.max(1, totalRows);
+    const lv = Math.floor(Math.log2(texPerRow / Math.max(1e-6, rowPx)));
+    const lh = Math.floor(Math.log2(overview.texCols / Math.max(1e-6, colPx)));
+    return Math.max(0, Math.min(BASE_LEVEL, lv, lh));
+  }
+
+  private pushOverview(f: SceneFile, fade: number, pxPerLine: number, zoom: number): void {
+    const { node: n } = f;
     const g = n.geom;
+    // The detail when there is one, even a coarser one than this zoom asks
+    // for: it is still finer than the base.
+    const need = this.levelNeeded(f, pxPerLine, zoom, f.rows[f.data.lineCount]);
+    if (need < BASE_LEVEL && (!f.detail || f.detail.level > need)) {
+      const s = zoom * this.tf.scale;
+      this.wanted.push({ f, level: need, area: n.w * n.h * s * s });
+    }
+    const slot = f.detail ?? f.slot;
     const b = this.overviewBuffer(slot.classIdx, slot.chunkIdx);
     const vTotal = this.textures.vExtent(slot);
     const pitch = columnPitch(g);
@@ -1863,6 +1938,87 @@ export class Scene {
     }
   }
 
+  /** Detail held and allowed, in bytes, and how many panels hold it. */
+  detailStats(): { bytes: number; budget: number; files: number } {
+    return { bytes: this.detailBytes, budget: this.detailBudget(), files: this.detailed.size };
+  }
+
+  /** Give a file's detail layer back. */
+  private dropDetail(f: SceneFile): void {
+    if (!f.detail) return;
+    this.detailBytes -= this.textures.slotBytes(f.detail);
+    this.textures.release(f.detail);
+    f.detail = null;
+    this.detailed.delete(f);
+  }
+
+  /** Detail may take this many bytes, from the size of the drawing buffer. */
+  private detailBudget(): number {
+    const { gl } = this;
+    return Math.max(64 << 20, DETAIL_BYTES_PER_PIXEL * gl.drawingBufferWidth * gl.drawingBufferHeight);
+  }
+
+  /**
+   * Free detail until `bytes` more fit the budget, from the panels drawn
+   * longest ago. Never one drawn this frame: taking what is on screen to
+   * make room for something else on screen only moves the blur around.
+   */
+  private evict(bytes: number, frame: number): boolean {
+    const budget = this.detailBudget();
+    if (this.detailBytes + bytes <= budget) return true;
+    // Sorted once per frame, when it is first needed, and walked from there:
+    // sorting per write was the whole cost of a frame that streamed a few
+    // hundred layers into a full budget.
+    if (this.evictFrame !== frame) {
+      this.evictFrame = frame;
+      this.evictQueue = [...this.detailed].filter((f) => f.drawnAt !== frame);
+      this.evictQueue.sort((a, b) => b.drawnAt - a.drawnAt);
+    }
+    while (this.evictQueue.length > 0) {
+      const f = this.evictQueue.pop()!;
+      if (!f.detail) continue;
+      this.dropDetail(f);
+      if (this.detailBytes + bytes <= budget) return true;
+    }
+    return false;
+  }
+  private evictFrame = -1;
+  /** Panels holding detail, most recently drawn first, so `pop` takes the
+   *  one drawn longest ago. */
+  private evictQueue: SceneFile[] = [];
+
+  /**
+   * Write the detail this frame asked for, largest panels first, inside the
+   * time budget and the byte budget.
+   */
+  private stream(frame: number): void {
+    const wanted = this.wanted;
+    this.streamPending = false;
+    if (wanted.length === 0) return;
+    wanted.sort((a, b) => b.area - a.area);
+    const t0 = performance.now();
+    for (const { f, level } of wanted) {
+      if (performance.now() - t0 > STREAM_BUDGET_MS) {
+        this.streamPending = true;
+        break;
+      }
+      // Gone or rewritten since it was asked for.
+      if (this.files.get(f.node.path) !== f || f.node.stub) continue;
+      const rows = f.rows[f.data.lineCount];
+      const bytes = this.textures.bytesFor(rows, level);
+      const freed = f.detail ? this.textures.slotBytes(f.detail) : 0;
+      if (!this.evict(bytes - freed, frame)) break;
+      this.dropDetail(f);
+      const slot = this.textures.allocate(rows, level);
+      this.textures.write(slot, f.data, f.node.geom.cols, f.rows);
+      f.detail = slot;
+      this.detailBytes += bytes;
+      this.detailed.add(f);
+      this.streamPending = true;
+    }
+    wanted.length = 0;
+  }
+
   private drawOverview(): void {
     const { gl } = this;
     let any = false;
@@ -1881,7 +2037,7 @@ export class Scene {
       if (b.count === 0) continue;
       const [ci, chi] = key.split(':').map(Number);
       gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textures.texture(ci, chi));
-      gl.uniform1f(this.uOverview.uTexRows, HEIGHT_CLASSES[ci]);
+      gl.uniform1f(this.uOverview.uTexRows, this.textures.texRowsOf(ci));
       b.upload();
       quadAttrib(gl, this.progOverview, this.quad);
       gl.bindBuffer(gl.ARRAY_BUFFER, b.buf);

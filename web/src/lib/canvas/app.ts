@@ -146,6 +146,15 @@ export class CanvasApp {
 
   private pending: string[] = [];
   private decoded = new Map<string, FileData>();
+  /**
+   * Layout node per path, built once per layout.
+   *
+   * The upload loop used to build this every frame, before looking at its
+   * time budget. At a hundred thousand files building it took longer than
+   * the budget, so the loop never got to upload anything: the project laid
+   * out, and not one panel ever appeared.
+   */
+  private nodeByPath = new Map<string, FileNode>();
   private uploaded = 0;
 
   private raf = 0;
@@ -314,6 +323,7 @@ export class CanvasApp {
       source.entries.map((e) => ({ ...e, lineCols: this.decoded.get(e.path)?.lineCols })),
       { w: this.cam.vw, h: this.cam.vh },
     );
+    this.nodeByPath = new Map(this.layout.files.map((f) => [f.path, f]));
     const st = layoutStats(this.layout);
     this.fill = st.fill;
     // Logged rather than hidden: fill, overlaps and off-grid edges are the
@@ -909,10 +919,9 @@ export class CanvasApp {
   private uploadBudget(): void {
     if (!this.scene || !this.layout || this.pending.length === 0) return;
     const t0 = performance.now();
-    const byPath = new Map(this.layout.files.map((f) => [f.path, f]));
     while (this.pending.length > 0 && performance.now() - t0 < UPLOAD_BUDGET_MS) {
       const path = this.pending.pop()!;
-      const node = byPath.get(path);
+      const node = this.nodeByPath.get(path);
       const data = this.decoded.get(path);
       // `ensure` rather than `addFile`: after a relayout the path may already
       // be in the scene and only need its texture written again.
