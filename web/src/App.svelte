@@ -223,6 +223,15 @@
 		app?.setDirLabels(ui.dirLabels);
 	});
 
+	// The history ticker's state on the handle scripts use, next to the app:
+	// scripts/readme-shots.mjs shows the ticker in the web build, which has no
+	// backend to fill it, and a module imported from the page is not always
+	// the instance the app holds.
+	$effect(() => {
+		const handle = (window as unknown as { __sanity?: Record<string, unknown> }).__sanity;
+		if (app && handle) handle.history = history;
+	});
+
 	/** Set while the GPU has taken the WebGL context away; see `watchContext`. */
 	let contextLost = $state(false);
 

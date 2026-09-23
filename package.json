@@ -39,6 +39,7 @@
 		"picture-check": "node web/scripts/picture-check.mjs",
 		"motion-check": "node web/scripts/motion-check.mjs",
 		"cue-check": "node web/scripts/cue-check.mjs",
+		"readme-shots": "node web/scripts/readme-shots.mjs",
 		"dirs-check": "node web/scripts/dirs-check.mjs",
 		"far-check": "node web/scripts/far-check.mjs",
 		"scale-check": "node web/scripts/scale-check.mjs",
