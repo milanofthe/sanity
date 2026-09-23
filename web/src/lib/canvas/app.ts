@@ -887,10 +887,10 @@ export class CanvasApp {
         if (this.scene) this.scene.hoveredPath = hit?.path ?? null;
       }
       c.style.cursor = hit || onLabel ? 'pointer' : '';
-      // The panel body, not just its header: the breadcrumb answers "what am
-      // I looking at", and at the outer zoom levels the header is a hairline
-      // while the panel is the size of a stamp. Directory labels vanish out
-      // there too, so this is the only thing that still says where you are.
+      // The panel body, not just its header: the status bar answers "what
+      // am I looking at", and at the outer zoom levels the header is a
+      // hairline while the panel is the size of a stamp. The directory labels
+      // name the regions out there, and this names the file.
       const over = this.fileAt(...local(e));
       if (over?.path !== this.hoverPath) {
         this.hoverPath = over?.path ?? null;

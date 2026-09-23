@@ -538,6 +538,10 @@ export class Scene {
   /** Path whose header the pointer is over, for the hover highlight. */
   hoveredPath: string | null = null;
 
+  /** Draw the directory labels and the breadcrumb. Off only for the
+   *  measurement that shows they are there. */
+  labels = true;
+
   /** Sharpen the overview texture's vertical interpolation. Off only for the
    *  measurement that shows what it is worth. */
   sharpen = true;
@@ -1424,7 +1428,8 @@ export class Scene {
       for (const b of this.overviewByChunk.values()) overviewQuads += b.count;
       rectQuads = this.bgRects.count + this.fgRects.count;
     }
-    this.drawLabels(cam);
+    if (this.labels) this.drawLabels(cam);
+    else this.placement = { labels: [], crumb: null };
 
     this.stats = {
       visibleFiles,
