@@ -22,8 +22,10 @@ import type { DirNode } from './layout/tree';
  * and it read as loud and inconsistent instead: the top-level names were
  * headlines over the code, and the same directory changed size as you
  * zoomed. The order of placement already says which directory is outer.
+ * Eleven, after twelve looked a size too large on screen: a tab is a note on
+ * a frame, not a heading.
  */
-export const LABEL_SIZE = 12;
+export const LABEL_SIZE = 11;
 
 /**
  * Side of the square a directory has to cover on screen to be named, in CSS
