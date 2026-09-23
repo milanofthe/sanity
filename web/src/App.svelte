@@ -113,6 +113,15 @@
 		rebuild();
 	});
 
+	// Documents expanded or not changes their panels' shape, so the layout.
+	let lastExpand = ui.expandDocuments;
+	$effect(() => {
+		const on = ui.expandDocuments;
+		if (!app || on === lastExpand) return;
+		lastExpand = on;
+		rebuild();
+	});
+
 	/**
 	 * Switch the files git ignores in or out.
 	 *

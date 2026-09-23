@@ -136,6 +136,39 @@ export interface MediaSize {
   h: number;
   /** Pages, 0 for an image and for a document that hides its page tree. */
   pages: number;
+  /** A document shown as all of its pages rather than its first; see
+   *  `pageGrid`. */
+  expanded?: boolean;
+}
+
+/** Space between two pages of an expanded document, as a share of a page's
+ *  width. */
+export const PAGE_GAP = 0.05;
+
+/**
+ * Columns and rows of an expanded document's pages.
+ *
+ * As many columns as bring the grid nearest the proportion of a screen, so a
+ * document of forty pages is a sheet of them to look across rather than a
+ * column to scroll, and one of two is the two side by side. A layout that
+ * would leave its whole last row empty is never the answer.
+ */
+export function pageGrid(pages: number, pageAspect: number): { cols: number; rows: number } {
+  const n = Math.max(1, pages);
+  let best = { cols: 1, rows: n };
+  let err = Infinity;
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    if ((rows - 1) * cols >= n) continue;
+    const w = cols + (cols - 1) * PAGE_GAP;
+    const h = rows / pageAspect + (rows - 1) * PAGE_GAP;
+    const e = Math.abs(Math.log(w / h / 1.6));
+    if (e < err) {
+      err = e;
+      best = { cols, rows };
+    }
+  }
+  return best;
 }
 
 /** The panel a picture asks for. Deterministic, so the fitting pass and the
@@ -151,6 +184,14 @@ export function mediaShape(m: MediaSize): { aspect: number; pixels: number } {
   const w = m.w > 0 ? m.w : 595;
   const h = m.h > 0 ? m.h : 842;
   const pages = m.kind === 'document' ? Math.max(1, m.pages) : 1;
+  // The same area either way, a page's worth per page: expanding a document
+  // changes what its panel shows, not how much of the canvas it is worth.
+  if (m.kind === 'document' && m.expanded && pages > 1) {
+    const { cols, rows } = pageGrid(pages, w / h);
+    const gw = cols * w + (cols - 1) * PAGE_GAP * w;
+    const gh = rows * h + (rows - 1) * PAGE_GAP * w;
+    return { aspect: gw / gh, pixels: w * h * pages };
+  }
   return { aspect: w / h, pixels: w * h * pages };
 }
 

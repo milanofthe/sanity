@@ -41,8 +41,9 @@ Or open a folder from the Project menu.
 - Right click exports the view or the whole project as a 4K PNG.
 - The View menu sets which file types are shown, whether files ignored by git
   are listed, whether files are coloured by language, whether directories are
-  named over the canvas, and whether stepping through the history flies to
-  each change. The Theme menu has eight themes.
+  named over the canvas, whether documents show all their pages, and whether
+  stepping through the history flies to each change. The Theme menu has eight
+  themes.
 
 ## Watching changes
 
@@ -82,8 +83,9 @@ in the background, so returning to the present shows the folder as it is.
 - Source files with syntax highlighting for 16 languages (tree-sitter), plus
   Verilog-A and SPICE.
 - Jupyter notebooks as their cells rather than as JSON.
-- Images, SVGs and the first page of PDFs as panels in their own proportions.
-  PDF pages are rendered on macOS only for now.
+- Images, SVGs and PDFs as panels in their own proportions. A PDF shows its
+  first page, or all of its pages with Expand documents in the View menu,
+  rendered the same way on every platform.
 - Files ignored by git are left out, or listed as placeholders if you switch
   them on.
 

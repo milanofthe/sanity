@@ -15,6 +15,14 @@ use std::path::PathBuf;
 /// its placeholder.
 const MAX_MEDIA_BYTES: u64 = 8 * 1024 * 1024;
 
+/// A document's pages as the demo carries them: the first as large as its
+/// panel is ever drawn at the overview, the rest smaller, since an expanded
+/// document shows many of them at once, and no more than forty of them, so a
+/// long report does not become most of the demo's download.
+const FIRST_PAGE_WIDTH: u32 = 1000;
+const PAGE_WIDTH: u32 = 700;
+const MAX_PAGES: usize = 40;
+
 use std::collections::HashMap;
 
 use sanity_core::lang::extension_of;
@@ -44,6 +52,8 @@ fn main() {
     let mut line_counts: HashMap<String, u32> = HashMap::new();
     let mut media_files = 0u32;
     let mut media_bytes = 0u64;
+    let mut page_files = 0u32;
+    let mut page_bytes = 0u64;
     let mut thumb_files = 0u32;
     let mut thumb_bytes = 0u64;
     // Every thumbnail, to be written as one file. The app gets these from the
@@ -108,7 +118,25 @@ fn main() {
             if let Some(parent) = dst.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
-            if std::fs::copy(root.join(rel), &dst).is_ok() {
+            // A document as its pages, rendered by the same code the app
+            // renders them with, next to its own name: `.png` for the first,
+            // `.p<n>.png` for the rest. The browser has no PDF renderer, and
+            // the file itself is never fetched, so it is not copied.
+            if let Some(sanity_core::media::Media::Document { .. }) = info.media {
+                if let Ok(bytes) = std::fs::read(root.join(rel)) {
+                    let pages = sanity_core::pdf::page_count(&bytes).unwrap_or(0).min(MAX_PAGES);
+                    for page in 0..pages {
+                        let width = if page == 0 { FIRST_PAGE_WIDTH } else { PAGE_WIDTH };
+                        let Ok((rgba, w, h)) = sanity_core::pdf::render_rgba(&bytes, page, width) else { continue };
+                        let Some(png) = sanity_core::thumb::encode_png_small(&rgba, w, h) else { continue };
+                        let name = if page == 0 { format!("{rel}.png") } else { format!("{rel}.p{page}.png") };
+                        if std::fs::write(out.join("media").join(name), &png).is_ok() {
+                            page_files += 1;
+                            page_bytes += png.len() as u64;
+                        }
+                    }
+                }
+            } else if std::fs::copy(root.join(rel), &dst).is_ok() {
                 media_files += 1;
                 media_bytes += info.byte_len;
             }
@@ -160,11 +188,12 @@ fn main() {
 
     println!(
         "dumped {} files, {} payload bytes, {} texts, {media_files} pictures ({} KB), \
-         {thumb_files} thumbnails ({} KB) to {}",
+         {page_files} document pages ({} KB), {thumb_files} thumbnails ({} KB) to {}",
         payloads.len(),
         payloads.iter().map(|(_, b)| b.len()).sum::<usize>(),
         texts.len(),
         media_bytes / 1024,
+        page_bytes / 1024,
         thumb_bytes / 1024,
         out.display()
     );

@@ -113,6 +113,11 @@
 				label="Name directories over the canvas"
 				onchange={() => ui.setDirLabels(!ui.dirLabels)}
 			/>
+			<Switch
+				checked={ui.expandDocuments}
+				label="Expand documents to all their pages"
+				onchange={() => ui.setExpandDocuments(!ui.expandDocuments)}
+			/>
 			{#if history.commits.length > 0}
 				<Switch
 					checked={ui.historyFollow}
