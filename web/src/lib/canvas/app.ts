@@ -883,12 +883,6 @@ export class CanvasApp {
       this.dragging = false;
       c.releasePointerCapture(e.pointerId);
       if (wasDrag) return;
-      // A mark on the edge first: it is drawn over everything, labels too.
-      const changed = this.scene?.edgeMarkAt(...local(e)) ?? null;
-      if (changed !== null) {
-        this.focusFile(changed);
-        return;
-      }
       const dir = this.scene?.labelAt(...local(e)) ?? null;
       if (dir !== null) {
         this.focusDir(dir);
@@ -907,8 +901,7 @@ export class CanvasApp {
       }
       // A directory's label lies over the panels under it and takes the
       // click, so it takes the pointer too.
-      const onLabel = (this.scene?.labelAt(...local(e)) ?? null) !== null
-        || (this.scene?.edgeMarkAt(...local(e)) ?? null) !== null;
+      const onLabel = (this.scene?.labelAt(...local(e)) ?? null) !== null;
       const hit = onLabel ? null : this.headerAt(...local(e));
       if (hit !== this.hovered) {
         this.invalidate();
@@ -946,7 +939,7 @@ export class CanvasApp {
         e.clientX - c.getBoundingClientRect().left,
         e.clientY - c.getBoundingClientRect().top,
       ];
-      if ((this.scene?.labelAt(sx, sy) ?? this.scene?.edgeMarkAt(sx, sy) ?? null) !== null) return;
+      if ((this.scene?.labelAt(sx, sy) ?? null) !== null) return;
       const hit = this.fileAt(sx, sy);
       if (hit) this.focusFile(hit.path);
       else this.fit();
