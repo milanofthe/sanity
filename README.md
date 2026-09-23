@@ -5,16 +5,17 @@
 sanity opens a folder and shows every file in it at once, as read-only panels
 on one zoomable canvas, grouped by directory. Zoomed out you see the structure
 of the project, zoomed in you read the code. When a file changes on disk, its
-panel updates and the changed lines are marked.
+panel flashes and the changed lines are marked.
 
 It is a monitor. It runs next to the agent interface while coding agents work
 in a repository, so you can see which files they touch, where those sit in the
-tree, and zoom in to read what changed.
+tree, and zoom in to read what changed. It also plays the repository's git
+history the same way, one commit at a time.
 
 Try it in the browser with a few public repositories, no install:
 [sanity.milanrother.com](https://sanity.milanrother.com/)
 
-![the whole project at once](assets/screenshot-project.png)
+![the whole project at once, directories named](assets/screenshot-project.webp)
 
 ## Install
 
@@ -34,16 +35,47 @@ Or open a folder from the Project menu.
 - `f` fits the whole project, a double click fits a panel.
 - `/` jumps to search, over file names and contents. Enter goes to the next
   hit, Escape clears.
+- `[` and `]` step through the git history.
 - Clicking a panel header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
   `$EDITOR` or the system default.
 - Right click exports the view or the whole project as a 4K PNG.
-- In a git repository, the arrows next to the search field step through the
-  history, and so do `[` and `]`. Each step plays like a save: removed lines
-  flash red, added ones green. Click the commit id to come back to now.
 - The View menu sets which file types are shown, whether files ignored by git
   are listed, whether files are coloured by language, whether directories are
   named over the canvas, and whether stepping through the history flies to
   each change. The Theme menu has eight themes.
+
+## Watching changes
+
+The folder is watched while it is open. When a file is saved, its panel
+flashes, the lines that were removed flash red and disappear, and the lines
+that were added come in green. A new file fades in where the layout puts it,
+and a deleted one fades out in red. When several files change at once, a
+commit, a formatter or a save of all open files, they start one after another
+across the canvas, so you can follow where it went.
+
+The bands are drawn at every zoom level, so even with the whole project on
+screen you can see where in a file the change was. A file that is rewritten
+with the same content, by `touch` or a formatter with nothing to do, does not
+flash. Moving or renaming a directory is picked up as its files moving.
+
+![a change, the added lines coming in green](assets/screenshot-code.webp)
+
+## History
+
+In a git repository a ticker appears next to the search field. Its arrows, or
+`[` and `]`, step through the commits, newest first. Each step is played like
+a save: the lines the commit removed flash red, the ones it added flash green,
+files it deleted fade out and files it created fade in. Stepping back plays
+the same commit in reverse. Clicking the commit id returns to the present.
+
+While you are in the history the layout does not move: it is computed once
+for every file that exists anywhere in the loaded commits, each at its largest
+version, and a file that does not exist yet keeps its place empty. By default
+the view flies to what each step changed. The working tree is never touched;
+the contents come out of git's object store, and the watcher keeps running
+in the background, so returning to the present shows the folder as it is.
+
+![stepping through the history, a commit's four files changing](assets/screenshot-history.webp)
 
 ## What it shows
 
@@ -58,7 +90,12 @@ Or open a folder from the Project menu.
 It draws only when something changes, so it uses no CPU while idle, and it
 stays usable up to around 100,000 files.
 
-![panels at a readable zoom](assets/screenshot-code.png)
+![figures and the first page of a PDF](assets/screenshot-pictures.webp)
+
+Search covers file names and the text of every file. Matching panels stay lit,
+the rest dims, matching lines are banded, and Enter walks through the hits.
+
+![532 matches for one word](assets/screenshot-search.webp)
 
 ## Building
 
@@ -76,6 +113,9 @@ npm run demo           # clone and dump the demo repositories
 npm run dev            # http://localhost:5183
 ```
 
+The pictures in this README are made by `npm run readme-shots`, against the
+dev server.
+
 ## Checks
 
 ```sh
@@ -84,17 +124,17 @@ npm run check-all
 
 Type checks, clippy, the TypeScript and Rust tests, and a set of scripts in
 `web/scripts` that open the app in a real browser and check what it draws:
-layout, text, pictures, performance, themes and more.
+layout, text, pictures, change cues, performance, themes and more.
 
 ## Repository
 
 ```
-crates/sanity-core     scanning, tokenising, the wire format
+crates/sanity-core     scanning, tokenising, git history, the wire format
 crates/sanity-watch    watching the folder, debounced into batches
-src-tauri              the desktop shell and file watcher
+src-tauri              the desktop shell
 web/src/lib/canvas     layout and the WebGL2 renderer
 web/src/lib/ui         interface components
-web/scripts            browser checks
+web/scripts            browser checks and the README pictures
 ```
 
 Design decisions and measurements are in the
