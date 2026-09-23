@@ -7,12 +7,22 @@ import { applyTheme, storedTheme, type ThemeId } from '$lib/theme';
 /** Where the optional view switches are kept between sessions. */
 const TINT_KEY = 'sanity.tintLanguages';
 const LABELS_KEY = 'sanity.dirLabels';
+const FOLLOW_KEY = 'sanity.historyFollow';
 
-function storedFlag(key: string): boolean {
+function storedFlag(key: string, fallback = false): boolean {
 	try {
-		return localStorage.getItem(key) === '1';
+		const v = localStorage.getItem(key);
+		return v === null ? fallback : v === '1';
 	} catch {
-		return false;
+		return fallback;
+	}
+}
+
+function storeFlag(key: string, on: boolean): void {
+	try {
+		localStorage.setItem(key, on ? '1' : '0');
+	} catch {
+		// A session without storage keeps the switch for as long as it runs.
 	}
 }
 
@@ -38,6 +48,14 @@ class UiState {
 	 * at the outermost zoom takes, and not what everybody wants on screen.
 	 */
 	dirLabels = $state(storedFlag(LABELS_KEY));
+	/**
+	 * Stepping through the history flies to what each step changed.
+	 *
+	 * On by default, unlike the others: a commit is usually a handful of files
+	 * somewhere in the project, and without this the step plays wherever the
+	 * view happens to be, often entirely off screen.
+	 */
+	historyFollow = $state(storedFlag(FOLLOW_KEY, true));
 
 	setTheme(id: ThemeId) {
 		this.theme = id;
@@ -60,6 +78,11 @@ class UiState {
 		} catch {
 			// As for the tint.
 		}
+	}
+
+	setHistoryFollow(on: boolean) {
+		this.historyFollow = on;
+		storeFlag(FOLLOW_KEY, on);
 	}
 
 	apply() {

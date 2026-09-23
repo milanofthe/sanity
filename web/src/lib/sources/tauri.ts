@@ -16,6 +16,7 @@ import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
 import { history, type Commit } from '$lib/state/history.svelte';
+import { ui } from '$lib/state/ui.svelte';
 import { unpack } from './payload.ts';
 import { THUMB_MAX, unpackThumbs } from './thumbs.ts';
 
@@ -573,6 +574,9 @@ async function stepTo(app: CanvasApp, index: number): Promise<void> {
   text.at = to;
   text.clear();
   await app.applyBatch(fresh, header.removed, async () => openLoaded(app, true), true);
+  // To what the step changed, where it still has a place: the ones it
+  // removed keep theirs in the history, and lose it in the present.
+  if (ui.historyFollow) app.focusPaths([...header.rows.map((r) => r.path), ...header.removed]);
   if (index < 0) {
     // Back in the present: laid out for the working tree alone again, which
     // takes the empty places away.

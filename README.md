@@ -41,8 +41,9 @@ Or open a folder from the Project menu.
   history, and so do `[` and `]`. Each step plays like a save: removed lines
   flash red, added ones green. Click the commit id to come back to now.
 - The View menu sets which file types are shown, whether files ignored by git
-  are listed, and whether files are coloured by language. The Theme menu has
-  eight themes.
+  are listed, whether files are coloured by language, whether directories are
+  named over the canvas, and whether stepping through the history flies to
+  each change. The Theme menu has eight themes.
 
 ## What it shows
 

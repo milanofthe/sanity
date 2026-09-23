@@ -16,6 +16,7 @@
 	import { familyOf } from '$lib/canvas/language';
 	import { project, VIEW_MODES, type ViewMode } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
+	import { history } from '$lib/state/history.svelte';
 
 	const n = (v: number) => v.toLocaleString('en-US');
 
@@ -112,6 +113,13 @@
 				label="Name directories over the canvas"
 				onchange={() => ui.setDirLabels(!ui.dirLabels)}
 			/>
+			{#if history.commits.length > 0}
+				<Switch
+					checked={ui.historyFollow}
+					label="Fit the view to each step through the history"
+					onchange={() => ui.setHistoryFollow(!ui.historyFollow)}
+				/>
+			{/if}
 			{#if project.ignoredTotal > 0 || project.includeIgnored}
 				<Switch
 					checked={project.includeIgnored}
