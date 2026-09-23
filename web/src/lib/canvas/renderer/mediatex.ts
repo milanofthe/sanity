@@ -180,8 +180,7 @@ const ROUNDING_PX = 2;
 
 /** Above this share of transparent area a picture is treated as ink on a page
  *  rather than as a picture with a background of its own. A plot exported by
- *  matplotlib and a PDF page rendered by ImageIO are both near 1.0; a
- *  photograph or a screenshot is 0. */
+ *  matplotlib is near 1.0; a photograph or a screenshot is 0. */
 const TRANSLUCENT_SHARE = 0.5;
 
 /**

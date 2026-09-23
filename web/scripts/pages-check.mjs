@@ -7,9 +7,8 @@
 //             view, each page once and small; zoomed into one page, only the
 //             pages in view, at the size they are shown.
 //
-// The web build has no PDF renderer, so a page is answered here with the
-// document's first page, which the demo carries. What is checked is which
-// pages are asked for and how large, not what is on them.
+// Against the demo's own pages, which the dump renders with the renderer the
+// app uses; see examples/dump.rs.
 import { decodePng } from './png.mjs';
 import { base, canvasBox, launch, settled } from './browser.mjs';
 
@@ -33,23 +32,14 @@ const layout = await page.evaluate(async (DOC) => {
     ...src,
     entries: src.entries.map((e) => (e.media?.kind === 'document' ? { ...e, media: { ...e.media, expanded: true } } : e)),
   });
-  // Every page asked for, recorded, and answered with the first.
+  // Every page asked for, recorded on its way through.
   window.__asks = [];
   const media = app.scene.media;
   const fetch = media.fetchBytes;
-  // At the width asked for, as the backend renders a page: a fixed-size
-  // answer would be too small or too large for most asks, and the pipeline
-  // would behave as it never does with the real thing.
-  media.fetchBytes = async (key, level) => {
+  media.fetchBytes = (key, level) => {
     const m = /^(.*)#page=(\d+)$/.exec(key);
-    if (!m) return fetch(key, level);
-    window.__asks.push({ page: Number(m[2]), level });
-    const bytes = await fetch(m[1], level);
-    if (!bytes) return null;
-    const bmp = await createImageBitmap(new Blob([bytes]));
-    const c = new OffscreenCanvas(level, Math.max(1, Math.round((level * bmp.height) / bmp.width)));
-    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-    return (await c.convertToBlob({ type: 'image/png' })).arrayBuffer();
+    if (m) window.__asks.push({ page: Number(m[2]), level });
+    return fetch(key, level);
   };
   const n = app.layout.files.find((f) => f.path === DOC);
   return { pages: n.media.pages, w: n.w, h: n.h, aspect: n.media.w / n.media.h };

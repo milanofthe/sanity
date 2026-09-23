@@ -22,6 +22,11 @@ image = { version = "0.25", default-features = false, features = [
 # nothing to compile, and inflating a few streams is the difference between
 # reading a slide deck as 16:9 and drawing it as A4.
 flate2 = "1"
+# The pages of a PDF, in pure Rust: the same pixels on every platform and in
+# the demo's dump, with no library to carry per platform. MIT or Apache; the
+# renderers that were the alternative are AGPL (mupdf) or a native library
+# per platform (pdfium, CoreGraphics, Windows.Data.Pdf, poppler).
+hayro = "0.7.1"
 serde_json = "1"
 tree-sitter = "0.27.0"
 tree-sitter-bash = "0.25.1"

@@ -2079,14 +2079,12 @@ export class Scene {
           ? this.media?.wantExact(key, pxW, pxH, sourceW)
           : this.media?.want(key, onScreen, mw / mh, sourceW)) ?? null;
 
-    // What goes under it. Most of what a repository holds in pictures is ink
-    // with nothing behind it: a PDF page comes out of ImageIO as black type on
-    // transparency (measured: 98 percent of a page is fully clear), and
-    // pathsim's figures average an alpha of 6.6 of 255. On the canvas
-    // background those are invisible, so anything that carries no background
-    // of its own gets a sheet of paper instead. A document gets one before it
-    // has loaded, since a document always needs one and the placeholder then
-    // reads as a page.
+    // What goes under it. Much of what a repository holds in pictures is ink
+    // with nothing behind it: pathsim's figures average an alpha of 6.6 of
+    // 255, and on the canvas background they are invisible, so anything that
+    // carries no background of its own gets a sheet of paper instead. A
+    // document gets one before it has loaded, so the placeholder already
+    // reads as a page; its pages themselves are rendered on white.
     const paper = m.kind === 'document' || held?.translucent === true;
     const back = paper ? this.pal.surface.paper : this.pal.surface.reducedBg;
     this.pushRect(this.bgRects, x, y, w, h, back, 1, 0, 0);

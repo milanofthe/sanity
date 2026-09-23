@@ -27,10 +27,20 @@ pub const THUMB_MAX: u32 = 128;
 /// rendered on request and crossing to the window once, a few milliseconds of
 /// encoding matter more than a few kilobytes.
 pub fn encode_png(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
-    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    encode(rgba, w, h, image::codecs::png::CompressionType::Fast)
+}
+
+/// The same, compressed as far as it goes, for pictures made once and
+/// downloaded many times: the demo's document pages.
+pub fn encode_png_small(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    encode(rgba, w, h, image::codecs::png::CompressionType::Best)
+}
+
+fn encode(rgba: &[u8], w: u32, h: u32, how: image::codecs::png::CompressionType) -> Option<Vec<u8>> {
+    use image::codecs::png::{FilterType, PngEncoder};
     use image::ImageEncoder;
     let mut out = Vec::new();
-    PngEncoder::new_with_quality(&mut out, CompressionType::Fast, FilterType::Adaptive)
+    PngEncoder::new_with_quality(&mut out, how, FilterType::Adaptive)
         .write_image(rgba, w, h, image::ExtendedColorType::Rgba8)
         .ok()?;
     Some(out)

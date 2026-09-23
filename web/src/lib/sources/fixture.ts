@@ -14,6 +14,7 @@ import { findInTexts, type FileHits } from "$lib/canvas/content";
 import { expandLines } from "$lib/canvas/data/tabs";
 import type { MediaSize } from "$lib/canvas/layout/tree";
 import type { TextSource } from "$lib/canvas/renderer/scene";
+import { ui } from "$lib/state/ui.svelte";
 import { project, type FileGroup } from "$lib/state/project.svelte";
 import { unpack } from "./payload.ts";
 import { THUMB_MAX } from "./thumbs.ts";
@@ -149,7 +150,10 @@ export function openFixture(app: CanvasApp, keepView = false): void {
       lineCount: f.lineCount,
       maxCols: f.maxCols,
       clipCols: f.clipCols,
-      media: f.media,
+      // A document shows every page when the option is on; see `pageGrid`.
+      media: f.media && f.media.kind === 'document' && ui.expandDocuments
+        ? { ...f.media, expanded: true }
+        : f.media,
       stub: project.modeForPath(f.path) === "reduced",
     }))
     .filter((e) => project.modeForPath(e.path) !== "off");
@@ -163,10 +167,18 @@ export function openFixture(app: CanvasApp, keepView = false): void {
     // thumbs/, so a fetch is all it takes. Up to a thumbnail's size that is
     // what is fetched, which is the same rule the app follows against its
     // backend, and it keeps the demo from pulling megabytes for panels a
-    // hundred pixels wide. A document is there as a pre-rendered first page,
-    // with `.png` after its own name: the browser has no PDF renderer and the
-    // dump was built on a machine that does. See scripts/demo.mjs.
-    imageBytes: async (path: string, level: number) => {
+    // hundred pixels wide. A document is there as its pages, rendered by the
+    // dump with the renderer the app uses: `.png` after its own name for the
+    // first, `.p<n>.png` for the rest, asked for as `path#page=n`. See
+    // examples/dump.rs.
+    imageBytes: async (key: string, level: number) => {
+      const page = /^(.*)#page=(\d+)$/.exec(key);
+      if (page) {
+        const n = Number(page[2]);
+        const url = `${base(loaded)}/media/${page[1]}${n === 0 ? '.png' : `.p${n}.png`}`;
+        return fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+      }
+      const path = key;
       const doc = documents.has(path);
       // Up to a thumbnail's size, the thumbnail, which is already here: one
       // file carried all of them when the repository opened.

@@ -158,7 +158,8 @@ for (const frac of [0.5, 0.25]) {
 // size it is shown at rather than scaled from some resolution. Before, it was
 // handed to the browser's image decoder like a PNG, which cannot read one, and
 // every SVG in a project stayed an empty placeholder.
-await page.goto(`${base}/?demo=home`, { waitUntil: 'load' });
+// rapidfem, of the demos `npm run demo` makes, is the one with an SVG in it.
+await page.goto(`${base}/?demo=rapidfem`, { waitUntil: 'load' });
 await page.waitForFunction(() => (document.querySelector('footer')?.textContent ?? '').includes('files'), null, { timeout: 60000 });
 await settled(page);
 for (const frac of [0.05, 0.3]) {

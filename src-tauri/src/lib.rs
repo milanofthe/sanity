@@ -9,7 +9,6 @@ use std::sync::Mutex;
 
 
 mod history;
-mod pdf;
 
 use sanity_core::find;
 use sanity_watch::{self as watch, is_under, reconcile, DirIndex, WatchSlot};
@@ -574,7 +573,8 @@ async fn file_bytes(path: String, state: State<'_, AppState>) -> Result<Response
 }
 
 /// A page of a PDF as PNG, `width` pixels across: the first by default, any
-/// with `page`, counting from zero. See `pdf::render_page`.
+/// with `page`, counting from zero. The same renderer on every platform; see
+/// `sanity_core::pdf`.
 ///
 /// The first page is what a document's panel shows; the rest are for the
 /// option that expands a document into all of its pages.
@@ -599,7 +599,8 @@ async fn pdf_page(
         return Err("path outside the open folder".into());
     }
     let t = std::time::Instant::now();
-    let png = pdf::render_page(&canonical, page.unwrap_or(0), width.clamp(16, 2048))?;
+    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
+    let png = sanity_core::pdf::render_page(&bytes, page.unwrap_or(0) as usize, width)?;
     if watch_log() {
         eprintln!("pdf_page {path} page {} at {width} px: {:.1} ms", page.unwrap_or(0), t.elapsed().as_secs_f64() * 1000.0);
     }
