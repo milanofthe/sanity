@@ -670,6 +670,20 @@ export class Scene {
   /** True while at least one panel is still animating, so the frame loop can
    *  tell whether the picture is still changing on its own. */
   animating = false;
+  /**
+   * Keep the panels of a project that just opened at the start of their
+   * arrival, drawn but invisible, until the app lets them go.
+   *
+   * The first frames that draw a new project's textures are the expensive
+   * ones: measured in Chromium on the GPU, opening the demo, frames of 200 to
+   * 570 milliseconds, gone when nothing is drawn and still there with any
+   * one pass left out, so it is the textures reaching the GPU rather than
+   * anything a pass does. The arrival ran through them, clamped to a tenth of
+   * a second per frame, and was three or four jumps instead of a bloom.
+   * Drawn invisibly, those frames pay for the upload, and the arrival plays
+   * once frames come at their normal rate; see `CanvasApp.releaseAppear`.
+   */
+  holdAppear = false;
   /** True while a change is still playing out on some file. */
   changing = false;
   stats: FrameStats = {
@@ -1543,7 +1557,9 @@ export class Scene {
       // way round on the way out.
       this.tf = IDENTITY;
       if (f.anim) {
-        f.anim.t += dt;
+        // A panel settling in waits, invisible, while the arrival is held;
+        // see `holdAppear`. A relayout's slide does not.
+        f.anim.t += this.holdAppear && f.anim.a0 === 0 ? 0 : dt;
         if (finished(f.anim)) {
           f.anim = null;
           this.animated.delete(f);

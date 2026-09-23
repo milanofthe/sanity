@@ -87,6 +87,11 @@ export interface RepoSource {
 
 const UPLOAD_BUDGET_MS = 6;
 
+/** A frame interval that counts as steady, and the longest the arrival of a
+ *  new project is held for; see `CanvasApp.releaseAppear`. */
+const APPEAR_STEADY_MS = 34;
+const APPEAR_HOLD_MAX_MS = 2000;
+
 /**
  * Hits reported per file, and the shortest query that searches text at all.
  *
@@ -237,11 +242,12 @@ export class CanvasApp {
     if (override) setBands(override);
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(canvas);
+    // Starts the frame loop, through `invalidate`. Starting it here as well
+    // ran two loops, each drawing every frame, until the first time the
+    // canvas came to rest: every frame of opening a project was drawn twice.
     this.resize();
     this.attachInput();
     this.watchContext();
-    this.running = true;
-    this.raf = requestAnimationFrame(this.frame);
 
     // Handle for scripts/shot.mjs, which captures one screenshot per level of
     // detail and runs the frame benchmark. Keeping it on the shipping object
@@ -388,7 +394,14 @@ export class CanvasApp {
         ...files.filter((f) => !f.media).map((f) => f.path),
         ...files.filter((f) => f.media).map((f) => f.path),
       ];
-      this.fit();
+      // Straight to the whole project. It used to fly there from wherever the
+      // camera was, which on the first open is zoom 1 over the middle: a
+      // thirtyfold zoom through every level of detail, on top of the panels
+      // arriving, and the arrival is the one thing that should be moving.
+      this.fit(0);
+      this.scene.holdAppear = true;
+      this.appearHeldAt = performance.now();
+      this.appearQuiet = 0;
     }
     this.uploaded = 0;
   }
@@ -739,10 +752,9 @@ export class CanvasApp {
       this.onContext?.(false);
       console.warn('webgl context restored, rebuilding the scene');
       this.scene = null;
+      // `resize` starts the loop again; see the constructor.
       this.resize();
       if (this.lastSource) this.open(this.lastSource, true);
-      this.running = true;
-      this.raf = requestAnimationFrame(this.frame);
     });
   }
 
@@ -956,6 +968,32 @@ export class CanvasApp {
     );
   }
 
+  /** When the arrival was held, and how many frames in a row since came at
+   *  their normal rate; see `releaseAppear`. */
+  private appearHeldAt = 0;
+  private appearQuiet = 0;
+
+  /**
+   * Let a new project's panels arrive, once the frames are steady.
+   *
+   * Every texture has to be written first, and then three frames in a row
+   * have to come within `APPEAR_STEADY_MS` of each other: the expensive
+   * frames are the ones right after the writes, see `Scene.holdAppear`, and
+   * one fast frame between two slow ones is not steady. In WebKit that is
+   * the three frames after the last write, about fifty milliseconds. Never
+   * longer than `APPEAR_HOLD_MAX_MS`, so a machine that is slow throughout
+   * still gets its project.
+   */
+  private releaseAppear(frameMs: number): void {
+    const s = this.scene;
+    if (!s?.holdAppear) return;
+    const written = this.pending.length === 0 && !s.rasterBusy();
+    this.appearQuiet = written && frameMs < APPEAR_STEADY_MS ? this.appearQuiet + 1 : 0;
+    if (this.appearQuiet >= 3 || performance.now() - this.appearHeldAt > APPEAR_HOLD_MAX_MS) {
+      s.holdAppear = false;
+    }
+  }
+
   private uploadBudget(): void {
     if (!this.scene || !this.layout || this.pending.length === 0) return;
     const t0 = performance.now();
@@ -978,12 +1016,14 @@ export class CanvasApp {
 
   private frame = (now: number): void => {
     this.cam.update(now);
-    const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
-    this.frameMs = (now - this.lastFrame) * 0.15 + this.frameMs * 0.85;
+    const interval = now - this.lastFrame;
+    const dt = Math.min(0.1, interval / 1000);
+    this.frameMs = interval * 0.15 + this.frameMs * 0.85;
     this.lastFrame = now;
 
     const uploaded = this.pending.length;
     this.uploadBudget();
+    this.releaseAppear(interval);
 
     // Advance first, draw second, and only draw if that changed the picture.
     // A fading glow ticks for ninety seconds and is worth drawing thirty
@@ -1090,6 +1130,9 @@ export class CanvasApp {
     const height = Math.max(64, Math.round(rh * scale));
 
     const keep = { x: this.cam.x, y: this.cam.y, zoom: this.cam.zoom };
+    // The loop that would let a held arrival go is about to stop, and the
+    // export waits for the panels to settle.
+    this.scene.holdAppear = false;
     cancelAnimationFrame(this.raf);
     this.running = false;
 
