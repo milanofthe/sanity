@@ -864,6 +864,7 @@ export class Scene {
     const i = this.nodeIndex.get(path);
     if (i !== undefined) this.byNode[i] = file;
     if (file.anim) this.animated.add(file);
+    if (this.toMark.delete(path)) this.markAdded(file);
   }
 
   /** Half the layout's diagonal, which the appearance stagger is spread over. */
@@ -1257,24 +1258,35 @@ export class Scene {
   markCreated(paths: Iterable<string>): void {
     for (const path of paths) {
       const f = this.files.get(path);
-      if (!f) continue;
-      this.active.add(f);
-      f.since = 0;
-      f.shownMark = 1;
-      f.data.lineState.fill(LineState.Added);
-      f.state = LineState.Added;
+      // Not here yet, which after a relayout is the usual case: a new panel
+      // is added when its texture is written, over the frames that follow.
+      // Marking only what was already here marked nothing, and a created
+      // file arrived with no sign at all.
+      if (f) this.markAdded(f);
+      else this.toMark.add(path);
     }
   }
 
+  /** Created files whose panels have not arrived yet; see `markCreated`. */
+  private toMark = new Set<string>();
+
+  private markAdded(f: SceneFile): void {
+    this.active.add(f);
+    f.since = 0;
+    f.shownMark = 1;
+    f.data.lineState.fill(LineState.Added);
+    f.state = LineState.Added;
+  }
+
   changedCount(): number {
-    let n = 0;
+    let n = this.toMark.size;
     for (const f of this.files.values()) if (f.state !== LineState.Unchanged) n++;
     return n;
   }
 
   /** Files still inside their change window, flash or marks. */
   recentCount(): number {
-    let n = 0;
+    let n = this.toMark.size;
     for (const f of this.files.values()) if (recent(f.since)) n++;
     return n;
   }
