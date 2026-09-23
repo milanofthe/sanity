@@ -1,17 +1,16 @@
-// Generates the mark in its three forms: assets/sanity-icon.svg for the app
-// icon, web/public/favicon.svg for the browser tab, and the Svelte component
-// the toolbar draws, which is the wordmark whole.
+// Generates the logo in all its forms from one drawing, web/scripts/logo.mjs:
 //
-// The mark is the wordmark, assets/sanity-logo.png, brought to a square: its
-// S and its y, and the two rails that frame the word, with the letters in
-// between left out. It is cut from the original's own pixels and traced, not
-// redrawn, so it is the logo's shapes and nothing else. What made the logo
-// recognisable is that frame, the top rail running out of the S and the
-// bottom one into the tail of the y, and a square with both ends of it keeps
-// the frame closed.
+//   web/src/lib/ui/SanityMark.svelte   the wordmark in the toolbar, in the
+//                                      theme's accent
+//   assets/sanity-logo.svg             the wordmark in the logo's red, for the
+//                                      README and anywhere else
+//   assets/sanity-icon.svg             the app icon
+//   web/public/favicon.svg             the browser tab
 //
-// This replaced a drawing of what the app draws, panels sized by their code
-// with one of them red, which had nothing of the logo in it.
+// The icons are the mark: the S and the y and the frame the two rails make,
+// with the letters between left out. What made the logo recognisable is that
+// frame, the top rail running out of the S and the bottom one into the tail
+// of the y, and a square with both ends of it keeps the frame closed.
 //
 // Generated rather than hand-written because the variants differ in
 // proportion and have to stay the same drawing otherwise:
@@ -23,84 +22,85 @@
 //   The favicon is full bleed with a smaller radius and a larger mark: it is
 //   read at sixteen pixels, where every pixel of margin is one the letters
 //   do not get.
+//
+// Run through `npm run icons`, which also renders the PNGs.
 
 import { writeFileSync } from 'node:fs';
-import { readMask, trace } from './trace-logo.mjs';
+import { wordmark, wordmarkBody } from './logo.mjs';
+
+/** The weight everything is drawn at, in the original's pixels, where the
+ *  original's own is 48: a fifth heavier, which holds up at the toolbar's
+ *  fifteen pixels, where 48 came out a pixel and a half. */
+const STROKE = 58;
+
+/** The mark's weight and the white between its S and its y. Heavier than the
+ *  wordmark's: an icon is read at 16 to 32 pixels, where the mark is the
+ *  whole of it, and two letters with nothing between them read as one sign
+ *  rather than as a word with its middle missing. */
+const ICON_STROKE = 74;
+const ICON_GAP = 30;
 
 const CHARCOAL = '#16181a';
 /** The logo's own red. */
 const RED = '#ff0000';
 
-/** Width of the square the S and the y are brought into, in the original's
- *  pixels: the two letters, 205 and 199 wide, and a gap between them about
- *  as wide as the logo's own between letters. */
-const SPAN = 480;
-/** Where the S ends and the y begins in the original, and the rows the rails
- *  take up. */
-const S_END = 205;
-const Y_START = 915;
-const TOP_RAIL = 50;
-const BOTTOM_RAIL = 414;
-
-const logo = readMask('assets/sanity-logo.png');
-const half = SPAN / 2;
-const rail = (y) => y < TOP_RAIL || y >= BOTTOM_RAIL;
-// Left half from the start of the word, right half from its end: the letters
-// whole, and between them only the rails.
-const on = (x, y) => {
-  if (x < half) return (x < S_END || rail(y)) && logo.on(x, y);
-  const lx = x + (logo.w - SPAN);
-  return (lx >= Y_START || rail(y)) && logo.on(lx, y);
-};
-const d = trace(on, SPAN, logo.h);
-
-const r = (v) => Math.round(v * 100) / 100;
+const r = (v) => Math.round(v * 1000) / 1000;
 
 /** The mark in a body of `body` at `radius`, taking `share` of the body's side. */
-function build({ body, radius, share, fill = CHARCOAL, ink = RED }) {
-  const k = (body.w * share) / Math.max(SPAN, logo.h);
-  const x = body.x + (body.w - SPAN * k) / 2;
-  const y = body.y + (body.h - logo.h * k) / 2;
+function icon({ body, radius, share }) {
+  const m = wordmark(ICON_STROKE, { letters: false, gap: ICON_GAP });
+  const k = (body.w * share) / Math.max(m.width, m.height);
+  const x = body.x + (body.w - m.width * k) / 2;
+  const y = body.y + (body.h - m.height * k) / 2;
   return [
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">',
-    '  <title>sanity</title>',
-    `  <rect x="${body.x}" y="${body.y}" width="${body.w}" height="${body.h}" rx="${radius}" fill="${fill}"/>`,
-    `  <path transform="translate(${r(x)} ${r(y)}) scale(${r(k * 1000) / 1000})" fill="${ink}" d="${d}"/>`,
+    '<title>sanity</title>',
+    `<rect x="${body.x}" y="${body.y}" width="${body.w}" height="${body.h}" rx="${radius}" fill="${CHARCOAL}"/>`,
+    wordmarkBody(m, RED, 'sanity-cut', `translate(${r(x)} ${r(y)}) scale(${r(k)})`),
     '</svg>',
     '',
   ].join('\n');
 }
 
 // Apple's grid: a body of 824 centred in 1024, radius 185.
-writeFileSync('assets/sanity-icon.svg', build({ body: { x: 100, y: 100, w: 824, h: 824 }, radius: 185, share: 0.62 }));
-writeFileSync('web/public/favicon.svg', build({ body: { x: 0, y: 0, w: 1024, h: 1024 }, radius: 150, share: 0.8 }));
+writeFileSync('assets/sanity-icon.svg', icon({ body: { x: 100, y: 100, w: 824, h: 824 }, radius: 185, share: 0.62 }));
+writeFileSync('web/public/favicon.svg', icon({ body: { x: 0, y: 0, w: 1024, h: 1024 }, radius: 150, share: 0.8 }));
 
-// The toolbar has room across, so it shows the wordmark itself, whole and
-// traced, in the logo's red: the square is only for the places that ask for
-// one. The red does not follow the theme: it is the signature.
-const word = trace(logo.on, logo.w, logo.h);
-const wordmark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${logo.w} ${logo.h}" height={height} width={(height * ${logo.w}) / ${logo.h}} role="img" aria-label="sanity">
-  <path fill="var(--sanity-red)" d="${word}"/>
-</svg>
-`;
+const w = wordmark(STROKE);
+writeFileSync(
+  'assets/sanity-logo.svg',
+  [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w.width} ${w.height}" width="${w.width}" height="${w.height}">`,
+    '<title>sanity</title>',
+    wordmarkBody(w, RED),
+    '</svg>',
+    '',
+  ].join('\n'),
+);
 
+// The toolbar's, in `currentColor`, which its style sets to the theme's
+// accent: the red in the sanity theme, and in the others the colour the rest
+// of their interface is picked out in.
 writeFileSync(
   'web/src/lib/ui/SanityMark.svelte',
   `<script lang="ts">
-	// Generated by web/scripts/make-icon.mjs. Edit that, not this: it is the
-	// wordmark traced from assets/sanity-logo.png, and the app icon and the
-	// favicon are cut from the same outline.
+	// Generated by web/scripts/make-icon.mjs from the drawing in
+	// web/scripts/logo.mjs. Edit those, not this.
 	let { height = 16 }: { height?: number } = $props();
 </script>
 
-${wordmark}
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w.width} ${w.height}" height={height} width={(height * ${w.width}) / ${w.height}} role="img" aria-label="sanity">
+${wordmarkBody(w, 'currentColor', 'sanity-mark-cut')}
+</svg>
+
 <style>
 	svg {
 		display: block;
 		flex: none;
+		color: var(--accent);
 	}
 </style>
 `,
 );
 
-console.log(`icon, favicon and SanityMark written: the mark in ${d.length} characters of path, the wordmark in ${word.length}`);
+console.log(`logo, icon, favicon and SanityMark written, at a stroke of ${STROKE}`);
