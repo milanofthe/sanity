@@ -121,7 +121,7 @@ await page.evaluate(() => {
   window.__sanity.app.fit(0);
   window.__step(0.1);
 });
-await shoot('screenshot-project.webp', 'sanity-project.png');
+await shoot('screenshot-project.webp');
 
 // --- A batch of changes, as a wave, zoomed out. ----------------------------
 await open('pathsim');
