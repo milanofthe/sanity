@@ -161,6 +161,30 @@ export class GlyphAtlas {
     return this.levels[this.levels.length - 1];
   }
 
+  /**
+   * An exact level for the directory labels, which are drawn at a few fixed
+   * screen sizes whatever the zoom. Kept apart from the code's, which would
+   * otherwise evict each other every frame: four label sizes and the code's
+   * own size are five, against a cache of four.
+   */
+  label(emPixels: number): Level {
+    const want = GlyphAtlas.exactSize(emPixels);
+    const held = this.labels.get(want);
+    if (held) return held;
+    const built = this.build(want, SUBPIXEL_PHASES);
+    this.labels.set(want, built);
+    // A change of screen changes every size; the old ones go.
+    if (this.labels.size > GlyphAtlas.LABELS_KEEP) {
+      const [size, level] = this.labels.entries().next().value as [number, Level];
+      this.gl.deleteTexture(level.tex);
+      this.labels.delete(size);
+    }
+    return built;
+  }
+
+  private labels = new Map<number, Level>();
+  private static readonly LABELS_KEEP = 10;
+
   /** Atlases rasterised at an exact size, newest last. */
   private exact = new Map<number, Level>();
 

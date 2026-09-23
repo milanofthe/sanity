@@ -32,6 +32,9 @@ import { BASE_LEVEL, OverviewTextures, type Slot } from './codetex';
 import { MediaTextures } from './mediatex';
 import { isVector } from './imagedecode';
 import { SpatialGrid } from '$lib/canvas/spatial';
+import {
+  branchHues, labelAt, MIN_LABELLED, PLATE_PAD, placeLabels, type Placement, type ScreenDir,
+} from '$lib/canvas/dirlabels';
 import { TILE_GUTTER, TileCache, tileWorld } from './tiles';
 import { sharedPool, type RasterPool } from './rasterpool';
 import {
@@ -214,6 +217,16 @@ const REST_TILE_BUDGET_MS = 4;
 /** How long the camera has to be still before the rest image is drawn. */
 const REST_QUIET_MS = 150;
 
+/** Slots of the label inks, in place of the token kinds the glyph pass
+ *  normally colours by: six hues at two strengths, then three neutrals. */
+const LabelInk = {
+  Hue: 0,
+  HueBright: 6,
+  Dim: 12,
+  Bright: 13,
+  Faint: 14,
+} as const;
+
 const RECT_STRIDE = 12;
 const OVERVIEW_STRIDE = 11;
 const SPAN_STRIDE = 6;
@@ -349,24 +362,6 @@ function compactCount(n: number): string {
 }
 
 /**
- * A stable palette index per directory path.
- *
- * Hashed rather than assigned in tree order so a directory keeps its colour
- * when siblings are added or removed. The golden-ratio step spreads adjacent
- * hash values apart, which matters because sibling directories often share a
- * long prefix.
- */
-function dirColourIndex(path: string, count: number): number {
-  let h = 2166136261;
-  for (let i = 0; i < path.length; i++) {
-    h ^= path.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  const t = (((h >>> 0) / 4294967296) * 0.6180339887) % 1;
-  return Math.min(count - 1, Math.floor(t * count));
-}
-
-/**
  * Blend `base` towards `target` by `amount`, keeping base's luminance.
  *
  * Both colours come from the theme, so the result cannot leave the theme's
@@ -437,6 +432,20 @@ export class Scene {
   private overviewByChunk = new Map<string, InstanceBuffer>();
   private spans: InstanceBuffer;
   private glyphs: InstanceBuffer;
+  /** The directory labels, drawn over everything in screen space; see
+   *  `drawLabels`. One glyph buffer per size, since each size is its own
+   *  atlas and its own draw. */
+  private labelRects: InstanceBuffer;
+  private labelGlyphs = new Map<number, InstanceBuffer>();
+  private labelCam = new Camera();
+  /** Ink per label slot: see `writeLabelInk`. */
+  private labelInk = new Float32Array(16 * 3);
+  /** What the last frame placed, for what a click lands on. */
+  private placement: Placement = { labels: [], crumb: null };
+  private screenDirs: ScreenDir[] = [];
+  /** Hue per directory, as an index into the theme's data hues or -1; see
+   *  `branchHues`. */
+  private branch = new Map<string, number>();
 
   textures: OverviewTextures;
   atlas: GlyphAtlas;
@@ -694,6 +703,7 @@ export class Scene {
     this.fgRects = new InstanceBuffer(gl, RECT_STRIDE, 2048);
     this.spans = new InstanceBuffer(gl, SPAN_STRIDE, 65536);
     this.glyphs = new InstanceBuffer(gl, GLYPH_STRIDE, 65536);
+    this.labelRects = new InstanceBuffer(gl, RECT_STRIDE, 256);
 
     this.writeKindFlat();
     this.measureSpread();
@@ -807,6 +817,7 @@ export class Scene {
     files.forEach((n, i) => this.nodeIndex.set(n.path, i));
     this.dirIndex.clear();
     dirs.forEach((d, i) => this.dirIndex.set(d.path, i));
+    this.branch = branchHues(this.layout.root, this.pal.data.length);
     this.byNode = new Array(files.length);
     for (const [path, f] of this.files) {
       const i = this.nodeIndex.get(path);
@@ -929,6 +940,7 @@ export class Scene {
     this.spanFlat = new Float32Array(pal.token.length * 3);
     this.ovFlat = new Float32Array(pal.token.length * 3);
     this.writeKindFlat();
+    this.branch = branchHues(this.layout.root, pal.data.length);
     this.textures.setColors(pal.overview);
     const pool = this.pool;
     for (const f of this.files.values()) {
@@ -1412,6 +1424,7 @@ export class Scene {
       for (const b of this.overviewByChunk.values()) overviewQuads += b.count;
       rectQuads = this.bgRects.count + this.fgRects.count;
     }
+    this.drawLabels(cam);
 
     this.stats = {
       visibleFiles,
@@ -1501,7 +1514,7 @@ export class Scene {
       // A directory with nothing matching inside it recedes with its files,
       // so the lit panels are not sitting in bright boxes.
       if (this.matched && !this.matchedDirs.has(d.path)) this.dim();
-      this.pushDir(d, cam.zoom);
+      this.pushDir(d);
     }
     this.tf = IDENTITY;
 
@@ -1610,25 +1623,19 @@ export class Scene {
   }
 
   /**
-   * A directory box: a tinted frame and a label, both in world space.
+   * A directory box: a tinted fill behind its contents and a frame in front.
    *
    * Alternating two shades by depth, which is what this did first, says
    * nothing about which directory you are looking at, and at four levels deep
-   * the boxes were indistinguishable. A hue derived from the path gives each
-   * directory a stable identity you can navigate by, and keeping it to the
-   * frame and a wash rather than a fill leaves the code itself as the only
-   * saturated thing on screen.
+   * the boxes were indistinguishable. The hue comes from the directory's
+   * branch, see `branchHues`, and keeping it to the frame and a wash rather
+   * than a fill leaves the code itself as the only saturated thing on screen.
+   *
+   * The name is not drawn here. It is in screen space, over everything, and
+   * placed per frame; see `drawLabels`.
    */
-  private pushDir(d: DirNode, zoom: number): void {
-    // One of the theme's own hues, chosen by path hash, so a directory's
-    // frame is a colour the scheme actually contains.
-    const hue = this.pal.data[dirColourIndex(d.path, this.pal.data.length)];
-    // Tint strength is a theme token: a monochrome palette sets it to zero and
-    // gets depth from the wash alone, which is what it wants.
-    const wash = this.pal.dirWash + 0.04 * (d.depth % 3);
-    const tint = mixToward(this.pal.surface.dirBg, hue, wash);
-    const edge = mixToward(this.pal.surface.borderStrong, hue, this.pal.dirTint);
-
+  private pushDir(d: DirNode): void {
+    const { tint, edge } = this.dirColours(d);
     // Thicker the further out, so the nesting is readable at a glance. A
     // uniform hairline made a four-level tree look flat, and a border in world
     // units would vanish when zoomed out, so this is in device pixels and
@@ -1638,19 +1645,25 @@ export class Scene {
     // theirs: the children are drawn in between.
     this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, tint, 1, 0, 0);
     this.pushRect(this.fgRects, d.x, d.y, d.w, d.h, tint, 0, edge, weight);
+  }
 
-    // The label sits in the frame's own strip, so it never overlaps a panel.
-    const px = metrics.dirLabelHeight * zoom;
-    const fade = Math.min(1, Math.max(0, (px - 6) / 5));
-    if (fade <= 0.004 || !d.name) return;
-    const room = Math.floor((d.w - 2 * metrics.dirPad) / metrics.charWidth);
-    if (room < 3) return;
-    const shown = d.name.length <= room ? d.name : `${d.name.slice(0, Math.max(1, room - 2))}..`;
-    this.pushText(
-      shown, d.x + metrics.dirPad,
-      this.chromeTop(d.y + metrics.dirPad - metrics.dirLabelHeight, metrics.dirLabelHeight),
-      UiInk.DirLabel, fade, room,
-    );
+  /**
+   * A directory's wash and frame colour.
+   *
+   * One of the theme's own hues, so a frame is a colour the scheme actually
+   * contains, and none for the trunk, which gets the border colour instead.
+   * Tint strength is a theme token: a monochrome palette sets it to zero and
+   * gets depth from the wash alone, which is what it wants.
+   */
+  private dirColours(d: DirNode): { tint: number; edge: number; hue: number } {
+    const hue = this.branch.get(d.path) ?? -1;
+    const colour = hue >= 0 ? this.pal.data[hue] : this.pal.surface.borderStrong;
+    const wash = this.pal.dirWash + 0.04 * (d.depth % 3);
+    return {
+      tint: mixToward(this.pal.surface.dirBg, colour, wash),
+      edge: hue >= 0 ? mixToward(this.pal.surface.borderStrong, colour, this.pal.dirTint) : colour,
+      hue,
+    };
   }
 
   /**
@@ -3022,6 +3035,174 @@ export class Scene {
       ['aPosGlyph', 4, 0], ['aSizeFade', 2, 4],
     ]);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.glyphs.count);
+  }
+
+  /**
+   * The directory names and the breadcrumb, over whatever the frame drew.
+   *
+   * In screen space and on every frame, live or far: their size does not
+   * follow the zoom, so baked into a tile or the rest image they would scale
+   * with it. A few dozen plates and a few hundred glyphs, next to a frame of
+   * thousands of panels.
+   */
+  private drawLabels(cam: Camera): void {
+    const { gl } = this;
+    const zoom = cam.zoom;
+    const hw = cam.vw / 2;
+    const hh = cam.vh / 2;
+    const [vx0, vy0, vx1, vy1] = cam.visibleRect(0);
+    const dirs = this.layout.dirs;
+    const list = this.screenDirs;
+    list.length = 0;
+    for (const i of this.dirGrid.near(vx0, vy0, vx1, vy1, this.nearDirs)) {
+      const d = dirs[i];
+      if (d.w * zoom < MIN_LABELLED.w || d.h * zoom < MIN_LABELLED.h) continue;
+      const anim = this.dirAnims.get(d.path);
+      const r = anim ? applyTo(transformFor(d, anim), d) : d;
+      list.push({
+        path: d.path, name: d.name, depth: d.depth,
+        x: (r.x - cam.x) * zoom + hw, y: (r.y - cam.y) * zoom + hh,
+        w: r.w * zoom, h: r.h * zoom,
+      });
+    }
+    // Outer before inner, and among equals the larger first: that is the
+    // order labels win collisions in.
+    list.sort((a, b) => a.depth - b.depth || b.w * b.h - a.w * a.h);
+    const p = placeLabels(list, {
+      vw: cam.vw, vh: cam.vh, advance: this.atlas.advanceRatio,
+      strip: (metrics.dirPad + metrics.dirLabelHeight) * zoom, inset: metrics.dirPad * zoom,
+    });
+    this.placement = p;
+
+    this.labelRects.reset();
+    for (const b of this.labelGlyphs.values()) b.reset();
+    this.tf = IDENTITY;
+    const dpr = cam.dpr;
+    if (p.crumb) {
+      const c = p.crumb;
+      const s = this.pal.surface;
+      this.pushRect(this.labelRects, c.plate.x, c.plate.y, c.plate.w, c.plate.h, s.dirBg, 0.94, s.borderStrong, HAIRLINE_PX);
+      for (const sep of c.seps) this.pushLabelText(sep.text, sep.x, c.plate, c.size, dpr, LabelInk.Faint, 1);
+      c.crumbs.forEach((k, i) => {
+        const ink = i === c.crumbs.length - 1 ? LabelInk.Bright : LabelInk.Dim;
+        this.pushLabelText(k.text, k.box.x, c.plate, c.size, dpr, ink, 1);
+      });
+    }
+    for (const l of p.labels) {
+      const i = this.dirIndex.get(l.path);
+      if (i === undefined) continue;
+      const { tint, hue } = this.dirColours(dirs[i]);
+      const alpha = l.alpha * (this.matched && !this.matchedDirs.has(l.path) ? SEARCH_DIM : 1);
+      this.pushRect(this.labelRects, l.plate.x, l.plate.y, l.plate.w, l.plate.h, tint, 0.9 * alpha, 0, 0);
+      const bright = l.size >= 16;
+      const ink = hue >= 0
+        ? hue + (bright ? LabelInk.HueBright : LabelInk.Hue)
+        : bright ? LabelInk.Bright : LabelInk.Dim;
+      this.pushLabelText(l.text, l.plate.x + PLATE_PAD * l.size, l.plate, l.size, dpr, ink, alpha);
+    }
+
+    const lc = this.labelCam;
+    lc.vw = cam.vw;
+    lc.vh = cam.vh;
+    lc.dpr = dpr;
+    lc.zoom = 1;
+    lc.x = hw;
+    lc.y = hh;
+    lc.writeMatrix(this.view);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.viewW = gl.drawingBufferWidth;
+    this.viewH = gl.drawingBufferHeight;
+    gl.viewport(0, 0, this.viewW, this.viewH);
+    this.drawRects(this.labelRects);
+    this.writeLabelInk();
+    for (const [size, b] of this.labelGlyphs) if (b.count > 0) this.drawLabelGlyphs(size, b, dpr);
+  }
+
+  /** A line of label text in a plate, centred on what is visible of it, cap
+   *  height to descender, the way the panel headers are. */
+  private pushLabelText(
+    str: string, x: number, plate: { y: number; h: number }, size: number, dpr: number,
+    ink: number, alpha: number,
+  ): void {
+    const px = size * dpr;
+    const one = GlyphAtlas.oneToOne(px);
+    const em = one ? GlyphAtlas.exactSize(px) / dpr : size;
+    const baseline = one ? GlyphAtlas.baselineAt(GlyphAtlas.exactSize(px)) / dpr : size * BASELINE_RATIO;
+    const cap = baseline - em * this.atlas.capRatio;
+    const tail = baseline + em * this.atlas.descenderRatio;
+    const top = plate.y + (plate.h - (tail - cap)) / 2 - cap;
+    let b = this.labelGlyphs.get(size);
+    if (!b) {
+      b = new InstanceBuffer(this.gl, GLYPH_STRIDE, 512);
+      this.labelGlyphs.set(size, b);
+    }
+    const advance = this.atlas.advanceRatio * size;
+    for (let i = 0; i < str.length; i++) {
+      const idx = GlyphAtlas.index(str.charCodeAt(i));
+      if (idx < 0) continue;
+      const o = b.alloc();
+      const d = b.data;
+      d[o] = x + i * advance;
+      d[o + 1] = top;
+      d[o + 2] = idx;
+      d[o + 3] = ink;
+      d[o + 4] = size;
+      d[o + 5] = alpha;
+    }
+  }
+
+  /** One size of label text, from an atlas of its own drawn 1:1. */
+  private drawLabelGlyphs(size: number, b: InstanceBuffer, dpr: number): void {
+    const { gl } = this;
+    const px = size * dpr;
+    const level = this.atlas.label(px);
+    const one = GlyphAtlas.oneToOne(px);
+    gl.useProgram(this.progGlyph);
+    gl.uniformMatrix3fv(this.uGlyph.uView, false, this.view);
+    gl.uniform3fv(this.uGlyph['uKind[0]'], this.labelInk);
+    gl.uniform1i(this.uGlyph.uAtlas, 0);
+    gl.uniform2f(this.uGlyph.uCell, level.cellW / level.texW, level.cellH / level.texH);
+    gl.uniform2f(this.uGlyph.uBoxPx, level.cellW, level.cellH);
+    gl.uniform1f(this.uGlyph.uEmWorld, one ? size : level.size / dpr);
+    gl.uniform1f(this.uGlyph.uGridCols, GlyphAtlas.gridCols);
+    gl.uniform1f(this.uGlyph.uGridRows, GlyphAtlas.gridRows);
+    gl.uniform1f(this.uGlyph.uPhases, one ? level.phases : 1);
+    gl.uniform2f(this.uGlyph.uViewport, this.viewW, this.viewH);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, level.tex);
+    b.upload();
+    quadAttrib(gl, this.progGlyph, this.quad);
+    gl.bindBuffer(gl.ARRAY_BUFFER, b.buf);
+    instanceAttribs(gl, this.progGlyph, GLYPH_STRIDE, [
+      ['aPosGlyph', 4, 0], ['aSizeFade', 2, 4],
+    ]);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.count);
+  }
+
+  /** The label inks: each data hue at two strengths, then neutral ones; see
+   *  `LabelInk`. Rotated towards the hue by the theme's tint, and keeping
+   *  the ink's own luminance, so a label reads the same on every branch. */
+  private writeLabelInk(): void {
+    const s = this.pal.surface;
+    const set = (slot: number, c: number) => {
+      const [r, g, b] = rgb(c);
+      this.labelInk[slot * 3] = r;
+      this.labelInk[slot * 3 + 1] = g;
+      this.labelInk[slot * 3 + 2] = b;
+    };
+    this.pal.data.forEach((hue, k) => {
+      set(LabelInk.Hue + k, mixToward(s.inkDim, hue, this.pal.dirTint));
+      set(LabelInk.HueBright + k, mixToward(s.ink, hue, this.pal.dirTint));
+    });
+    set(LabelInk.Dim, s.inkDim);
+    set(LabelInk.Bright, s.ink);
+    set(LabelInk.Faint, s.dirLabel);
+  }
+
+  /** What a click at a screen position lands on: a directory's label or a
+   *  crumb, as the directory's path. */
+  labelAt(sx: number, sy: number): string | null {
+    return labelAt(this.placement, sx, sy);
   }
 
   /**

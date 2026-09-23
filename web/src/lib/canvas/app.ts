@@ -693,6 +693,14 @@ export class CanvasApp {
     );
   }
 
+  /** Fly to a directory, the whole of it in view. */
+  focusDir(path: string, seconds = 0.5): void {
+    const d = this.layout?.dirs.find((x) => x.path === path);
+    if (!d) return;
+    this.invalidate();
+    this.cam.flyToRect(d.x, d.y, d.x + d.w, d.y + d.h, seconds);
+  }
+
   /** The panel under a screen position, header or body. */
   fileAt(sx: number, sy: number): FileNode | null {
     if (!this.layout) return null;
@@ -853,6 +861,11 @@ export class CanvasApp {
       this.dragging = false;
       c.releasePointerCapture(e.pointerId);
       if (wasDrag) return;
+      const dir = this.scene?.labelAt(...local(e)) ?? null;
+      if (dir !== null) {
+        this.focusDir(dir);
+        return;
+      }
       const hit = this.headerAt(...local(e));
       if (hit) this.onOpenFile?.(hit.path);
     });
@@ -864,13 +877,16 @@ export class CanvasApp {
         this.invalidate();
         return;
       }
-      const hit = this.headerAt(...local(e));
+      // A directory's label lies over the panels under it and takes the
+      // click, so it takes the pointer too.
+      const onLabel = (this.scene?.labelAt(...local(e)) ?? null) !== null;
+      const hit = onLabel ? null : this.headerAt(...local(e));
       if (hit !== this.hovered) {
         this.invalidate();
         this.hovered = hit;
         if (this.scene) this.scene.hoveredPath = hit?.path ?? null;
-        c.style.cursor = hit ? 'pointer' : '';
       }
+      c.style.cursor = hit || onLabel ? 'pointer' : '';
       // The panel body, not just its header: the breadcrumb answers "what am
       // I looking at", and at the outer zoom levels the header is a hairline
       // while the panel is the size of a stamp. Directory labels vanish out
@@ -901,6 +917,7 @@ export class CanvasApp {
         e.clientX - c.getBoundingClientRect().left,
         e.clientY - c.getBoundingClientRect().top,
       ];
+      if ((this.scene?.labelAt(sx, sy) ?? null) !== null) return;
       const hit = this.fileAt(sx, sy);
       if (hit) this.focusFile(hit.path);
       else this.fit();
