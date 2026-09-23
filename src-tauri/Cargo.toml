@@ -14,19 +14,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 sanity-core = { path = "../crates/sanity-core" }
+sanity-watch = { path = "../crates/sanity-watch" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# The watcher, per platform. FSEvents on macOS is behind a feature flag;
-# ReadDirectoryChangesW and inotify are what `recommended_watcher` picks on
-# their own. Declared per target because a feature that only exists for one
-# platform in the shared table is a build that works until somebody runs it
-# somewhere else. Default features off either way: they pull in
-# crossbeam-channel, and the watch thread uses std's channel.
-[target.'cfg(target_os = "macos")'.dependencies]
-notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
-
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-notify = { version = "8", default-features = false }

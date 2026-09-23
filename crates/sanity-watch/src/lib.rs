@@ -11,14 +11,26 @@
 //!    diff of the two versions of the file, so a commit or a checkout matters
 //!    only through the files it rewrites, and those arrive as ordinary write
 //!    events like any other.
+//!
+//! Two things the events do not say have to be asked for instead, and a batch
+//! carries them as directories to reconcile against what the host holds:
+//!
+//! - A directory that is renamed or moved is reported as the directory alone.
+//!   Checked on FSEvents with notify 8: `mv a b` gives events for `a` and `b`
+//!   and none for the files inside either, so a watcher that only forwards
+//!   file paths leaves the old panels standing and never shows the new ones.
+//! - When the kernel drops events under load it says so, as a rescan flag,
+//!   and after that nothing about the folder can be trusted until it has been
+//!   listed again.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use notify::{Event, RecursiveMode, Watcher as _};
+use notify::event::ModifyKind;
+use notify::{Event, EventKind, RecursiveMode, Watcher as _};
 use serde::Serialize;
 
 /// How long the batch waits for silence before it is emitted. Long enough that
@@ -37,13 +49,20 @@ const MAX_HOLD: Duration = Duration::from_millis(600);
 pub struct Batch {
     /// Files that exist and should be re-read, repository-relative.
     pub changed: Vec<String>,
-    /// Files that are gone, repository-relative.
+    /// Paths that are gone, repository-relative. A file, or a directory that
+    /// took files with it; see `reconcile`.
     pub removed: Vec<String>,
+    /// Directories whose contents the events do not describe, to be listed
+    /// and compared with what is held: one that appeared or was renamed, or
+    /// the whole folder, as `""`, after a rescan. For the host, not the
+    /// frontend, which only ever sees files.
+    #[serde(skip)]
+    pub dirs: Vec<String>,
 }
 
 impl Batch {
     pub fn is_empty(&self) -> bool {
-        self.changed.is_empty() && self.removed.is_empty()
+        self.changed.is_empty() && self.removed.is_empty() && self.dirs.is_empty()
     }
 }
 
@@ -52,6 +71,12 @@ impl Batch {
 #[derive(Debug, Default)]
 pub struct Debounce {
     paths: HashSet<PathBuf>,
+    /// Paths whose event created or renamed them. A directory among these
+    /// has contents nobody reported; a directory that was only touched, its
+    /// timestamp moved by a file written inside it, does not.
+    structural: HashSet<PathBuf>,
+    /// Events were lost, or the watch failed: the whole folder is suspect.
+    resync: bool,
     first: Option<Instant>,
     last: Option<Instant>,
 }
@@ -59,6 +84,18 @@ pub struct Debounce {
 impl Debounce {
     pub fn push_path(&mut self, path: PathBuf, now: Instant) {
         self.paths.insert(path);
+        self.mark(now);
+    }
+
+    /// A path that was created or renamed; see `structural`.
+    pub fn push_structural(&mut self, path: PathBuf, now: Instant) {
+        self.structural.insert(path.clone());
+        self.push_path(path, now);
+    }
+
+    /// Everything has to be listed again; see `Batch::dirs`.
+    pub fn push_resync(&mut self, now: Instant) {
+        self.resync = true;
         self.mark(now);
     }
 
@@ -100,14 +137,23 @@ impl Debounce {
             let Some(rel) = relative(root, &path) else { continue };
             if path.is_file() {
                 batch.changed.push(rel);
-            } else if !path.is_dir() {
+            } else if path.is_dir() {
+                // A directory that was only touched carries nothing: the file
+                // written inside it arrives as its own event.
+                if self.structural.contains(&path) {
+                    batch.dirs.push(rel);
+                }
+            } else {
                 batch.removed.push(rel);
             }
-            // A directory that appeared carries no content of its own; the
-            // files inside it arrive as their own events.
         }
+        if std::mem::take(&mut self.resync) {
+            batch.dirs = vec![String::new()];
+        }
+        self.structural.clear();
         batch.changed.sort();
         batch.removed.sort();
+        batch.dirs.sort();
         self.first = None;
         self.last = None;
         batch
@@ -132,6 +178,71 @@ pub fn relative(root: &Path, path: &Path) -> Option<String> {
         }
     }
     Some(parts.join("/"))
+}
+
+/// Whether `path` is inside the directory `dir`, `""` being the whole folder.
+pub fn is_under(dir: &str, path: &str) -> bool {
+    dir.is_empty()
+        || (path.len() > dir.len() && path.starts_with(dir) && path.as_bytes()[dir.len()] == b'/')
+}
+
+/// Compare a directory as it is listed now with the files held under it.
+///
+/// `listed` is every file that exists under `dir` and belongs in the project;
+/// `held` is every file under it that the host has. Every listed file comes
+/// back to be re-read, since a directory moved in brings files nobody has
+/// seen and a rescan cannot say which held ones moved; the host's own check
+/// of timestamps and content turns the ones that did not into no work at all.
+/// Every held file that is not listed any more is gone.
+pub fn reconcile<'a>(
+    listed: Vec<String>,
+    held: impl Iterator<Item = &'a str>,
+) -> (Vec<String>, Vec<String>) {
+    let present: HashSet<&str> = listed.iter().map(String::as_str).collect();
+    let gone: Vec<String> = held.filter(|p| !present.contains(p)).map(str::to_owned).collect();
+    (listed, gone)
+}
+
+/// The directories that hold at least one of a set of files, counted, so a
+/// removed path can be told apart as a directory the host has files in
+/// without walking every file it holds.
+///
+/// That question comes up for every path a batch reports gone and the host
+/// does not hold as a file, and a build deleting its output reports thousands
+/// of those, nearly all of them in directories the host has never held.
+#[derive(Debug, Default, Clone)]
+pub struct DirIndex {
+    counts: HashMap<String, usize>,
+}
+
+impl DirIndex {
+    pub fn add(&mut self, file: &str) {
+        for dir in ancestors(file) {
+            *self.counts.entry(dir.to_owned()).or_insert(0) += 1;
+        }
+    }
+
+    pub fn remove(&mut self, file: &str) {
+        for dir in ancestors(file) {
+            if let Some(n) = self.counts.get_mut(dir) {
+                *n -= 1;
+                if *n == 0 {
+                    self.counts.remove(dir);
+                }
+            }
+        }
+    }
+
+    /// Whether any file is held under `dir`.
+    pub fn holds(&self, dir: &str) -> bool {
+        self.counts.contains_key(dir)
+    }
+}
+
+/// The directories a file sits in, outermost first, without the folder
+/// itself: `a/b/c.rs` gives `a` and `a/b`.
+fn ancestors(file: &str) -> impl Iterator<Item = &str> {
+    file.match_indices('/').map(move |(i, _)| &file[..i])
 }
 
 /// A running watch. Dropping it stops the thread and releases the OS watch.
@@ -191,17 +302,30 @@ where
                 match received {
                     Ok(Ok(event)) => {
                         let now = Instant::now();
+                        // Before the paths, which on a rescan are the folder
+                        // itself or nothing at all.
+                        if event.need_rescan() {
+                            pending.push_resync(now);
+                        }
+                        let structural = matches!(
+                            event.kind,
+                            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
+                        );
                         for path in event.paths {
                             let Some(rel) = relative(&thread_root, &path) else { continue };
                             if rel == ".git" || rel.starts_with(".git/") {
                                 continue;
                             }
-                            pending.push_path(path, now);
+                            if structural {
+                                pending.push_structural(path, now);
+                            } else {
+                                pending.push_path(path, now);
+                            }
                         }
                     }
-                    // A failed event still means something happened; the next
-                    // timeout will flush whatever was already collected.
-                    Ok(Err(_)) => {}
+                    // The watch could not say what happened, which is the one
+                    // answer that cannot be ignored: listed again, whole.
+                    Ok(Err(_)) => pending.push_resync(Instant::now()),
                     Err(RecvTimeoutError::Timeout) => {}
                     // The watcher was dropped.
                     Err(RecvTimeoutError::Disconnected) => return,
@@ -304,7 +428,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-/// The sending side, end to end: a real watch on a real directory, a real
+    /// The sending side, end to end: a real watch on a real directory, a real
     /// write, and the batch that comes out. Everything above this test is the
     /// parts; this is whether they are connected.
     #[test]
@@ -374,6 +498,107 @@ mod tests {
 
         assert_eq!(seen.len(), 20, "every write has to be reported: {seen:?}");
         assert!(batches <= 3, "twenty writes came as {batches} batches, not a handful");
+
+        drop(watch);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_directory_that_appeared_is_reconciled_and_a_touched_one_is_not() {
+        let dir = std::env::temp_dir().join(format!("sanity-dirs-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("moved/in")).unwrap();
+        std::fs::create_dir_all(dir.join("touched")).unwrap();
+        let now = Instant::now();
+        let mut d = Debounce::default();
+        d.push_structural(dir.join("moved"), now);
+        d.push_path(dir.join("touched"), now);
+        // Renamed away: gone, whatever it was.
+        d.push_structural(dir.join("old"), now);
+        let batch = d.take(&dir);
+        assert_eq!(batch.dirs, vec!["moved"]);
+        assert_eq!(batch.removed, vec!["old"]);
+        assert!(batch.changed.is_empty());
+        // Nothing carries over into the next batch.
+        d.push_path(dir.join("moved"), now);
+        assert!(d.take(&dir).dirs.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_rescan_reconciles_the_whole_folder() {
+        let now = Instant::now();
+        let mut d = Debounce::default();
+        d.push_resync(now);
+        assert!(d.pending());
+        assert!(!d.ready(now));
+        assert!(d.ready(now + QUIET));
+        let batch = d.take(Path::new("/tmp/repo-none"));
+        assert_eq!(batch.dirs, vec![String::new()]);
+        assert!(!batch.is_empty());
+        assert!(d.take(Path::new("/tmp/repo-none")).is_empty());
+    }
+
+    #[test]
+    fn under_means_inside_not_sharing_a_prefix() {
+        assert!(is_under("a", "a/b.rs"));
+        assert!(is_under("a", "a/b/c.rs"));
+        assert!(!is_under("a", "ab/c.rs"));
+        assert!(!is_under("a", "a"));
+        assert!(is_under("", "anything.rs"));
+    }
+
+    #[test]
+    fn reconciling_reports_what_is_there_and_what_went() {
+        let held = ["d/keep.rs", "d/gone.rs", "d/sub/gone.rs"];
+        let (changed, gone) =
+            reconcile(vec!["d/keep.rs".into(), "d/new.rs".into()], held.iter().copied());
+        assert_eq!(changed, vec!["d/keep.rs", "d/new.rs"]);
+        assert_eq!(gone, vec!["d/gone.rs", "d/sub/gone.rs"]);
+    }
+
+    #[test]
+    fn the_dir_index_counts_files_per_directory() {
+        let mut ix = DirIndex::default();
+        ix.add("a/b/c.rs");
+        ix.add("a/d.rs");
+        assert!(ix.holds("a") && ix.holds("a/b"));
+        assert!(!ix.holds("a/b/c.rs") && !ix.holds("b"));
+        ix.remove("a/b/c.rs");
+        assert!(ix.holds("a") && !ix.holds("a/b"));
+        ix.remove("a/d.rs");
+        assert!(!ix.holds("a"));
+    }
+
+    /// The case this module was missing: a directory renamed with its files
+    /// in it. On FSEvents the files are never reported, so what has to come
+    /// out is the old directory as gone and the new one to be listed.
+    #[test]
+    fn moving_a_directory_asks_for_it_to_be_listed() {
+        let dir = std::env::temp_dir().join(format!("sanity-move-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("a/sub")).unwrap();
+        for f in ["a/one.rs", "a/two.rs", "a/sub/three.rs"] {
+            std::fs::write(dir.join(f), b"x\n").unwrap();
+        }
+        let dir = dir.canonicalize().unwrap();
+
+        let (tx, rx) = mpsc::channel::<Batch>();
+        let watch = start(dir.clone(), move |b| {
+            let _ = tx.send(b);
+        })
+        .expect("the watch has to start");
+        std::thread::sleep(Duration::from_millis(400));
+        std::fs::rename(dir.join("a"), dir.join("b")).unwrap();
+
+        let mut dirs = HashSet::new();
+        let mut removed = HashSet::new();
+        while let Ok(b) = rx.recv_timeout(Duration::from_secs(2)) {
+            dirs.extend(b.dirs);
+            removed.extend(b.removed);
+        }
+        assert!(dirs.contains("b"), "the directory moved in has to be listed: {dirs:?}");
+        assert!(removed.contains("a"), "the directory moved away has to be gone: {removed:?}");
 
         drop(watch);
         std::fs::remove_dir_all(&dir).ok();

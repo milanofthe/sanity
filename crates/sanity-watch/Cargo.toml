@@ -1,0 +1,24 @@
+[package]
+name = "sanity-watch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Watching an open folder, debounced into batches of paths"
+
+# Its own crate so the watcher can be built and tested without Tauri, which is
+# most of the time it takes to compile the app.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+# The watcher, per platform. FSEvents on macOS is behind a feature flag;
+# ReadDirectoryChangesW and inotify are what `recommended_watcher` picks on
+# their own. Declared per target because a feature that only exists for one
+# platform in the shared table is a build that works until somebody runs it
+# somewhere else. Default features off either way: they pull in
+# crossbeam-channel, and the watch thread uses std's channel.
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify = { version = "8", default-features = false }

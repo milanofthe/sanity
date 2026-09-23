@@ -435,6 +435,42 @@ pub fn list_files(root: &Path) -> Result<Vec<String>, ScanError> {
     }
 }
 
+/// The files under one directory of the folder that belong in it, the way
+/// `list_files` lists the whole of it, `""` being the whole of it.
+///
+/// For a watcher that has been told a directory changed without being told
+/// what is in it: one that was moved or renamed, or everything, after events
+/// were lost. Only what exists: git lists a tracked file whose directory has
+/// just been moved away, and a file that is not there is not a change.
+pub fn list_files_under(root: &Path, dir: &str) -> Vec<String> {
+    let listed = if dir.is_empty() {
+        list_files(root).unwrap_or_default()
+    } else {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
+            .arg(dir)
+            .output();
+        match out {
+            Ok(out) if out.status.success() => out
+                .stdout
+                .split(|&b| b == 0)
+                .filter(|s| !s.is_empty())
+                .map(|s| String::from_utf8_lossy(s).into_owned())
+                .collect(),
+            // Not a repository: the same walk the scan falls back to, from
+            // the directory down, with paths made relative to the folder.
+            _ => walk(&root.join(dir))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| format!("{dir}/{p}"))
+                .collect(),
+        }
+    };
+    listed.into_iter().filter(|p| root.join(p).is_file()).collect()
+}
+
 /// Feed a NUL separated path list to a git subcommand on stdin and return its
 /// stdout.
 ///
@@ -640,5 +676,34 @@ mod tests {
     fn crlf_does_not_leak_into_the_metrics() {
         let f = plain_file_data("a\r\nbb\r\n");
         assert_eq!(f.line_cols.as_slice(), &[1, 2]);
+    }
+
+    // What a watcher asks after a directory was moved outside git: the old
+    // place lists nothing, though git still tracks it there, and the new one
+    // lists what arrived.
+    #[test]
+    fn listing_under_a_moved_directory() {
+        let dir = std::env::temp_dir().join(format!("sanity-under-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a/sub")).unwrap();
+        std::fs::write(dir.join("a/one.rs"), "x\n").unwrap();
+        std::fs::write(dir.join("a/sub/two.rs"), "y\n").unwrap();
+        std::fs::write(dir.join("keep.rs"), "z\n").unwrap();
+        let git = |args: &[&str]| {
+            Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap();
+        };
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        git(&["-c", "user.email=x@y", "-c", "user.name=x", "commit", "-qm", "init"]);
+        std::fs::rename(dir.join("a"), dir.join("b")).unwrap();
+
+        assert!(list_files_under(&dir, "a").is_empty());
+        let mut moved = list_files_under(&dir, "b");
+        moved.sort();
+        assert_eq!(moved, vec!["b/one.rs", "b/sub/two.rs"]);
+        let mut all = list_files_under(&dir, "");
+        all.sort();
+        assert_eq!(all, vec!["b/one.rs", "b/sub/two.rs", "keep.rs"]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

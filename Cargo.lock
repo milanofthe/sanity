@@ -2720,8 +2720,8 @@ dependencies = [
 name = "sanity"
 version = "1.3.0"
 dependencies = [
- "notify",
  "sanity-core",
+ "sanity-watch",
  "serde",
  "serde_json",
  "tauri",
@@ -2753,6 +2753,14 @@ dependencies = [
  "tree-sitter-toml-ng",
  "tree-sitter-typescript",
  "tree-sitter-yaml",
+]
+
+[[package]]
+name = "sanity-watch"
+version = "1.3.0"
+dependencies = [
+ "notify",
+ "serde",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sanity-core", "src-tauri"]
+members = ["crates/sanity-core", "crates/sanity-watch", "src-tauri"]
 resolver = "2"
 
 [workspace.package]

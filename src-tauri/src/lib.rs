@@ -2,14 +2,14 @@
 //! contains lives in `sanity-core`, and this file only moves bytes between
 //! that crate and the webview.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
-mod watch;
 
 use sanity_core::find;
+use sanity_watch::{self as watch, is_under, reconcile, DirIndex, WatchSlot};
 use sanity_core::scan::{self, ScannedFile};
 use sanity_core::wire::{encode, FileData, FLAG_BINARY};
 use serde::Serialize;
@@ -117,32 +117,21 @@ const IGNORED_CAP: usize = 20_000;
 /// The scan is kept in memory so payload requests do not re-read the tree.
 /// A repository's line and span data is around 30 bytes per line, so a 200k
 /// line project is a few megabytes: cheap enough to hold whole.
+///
+/// By path. It used to be parallel vectors searched from the front, one
+/// search per file per refresh, which for a checkout of a thousand files in a
+/// project of a hundred thousand is a hundred million comparisons; and two
+/// more copies, of the decoded files and of the line counts, that nothing
+/// read any more.
+#[derive(Default)]
 pub struct Repo {
     root: PathBuf,
-    payloads: Vec<(String, Vec<u8>)>,
-    /// Decoded payloads, kept so a git re-query can rewrite `line_state`
-    /// without reading and tokenizing the tree again. Roughly the same size
-    /// as `payloads`, which is a few megabytes for a large project.
-    data: Vec<(String, FileData)>,
-    /// Line count per path, kept so a watcher refresh can report the index
-    /// without re-reading the tree.
-    line_counts: HashMap<String, u32>,
-    /// Every path the scan produced. A watch event for one of these needs no
-    /// further question; anything else has to be asked about.
-    known: HashSet<String>,
-    /// Modification time and size per path, as of the version held.
-    ///
-    /// A watcher reports a path when the filesystem touched it, which is not
-    /// the same as the content having moved: an editor writing through a
-    /// temporary file, a tool rewriting a file with what was already in it, a
-    /// build stamping directories. Asking the filesystem first costs one stat
-    /// and saves a read plus a tokenise, which is two orders of magnitude
-    /// more.
-    stamps: HashMap<String, (u128, u64)>,
-    /// The file rows as the layout needs them. Held so a watcher event can
-    /// update one row and hand the whole index back without re-reading the
-    /// tree, which takes four seconds on a large project.
-    files: Vec<FileInfo>,
+    /// Every file that was read: the scan's, and the watcher's since.
+    held: HashMap<String, Held>,
+    /// The directories those files are in; see `DirIndex`.
+    dirs: DirIndex,
+    /// Files git ignores, as placeholders: a row and nothing read.
+    placeholders: Vec<FileInfo>,
     /// How many files git ignores here, and how many of them this scan took;
     /// carried so a relayout reports the same numbers the scan did.
     ignored_total: u32,
@@ -151,26 +140,53 @@ pub struct Repo {
     binary: u32,
 }
 
-impl Default for Repo {
-    fn default() -> Self {
-        Self {
-            root: PathBuf::new(),
-            payloads: Vec::new(),
-            data: Vec::new(),
-            line_counts: HashMap::new(),
-            known: HashSet::new(),
-            stamps: HashMap::new(),
-            files: Vec::new(),
-            binary: 0,
-            ignored_total: 0,
-            ignored_shown: 0,
+/// One file as the backend holds it.
+struct Held {
+    /// The row the layout needs. Held so a watcher event can update one and
+    /// hand the whole index back without re-reading the tree, which takes
+    /// four seconds on a large project.
+    row: FileInfo,
+    /// The encoded file, for payload requests and for telling a rewrite
+    /// that changed nothing from one that did.
+    payload: Vec<u8>,
+    /// Modification time and size, as of the version held.
+    ///
+    /// A watcher reports a path when the filesystem touched it, which is not
+    /// the same as the content having moved: an editor writing through a
+    /// temporary file, a tool rewriting a file with what was already in it, a
+    /// build stamping directories. Asking the filesystem first costs one stat
+    /// and saves a read plus a tokenise, which is two orders of magnitude
+    /// more.
+    stamp: (u128, u64),
+}
+
+impl Repo {
+    fn hold(&mut self, rel: String, held: Held) {
+        self.dirs.add(&rel);
+        if let Some(was) = self.held.insert(rel, held) {
+            // Already counted; the add above counted it again.
+            self.dirs.remove(&was.row.path);
         }
+    }
+
+    fn forget(&mut self, rel: &str) {
+        if self.held.remove(rel).is_some() {
+            self.dirs.remove(rel);
+        }
+    }
+
+    /// Every file row, read ones and placeholders, in path order.
+    fn rows(&self) -> Vec<FileInfo> {
+        let mut rows: Vec<FileInfo> =
+            self.held.values().map(|h| h.row.clone()).chain(self.placeholders.iter().cloned()).collect();
+        rows.sort_by(|a, b| a.path.cmp(&b.path));
+        rows
     }
 }
 
 pub struct AppState {
     repo: Mutex<Repo>,
-    watch: watch::WatchSlot,
+    watch: WatchSlot,
     /// Where the next image goes, handed over by `stage_save` just before the
     /// bytes arrive. It lives here because the bytes travel as a raw request
     /// body, which carries no arguments of its own and whose headers are
@@ -227,13 +243,8 @@ async fn scan_repo(
     };
     let ignored_shown = extra.len() as u32;
 
-    let mut files = Vec::with_capacity(listed.len());
-    let mut payloads = Vec::with_capacity(listed.len());
+    let mut held: Vec<(String, Held)> = Vec::with_capacity(listed.len());
     let mut binary = 0u32;
-
-    let mut data: Vec<(String, FileData)> = Vec::with_capacity(listed.len());
-    let mut line_counts: HashMap<String, u32> = HashMap::with_capacity(listed.len());
-    let mut stamps: HashMap<String, (u128, u64)> = HashMap::with_capacity(listed.len());
 
     // Reading and tokenising is the largest cost in opening a project and the
     // files are independent, so it happens across the cores. Measured on 218
@@ -247,27 +258,27 @@ async fn scan_repo(
             binary += 1;
             continue;
         }
-        files.push(file_info(rel, &data_one, &info));
-        line_counts.insert(rel.clone(), info.line_count);
-        stamps.insert(rel.clone(), (info.mtime, info.byte_len));
-        data.push((rel.clone(), data_one));
+        held.push((
+            rel.clone(),
+            Held {
+                row: file_info(rel, &data_one, &info),
+                payload: encode(&data_one),
+                stamp: (info.mtime, info.byte_len),
+            },
+        ));
     }
 
-    // The ignored ones go on the end as placeholders: no payload, no text, no
-    // read. See `ignored_info`.
-    for rel in &extra {
-        files.push(ignored_info(rel));
-    }
+    // The ignored ones as placeholders: no payload, no text, no read. See
+    // `ignored_info`.
+    let placeholders: Vec<FileInfo> = extra.iter().map(|rel| ignored_info(rel)).collect();
 
-    for (rel, data_one) in &data {
-        payloads.push((rel.clone(), encode(data_one)));
-    }
-
+    let files: Vec<FileInfo> =
+        held.iter().map(|(_, h)| h.row.clone()).chain(placeholders.iter().cloned()).collect();
     let groups = groups_from(&files);
 
     let result = ScanResult {
         root: root.to_string_lossy().into_owned(),
-        files: files.clone(),
+        files,
         groups,
         binary,
         ignored_total: ignored_total as u32,
@@ -277,13 +288,12 @@ async fn scan_repo(
 
     {
         let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+        *repo = Repo::default();
         repo.root = root.clone();
-        repo.payloads = payloads;
-        repo.data = data;
-        repo.known = line_counts.keys().cloned().collect();
-        repo.files = files;
-        repo.line_counts = line_counts;
-        repo.stamps = stamps;
+        for (rel, h) in held {
+            repo.hold(rel, h);
+        }
+        repo.placeholders = placeholders;
         repo.binary = binary;
         repo.ignored_total = ignored_total as u32;
         repo.ignored_shown = ignored_shown;
@@ -618,7 +628,9 @@ fn rasterise_first_page(_path: &Path, _width: u32) -> Result<Vec<u8>, String> {
 #[tauri::command]
 async fn repo_payloads(state: State<'_, AppState>) -> Result<Response, String> {
     let repo = state.repo.lock().map_err(|e| e.to_string())?;
-    Ok(Response::new(pack_payloads(&repo.payloads)?))
+    let all: Vec<(&str, &[u8])> =
+        repo.held.iter().map(|(p, h)| (p.as_str(), h.payload.as_slice())).collect();
+    Ok(Response::new(pack_payloads(&all)?))
 }
 
 /// Concatenate every payload behind a JSON index.
@@ -635,9 +647,8 @@ async fn repo_payloads(state: State<'_, AppState>) -> Result<Response, String> {
 /// Split out from the command so it can be tested: `unpack` in
 /// web/src/lib/sources/tauri.ts has to agree with it byte for byte, and both
 /// sides assert against the same fixture.
-pub fn pack_payloads(payloads: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
-    let index: Vec<(&str, u32)> =
-        payloads.iter().map(|(p, b)| (p.as_str(), b.len() as u32)).collect();
+pub fn pack_payloads(payloads: &[(&str, &[u8])]) -> Result<Vec<u8>, String> {
+    let index: Vec<(&str, u32)> = payloads.iter().map(|(p, b)| (*p, b.len() as u32)).collect();
     let header = serde_json::to_vec(&index).map_err(|e| e.to_string())?;
 
     let total: usize = payloads.iter().map(|(_, b)| b.len()).sum();
@@ -658,42 +669,40 @@ fn watch_log() -> bool {
     std::env::var("SANITY_WATCH_LOG").is_ok()
 }
 
-/// Re-read the given files and hand back their payloads.
+/// Re-read the given files and hand back the payloads of the ones that moved.
 ///
-/// This is the path the watcher uses. It re-reads only what changed, but it
-/// re-queries git for the whole repository, because one edit moves the diff of
-/// nothing else while one commit moves the diff of everything, and telling the
-/// two apart costs more than the query.
+/// This is the path the watcher uses. Two questions before anything is sent:
+/// whether the file's timestamp and size moved, which is a stat, and after a
+/// read, whether its content did. The second catches what the first cannot:
+/// `touch`, a formatter with nothing to do, a checkout writing what was there.
+/// Those used to come back and flash their panels as if they had been edited.
 #[tauri::command]
 async fn refresh_files(
     paths: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    let (root, mut line_counts, held) = {
+    let (root, stamps): (PathBuf, HashMap<String, (u128, u64)>) = {
         let repo = state.repo.lock().map_err(|e| e.to_string())?;
-        (repo.root.clone(), repo.line_counts.clone(), repo.stamps.clone())
+        let stamps =
+            paths.iter().filter_map(|p| repo.held.get(p).map(|h| (p.clone(), h.stamp))).collect();
+        (repo.root.clone(), stamps)
     };
     if root.as_os_str().is_empty() {
         return Err("no folder open".into());
     }
+    let root_canonical = root.canonicalize().map_err(|e| e.to_string())?;
 
-    let mut fresh: Vec<(String, FileData)> = Vec::with_capacity(paths.len());
-    let mut rows: Vec<FileInfo> = Vec::with_capacity(paths.len());
-    let mut stamps: Vec<(String, (u128, u64))> = Vec::with_capacity(paths.len());
+    let mut fresh: Vec<(String, Held)> = Vec::with_capacity(paths.len());
     let mut unchanged = 0usize;
     for rel in &paths {
         // Containment, as everywhere a path arrives from outside.
-        let full = root.join(rel);
-        let Ok(canonical) = full.canonicalize() else { continue };
-        let Ok(root_canonical) = root.canonicalize() else { continue };
+        let Ok(canonical) = root.join(rel).canonicalize() else { continue };
         if !canonical.starts_with(&root_canonical) {
             continue;
         }
-        // The cheap question first: has this file actually moved? A watcher
-        // reports a path when the filesystem touched it, and most of those
-        // have the same content as the version already held.
+        // The cheap question first: has this file actually moved?
         let now = scan::stamp_of(&root, rel);
-        if let (Some(now), Some(was)) = (now, held.get(rel)) {
+        if let (Some(now), Some(was)) = (now, stamps.get(rel)) {
             if now == *was {
                 unchanged += 1;
                 continue;
@@ -704,52 +713,44 @@ async fn refresh_files(
         if data_one.flags & FLAG_BINARY != 0 && info.media.is_none() {
             continue;
         }
-        stamps.push((rel.clone(), (info.mtime, info.byte_len)));
-        line_counts.insert(rel.clone(), info.line_count);
-        rows.push(file_info(rel, &data_one, &info));
-        fresh.push((rel.clone(), data_one));
+        fresh.push((
+            rel.clone(),
+            Held {
+                row: file_info(rel, &data_one, &info),
+                payload: encode(&data_one),
+                stamp: (info.mtime, info.byte_len),
+            },
+        ));
     }
 
-    let out: Vec<(String, Vec<u8>)> =
-        fresh.iter().map(|(rel, d)| (rel.clone(), encode(d))).collect();
+    // Kept in step, so a later full payload request does not hand back what
+    // was true before the edit; and compared, so a rewrite with the same
+    // content is not sent at all.
+    let mut out: Vec<(String, Vec<u8>)> = Vec::with_capacity(fresh.len());
+    let mut same = 0usize;
+    {
+        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+        for (rel, h) in fresh {
+            if let Some(was) = repo.held.get_mut(&rel) {
+                if was.payload == h.payload {
+                    was.stamp = h.stamp;
+                    same += 1;
+                    continue;
+                }
+            }
+            out.push((rel.clone(), h.payload.clone()));
+            repo.hold(rel, h);
+        }
+    }
     if watch_log() {
         eprintln!(
-            "refresh_files: {} of {} paths re-read, {unchanged} unchanged by timestamp",
+            "refresh_files: {} of {} paths sent, {unchanged} unchanged by timestamp, {same} by content",
             out.len(),
             paths.len(),
         );
     }
 
-    // Keep the held copy in step, so a later full payload request does not
-    // hand back what was true before the edit.
-    {
-        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
-        repo.line_counts = line_counts;
-        for (rel, stamp) in stamps {
-            repo.stamps.insert(rel, stamp);
-        }
-        for row in rows {
-            repo.known.insert(row.path.clone());
-            match repo.files.iter_mut().find(|f| f.path == row.path) {
-                Some(slot) => *slot = row,
-                None => repo.files.push(row),
-            }
-        }
-        for (rel, d) in fresh {
-            match repo.data.iter_mut().find(|(p, _)| *p == rel) {
-                Some(slot) => slot.1 = d,
-                None => repo.data.push((rel.clone(), d)),
-            }
-            let bytes = out.iter().find(|(p, _)| *p == rel).map(|(_, b)| b.clone());
-            if let Some(bytes) = bytes {
-                match repo.payloads.iter_mut().find(|(p, _)| *p == rel) {
-                    Some(slot) => slot.1 = bytes,
-                    None => repo.payloads.push((rel, bytes)),
-                }
-            }
-        }
-    }
-
+    let out: Vec<(&str, &[u8])> = out.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
     Ok(Response::new(pack_payloads(&out)?))
 }
 
@@ -760,13 +761,14 @@ async fn refresh_files(
 #[tauri::command]
 async fn repo_index(state: State<'_, AppState>) -> Result<ScanResult, String> {
     let repo = state.repo.lock().map_err(|e| e.to_string())?;
+    let files = repo.rows();
     if watch_log() {
-        eprintln!("repo_index: {} files (relayout)", repo.files.len());
+        eprintln!("repo_index: {} files (relayout)", files.len());
     }
     Ok(ScanResult {
         root: repo.root.to_string_lossy().into_owned(),
-        files: repo.files.clone(),
-        groups: groups_from(&repo.files),
+        groups: groups_from(&files),
+        files,
         binary: repo.binary,
         ignored_total: repo.ignored_total,
         ignored_shown: repo.ignored_shown,
@@ -802,32 +804,56 @@ fn start_watch(app: &tauri::AppHandle, root: &Path) -> Result<watch::Watch, Stri
     })
 }
 
-/// Drop the paths in a batch that the open folder does not contain.
+/// Turn what the watcher saw into the files that changed and the files that
+/// are gone.
 ///
-/// Paths the scan already produced pass straight through. The rest go to git in
-/// one call, because a build writing into an ignored directory produces
-/// thousands of events and the only correct answer to whether they matter is
-/// git's own.
-fn settle_batch(app: &tauri::AppHandle, mut batch: watch::Batch) -> watch::Batch {
+/// Three kinds of path arrive. A file the folder holds passes straight
+/// through. Any other file goes to git, in one call, because a build writing
+/// into an ignored directory produces thousands of events and the only
+/// correct answer to whether they matter is git's own. And a directory whose
+/// contents the events do not describe, one moved in or out or everything
+/// after a rescan, is listed again and compared with what is held under it;
+/// see `sanity_watch::reconcile`.
+fn settle_batch(app: &tauri::AppHandle, batch: watch::Batch) -> watch::Batch {
     let state: State<'_, AppState> = app.state();
-    let (root, known) = match state.repo.lock() {
-        Ok(repo) => (repo.root.clone(), repo.known.clone()),
-        Err(_) => return watch::Batch::default(),
+    let (root, mut removed, unknown, to_list) = {
+        let Ok(repo) = state.repo.lock() else { return watch::Batch::default() };
+        let mut removed = Vec::new();
+        let mut to_list = batch.dirs.clone();
+        for p in &batch.removed {
+            if repo.held.contains_key(p) {
+                removed.push(p.clone());
+            } else if repo.dirs.holds(p) {
+                // A directory the folder had files in, moved or deleted
+                // whole. A path held by nobody is nothing either way, which
+                // is most of what a build clearing its output reports.
+                to_list.push(p.clone());
+            }
+        }
+        let unknown: Vec<String> =
+            batch.changed.iter().filter(|p| !repo.held.contains_key(*p)).cloned().collect();
+        (repo.root.clone(), removed, unknown, to_list)
     };
 
-    let unknown: Vec<String> = batch
-        .changed
-        .iter()
-        .chain(batch.removed.iter())
-        .filter(|p| !known.contains(*p))
-        .cloned()
-        .collect();
     let ignored = scan::ignored_paths(&root, &unknown);
+    let mut changed: Vec<String> =
+        batch.changed.into_iter().filter(|p| !ignored.contains(p)).collect();
 
-    batch.changed.retain(|p| !ignored.contains(p));
-    // A removed path that was never known is nothing to report either way.
-    batch.removed.retain(|p| known.contains(p));
-    batch
+    for dir in &to_list {
+        // Listed without the lock: it is a git call.
+        let listed = scan::list_files_under(&root, dir);
+        let Ok(repo) = state.repo.lock() else { return watch::Batch::default() };
+        let held = repo.held.keys().map(String::as_str).filter(|p| is_under(dir, p));
+        let (present, gone) = reconcile(listed, held);
+        changed.extend(present);
+        removed.extend(gone);
+    }
+
+    changed.sort();
+    changed.dedup();
+    removed.sort();
+    removed.dedup();
+    watch::Batch { changed, removed, dirs: Vec::new() }
 }
 
 /// Stop watching. Used when the window closes or a folder is closed without
@@ -859,12 +885,8 @@ fn log_line(message: String) {
 async fn drop_files(paths: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
     let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
     for path in &paths {
-        repo.payloads.retain(|(p, _)| p != path);
-        repo.data.retain(|(p, _)| p != path);
-        repo.line_counts.remove(path);
-        repo.known.remove(path);
-        repo.stamps.remove(path);
-        repo.files.retain(|f| f.path != *path);
+        repo.forget(path);
+        repo.placeholders.retain(|f| f.path != *path);
     }
     Ok(())
 }
@@ -1028,7 +1050,7 @@ async fn find_text(
         let repo = state.repo.lock().map_err(|e| e.to_string())?;
         (
             repo.root.clone(),
-            repo.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
+            repo.rows().into_iter().map(|f| f.path).collect::<Vec<_>>(),
         )
     };
     if root.as_os_str().is_empty() {
@@ -1266,12 +1288,8 @@ mod tests {
 
     /// The fixture the TypeScript side unpacks. Printed by
     /// `cargo test -p sanity -- --nocapture payload_golden`.
-    fn payload_fixture() -> Vec<(String, Vec<u8>)> {
-        vec![
-            ("src/a.rs".to_string(), vec![1, 2, 3, 4]),
-            ("b.ts".to_string(), vec![9]),
-            ("c/d/e.py".to_string(), vec![7, 7, 7]),
-        ]
+    fn payload_fixture() -> Vec<(&'static str, &'static [u8])> {
+        vec![("src/a.rs", &[1, 2, 3, 4]), ("b.ts", &[9]), ("c/d/e.py", &[7, 7, 7])]
     }
 
     #[test]
@@ -1291,7 +1309,7 @@ mod tests {
         for ((path, bytes), (ipath, ilen)) in payloads.iter().zip(index.iter()) {
             assert_eq!(path, ipath);
             assert_eq!(*ilen as usize, bytes.len());
-            assert_eq!(&packed[offset..offset + bytes.len()], bytes.as_slice());
+            assert_eq!(&packed[offset..offset + bytes.len()], *bytes);
             offset += bytes.len();
         }
         assert_eq!(offset, packed.len(), "no trailing bytes");
