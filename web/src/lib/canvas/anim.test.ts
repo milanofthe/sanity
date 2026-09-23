@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  applyTo, easeOut, finished, IDENTITY, progress, same, settleIn, slideFrom,
+  applyTo, easeOut, fadeOut, finished, IDENTITY, progress, same, settleIn, slideFrom,
   transformFor, type Rect,
 } from './anim.ts';
 import { timing } from '../metrics.ts';
@@ -124,4 +124,24 @@ test('an unmoved panel is recognised so it can animate not at all', () => {
   assert.ok(same(r, { ...r }));
   assert.ok(!same(r, { ...r, x: 1.5 }));
   assert.ok(!same(r, { ...r, h: 5 }));
+});
+
+test('a panel fading out starts where it is and ends invisible, about its centre', () => {
+  const r = { x: 100, y: 50, w: 400, h: 200 };
+  const a = fadeOut(r);
+  const start = transformFor(r, a);
+  assert.equal(start.scale, 1);
+  assert.equal(start.alpha, 1);
+  assert.equal(start.bx, 0);
+  a.t = a.dur;
+  const end = transformFor(r, a);
+  assert.ok(end.alpha < 1e-9, `alpha ${end.alpha}`);
+  const drawn = applyTo(end, r);
+  // Shrunk, with its centre where it was.
+  assert.ok(drawn.w < r.w);
+  assert.ok(Math.abs(drawn.x + drawn.w / 2 - (r.x + r.w / 2)) < 1e-9);
+  assert.ok(Math.abs(drawn.y + drawn.h / 2 - (r.y + r.h / 2)) < 1e-9);
+  // Most of the fade early, out of the way of what slides in.
+  a.t = a.dur / 3;
+  assert.ok(transformFor(r, a).alpha < 0.5);
 });

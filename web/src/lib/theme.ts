@@ -107,7 +107,6 @@ const SURFACE_VARS = {
   added: '--added',
   modified: '--modified',
   deleted: '--deleted',
-  heat: '--heat',
   accent: '--accent',
   reducedBg: '--reduced-bg',
   reducedInk: '--reduced-ink',

@@ -107,7 +107,9 @@ if (clocks.fresh === 0) {
   );
 }
 
-// The flash is over quickly and the marks outlast it: an event, not a state.
+// The flash is over quickly and the marks outlast it, briefly: an event, not
+// a state. The lines flash for as long as the panel does and fade for a
+// second after, so they are sampled just past the panel's flash.
 // Sampled from the page rather than computed here, since recency.ts owns the
 // curves and has its own tests.
 const shape = await page.evaluate(async () => {
@@ -122,24 +124,24 @@ const shape = await page.evaluate(async () => {
     return { flash, mark };
   };
   const now = read();
-  await new Promise((r) => setTimeout(r, 900));
+  await new Promise((r) => setTimeout(r, 600));
   const soon = read();
-  await new Promise((r) => setTimeout(r, 3600));
+  await new Promise((r) => setTimeout(r, 2400));
   const later = read();
   return { now, soon, later };
 });
 console.log(
-  `by now flash ${shape.now.flash.toFixed(2)}, after 0.9 s ${shape.soon.flash.toFixed(2)}; ` +
+  `by now flash ${shape.now.flash.toFixed(2)}, after 0.6 s ${shape.soon.flash.toFixed(2)}; ` +
     `marks ${shape.now.mark.toFixed(2)} -> ${shape.soon.mark.toFixed(2)} -> ${shape.later.mark.toFixed(2)}`,
 );
 if (shape.soon.flash !== 0) {
-  console.log(`FAIL  the flash is still ${shape.soon.flash.toFixed(2)} after 0.9 s, which is a glow`);
+  console.log(`FAIL  the flash is still ${shape.soon.flash.toFixed(2)} after 0.6 s, which is a glow`);
   failures++;
 } else if (!(shape.soon.mark > 0.5)) {
   console.log('FAIL  the line marks went with the flash, so nothing says which lines changed');
   failures++;
 } else if (shape.later.mark !== 0) {
-  console.log(`FAIL  the marks are still ${shape.later.mark.toFixed(2)} after 4.5 s`);
+  console.log(`FAIL  the marks are still ${shape.later.mark.toFixed(2)} after 3 s, which is a glow`);
   failures++;
 } else {
   console.log('ok    the flash is brief, the marks outlast it, and both end');

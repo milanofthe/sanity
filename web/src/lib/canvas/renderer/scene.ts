@@ -12,7 +12,7 @@
 import { Camera } from '$lib/canvas/camera';
 import { metrics, overview, timing } from '$lib/metrics';
 import {
-  applyTo, finished, IDENTITY, same, settleIn, slideFrom, transformFor,
+  applyTo, fadeOut, finished, IDENTITY, same, settleIn, slideFrom, transformFor,
   type PanelAnim, type Rect as PanelRect, type Transform,
 } from '$lib/canvas/anim';
 import { diffLines, seams, signatures, type Seam, type Signature } from '$lib/canvas/linediff';
@@ -88,6 +88,8 @@ export interface SceneFile {
   family: number;
   /** Settle animation, or null once it has finished. */
   anim: PanelAnim | null;
+  /** Its file is gone and it is fading out; see `leaving`. */
+  leaving?: boolean;
   /** Screen rows the texture was last written for, and the column width it
    *  was written at. A relayout compares against these to decide whether the
    *  layer still holds the right picture. */
@@ -258,6 +260,11 @@ const HAIRLINE_PX = 1;
  */
 const BAND_MIX = 0.12;
 const CHANGE_MIX = 0.4;
+
+/** Alpha per unit of mix for a band drawn over the overview texture; see
+ *  `pushBand`. A change at its peak is fully opaque there: at that zoom a
+ *  line is a pixel, and a pixel at forty percent is not a signal. */
+const OVER_ALPHA = 2.5;
 
 /**
  * How thick the crack marking a removal is: at least this many CSS pixels,
@@ -492,6 +499,10 @@ export class Scene {
    * grid knows it by, sliding in from wherever it was.
    */
   private animated = new Set<SceneFile>();
+  /** Panels whose files are gone, fading out before their textures are let
+   *  go; see `fadeOut`. Not in `files`: a file of the same name can arrive
+   *  while one is still leaving. */
+  private leaving = new Set<SceneFile>();
   /** Files with a clock running: a flash, marks fading, or a change playing.
    *  `advance` walks these instead of every file. */
   private active = new Set<SceneFile>();
@@ -776,10 +787,18 @@ export class Scene {
     let gone = false;
     for (const [path, f] of [...this.files]) {
       if (byPath.has(path)) continue;
-      if (!f.node.stub) this.textures.release(f.slot);
-      this.dropDetail(f);
       this.files.delete(path);
       gone = true;
+      // Faded out where it was, holding its texture until it has; see
+      // `fadeOut`. A placeholder has nothing to fade.
+      if (f.node.stub) {
+        this.dropDetail(f);
+        continue;
+      }
+      f.anim = fadeOut(f.node);
+      f.change = null;
+      f.leaving = true;
+      this.leaving.add(f);
     }
     if (gone) {
       for (const f of [...this.animated]) if (!this.files.has(f.node.path)) this.animated.delete(f);
@@ -1571,10 +1590,12 @@ export class Scene {
       if (f.anim) {
         // A panel settling in waits, invisible, while the arrival is held;
         // see `holdAppear`. A relayout's slide does not.
-        f.anim.t += this.holdAppear && f.anim.a0 === 0 ? 0 : dt;
+        f.anim.t += this.holdAppear && f.anim.a0 === 0 && !f.anim.out ? 0 : dt;
         if (finished(f.anim)) {
           f.anim = null;
           this.animated.delete(f);
+          // Faded all the way: not drawn again, and let go of below.
+          if (f.leaving) return;
         } else {
           stillAnimating = true;
           this.tf = transformFor(n, f.anim);
@@ -1616,21 +1637,35 @@ export class Scene {
         this.pushGlyphs(f, glyphFade, vx0, vy0, vx1, vy1);
         this.pushLineNumbers(f, glyphFade, vx0, vy0, vx1, vy1);
       }
-      if (spanFade > 0.004 || glyphFade > 0.004) {
-        this.pushGutter(f, cam.zoom, vy0, vy1);
-        this.pushChangeBands(f, vy0, vy1);
-        this.pushHits(f, vy0, vy1);
-      }
+      // The change bands at every zoom, not only where the lines can be
+      // read: out where a panel is a few pixels of texture, a band across
+      // the lines that changed is the only thing that says where in the file
+      // it was. Over the texture there, behind the text here.
+      const over = w.overview >= 0.5;
+      this.pushGutter(f, cam.zoom, vy0, vy1, over);
+      this.pushChangeBands(f, vy0, vy1, over);
+      if (spanFade > 0.004 || glyphFade > 0.004) this.pushHits(f, vy0, vy1);
     };
     // Sliding panels first, from their own list, then whatever else is in
     // view. A panel in both is drawn once.
     if (opts.only) {
       for (const f of opts.only) draw(f);
     } else {
+      // The ones leaving first, so the neighbours sliding into their place
+      // are drawn over them.
+      if (!opts.bake) for (const f of this.leaving) draw(f);
       for (const f of this.animated) draw(f);
       for (const i of this.fileGrid.near(vx0, vy0, vx1, vy1, this.nearFiles)) {
         const f = this.byNode[i];
         if (f) draw(f);
+      }
+    }
+    if (opts.live) {
+      for (const f of this.leaving) {
+        if (f.anim) continue;
+        this.textures.release(f.slot);
+        this.dropDetail(f);
+        this.leaving.delete(f);
       }
     }
     this.tf = IDENTITY;
@@ -2056,7 +2091,7 @@ export class Scene {
       this.pushRect(
         this.fgRects, n.x, n.y, w, h,
         this.pal.surface.reducedBg, 0,
-        hot ? this.pal.surface.heat : this.pal.surface.border,
+        hot ? this.pal.surface.ink : this.pal.surface.border,
         borderPx,
       );
     }
@@ -2131,10 +2166,16 @@ export class Scene {
     // with a coloured outline reads as a box among a thousand boxes. The wash
     // is what makes "something happened over there" visible from across the
     // canvas, and it fades with the same glow.
+    //
+    // In the ink colour rather than a colour of its own: red and green say
+    // what happened to the lines, and a red flash on every change read as
+    // every change being a deletion. A panel whose file is gone is the one
+    // that is red, while it fades.
+    const s = this.pal.surface;
     const flash = flashAt(f.since);
-    const bg = flash > 0.004
-      ? bandColour(this.pal.surface.panelBg, this.pal.surface.heat, FLASH_WASH * flash)
-      : this.pal.surface.panelBg;
+    const bg = f.leaving
+      ? bandColour(s.panelBg, s.deleted, FLASH_WASH)
+      : flash > 0.004 ? bandColour(s.panelBg, s.ink, FLASH_WASH * flash) : s.panelBg;
     this.pushRect(this.bgRects, n.x, n.y, n.w, n.h, bg, 1, 0, 0);
   }
 
@@ -2171,10 +2212,11 @@ export class Scene {
     // typed a name is looking for that file, not for the last thing written.
     const flash = flashAt(f.since);
     const hot = flash > 0.02;
-    const border = found
-      ? this.pal.surface.accent
-      : hot ? this.pal.surface.heat : this.pal.surface.border;
-    const borderPx = found ? HAIRLINE_PX + 2 : hot ? HAIRLINE_PX + 2 * flash : HAIRLINE_PX;
+    const s = this.pal.surface;
+    const border = f.leaving ? s.deleted : found ? s.accent : hot ? s.ink : s.border;
+    const borderPx = f.leaving || found
+      ? HAIRLINE_PX + 2
+      : hot ? HAIRLINE_PX + 2 * flash : HAIRLINE_PX;
     // Transparent fill, so this draws only the outline over what is there.
     this.pushRect(this.fgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 0, border, borderPx);
   }
@@ -2354,7 +2396,7 @@ export class Scene {
    */
   private farView(cam: Camera): boolean {
     const inView = this.estimateInView(cam);
-    const sliding = this.animated.size > 0 || this.dirAnims.size > 0;
+    const sliding = this.animated.size > 0 || this.dirAnims.size > 0 || this.leaving.size > 0;
     this.far = this.tiled && !sliding && inView > (this.far ? FAR_LEAVE : FAR_ENTER);
     return this.far;
   }
@@ -3277,7 +3319,7 @@ export class Scene {
    * During a change the alpha is driven by the animation instead, and the rows
    * come from the diff rather than from git: see `pushChangeBands`.
    */
-  private pushGutter(f: SceneFile, zoom: number, vy0: number, vy1: number): void {
+  private pushGutter(f: SceneFile, zoom: number, vy0: number, vy1: number, over: boolean): void {
     if (f.state === LineState.Unchanged) return;
     const w = Math.max(2, metrics.charWidth * 0.4);
     const [vx0, vx1] = [-Infinity, Infinity];
@@ -3323,10 +3365,7 @@ export class Scene {
 
         // The band covers every row a wrapped line occupies: the change is the
         // whole line, however many rows it takes to show it.
-        this.pushRect(
-          this.bgRects, colX, y, colW, metrics.lineHeight,
-          bandColour(this.pal.surface.panelBg, color, BAND_MIX * fade), 1, 0, 0,
-        );
+        this.pushBand(colX, y, colW, color, BAND_MIX * fade, over);
 
         // One marker per source line, on its first row: a wrapped line is one
         // change, not three.
@@ -3372,11 +3411,33 @@ export class Scene {
     }
   }
 
-  /** The colour a line state is drawn in. */
+  /** The colour a line state is drawn in: green for what came, red for what
+   *  went. A line that changed is both, one after the other, which is how
+   *  `pushChangeBands` plays it, so it has no colour of its own. */
   private changeColour(st: number): number {
-    if (st === LineState.Added) return this.pal.surface.added;
-    if (st === LineState.Modified) return this.pal.surface.modified;
+    if (st === LineState.Added || st === LineState.Modified) return this.pal.surface.added;
     return this.pal.surface.deleted;
+  }
+
+  /**
+   * One row of a change band, `mix` strong in `colour`.
+   *
+   * Behind the code where the code is drawn: a luminance step on the panel's
+   * own ground, see `bandColour`, so the text on it keeps its contrast. Over
+   * the overview texture where that is what is drawn, as the colour itself at
+   * an alpha, because behind the texture it would show only between the
+   * texels of ink, and at that zoom there is no text to keep legible.
+   */
+  private pushBand(x: number, y: number, w: number, colour: number, mix: number, over: boolean): void {
+    if (mix <= 0.004) return;
+    if (over) {
+      this.pushRect(this.fgRects, x, y, w, metrics.lineHeight, colour, Math.min(1, mix * OVER_ALPHA), 0, 0);
+    } else {
+      this.pushRect(
+        this.bgRects, x, y, w, metrics.lineHeight,
+        bandColour(this.pal.surface.panelBg, colour, mix), 1, 0, 0,
+      );
+    }
   }
 
   /**
@@ -3393,7 +3454,7 @@ export class Scene {
    * from a baseline, which after a commit is nothing at all while the file on
    * screen has just been rewritten.
    */
-  private pushChangeBands(f: SceneFile, vy0: number, vy1: number): void {
+  private pushChangeBands(f: SceneFile, vy0: number, vy1: number, over: boolean): void {
     const ch = f.change;
     if (!ch) return;
     const [vx0, vx1] = [-Infinity, Infinity];
@@ -3411,8 +3472,6 @@ export class Scene {
     const mix = removing
       ? CHANGE_MIX * (1 - e)
       : BAND_MIX + (CHANGE_MIX - BAND_MIX) * (1 - e);
-    const band = bandColour(this.pal.surface.panelBg, colour, mix);
-
     for (const [c, colX, firstRow, lastRow] of this.visibleRuns(f, vx0, vy0, vx1, vy1)) {
       for (const line of rows) {
         // Every screen row this source line occupies.
@@ -3421,9 +3480,8 @@ export class Scene {
         for (let row = from; row < to; row++) {
           if (row < firstRow || row > lastRow) continue;
           const y = f.node.y + textOriginY + (row - c * g.linesPerColumn) * metrics.lineHeight;
-          // Background, not foreground: the band belongs behind the code, and
-          // pushed after the standing bands so a change overrides one.
-          this.pushRect(this.bgRects, colX, y, colW, metrics.lineHeight, band, 1, 0, 0);
+          // Pushed after the standing bands, so a change overrides one.
+          this.pushBand(colX, y, colW, colour, mix, over);
         }
       }
     }

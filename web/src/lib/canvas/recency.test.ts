@@ -33,11 +33,14 @@ test('the mark is held, then ramps out', () => {
   assert.ok(Math.abs(markAt(mid) - 0.5) < 1e-9);
 });
 
-test('the mark outlasts the flash', () => {
-  // Otherwise the bands would be gone before anyone could look at them.
-  assert.ok(timing.markHold > timing.flash * 4);
-  assert.equal(flashAt(timing.flash + 0.1) , 0);
-  assert.ok(markAt(timing.flash + 0.1) > 0.9);
+test('the lines flash longer than the panel', () => {
+  // The panel says where, the lines say what, and the what is the one that
+  // has to be read: at full strength until the panel's flash is over, then
+  // fading, and gone well before it could read as a glow.
+  assert.equal(flashAt(timing.flash + 0.1), 0);
+  assert.equal(markAt(timing.flash), 1);
+  assert.ok(timing.markHold > timing.flash * 2);
+  assert.ok(timing.markHold <= 2);
 });
 
 test('a file with no change reports nothing', () => {

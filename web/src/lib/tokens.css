@@ -88,7 +88,6 @@
 	--added: var(--sublime-green);
 	--modified: var(--sublime-orange);
 	--deleted: var(--sublime-red);
-	--heat: var(--sublime-orange3);
 
 	/* canvas surfaces the renderer draws */
 	--canvas-bg: var(--bg);
@@ -250,7 +249,6 @@
 	--added: var(--sublime-yellow2);
 	--modified: var(--sublime-orange);
 	--deleted: var(--sublime-red);
-	--heat: var(--sublime-orange3);
 
 	--dir-bg: hsl(70, 8%, 7%);
 	--reduced-bg: hsl(70, 8%, 12%);
@@ -313,7 +311,6 @@
 	--added: var(--sublime-green);
 	--modified: var(--sublime-orange);
 	--deleted: var(--sublime-red);
-	--heat: hsl(32, 85%, 48%);
 
 	--dir-bg: hsl(195, 11%, 88%);
 	--reduced-bg: hsl(195, 11%, 90%);
@@ -418,7 +415,6 @@
 	--added: var(--sage);
 	--modified: var(--amber);
 	--deleted: var(--sanity-red);
-	--heat: var(--red-ink);
 
 	--dir-bg: #101214;
 	--reduced-bg: #191b1e;
@@ -488,7 +484,6 @@
 	--added: var(--nord14);
 	--modified: var(--nord13);
 	--deleted: var(--nord11);
-	--heat: var(--nord8);
 
 	--dir-bg: #22262f;
 	--reduced-bg: var(--nord1);
@@ -553,7 +548,6 @@
 	--added: var(--gb-green);
 	--modified: var(--gb-yellow);
 	--deleted: var(--gb-red);
-	--heat: var(--gb-orange);
 
 	--dir-bg: #191c1d;
 	--reduced-bg: var(--gb-bg1);
@@ -615,7 +609,6 @@
 	--added: var(--one-green);
 	--modified: var(--one-yellow);
 	--deleted: var(--one-red);
-	--heat: var(--one-blue);
 
 	--dir-bg: #181b1f;
 	--reduced-bg: #2c313a;
@@ -684,7 +677,6 @@
 	--added: var(--sol-green);
 	--modified: var(--sol-yellow);
 	--deleted: var(--sol-red);
-	--heat: var(--sol-orange);
 
 	--dir-bg: #e7e0ca;
 	--reduced-bg: var(--sol-base2);

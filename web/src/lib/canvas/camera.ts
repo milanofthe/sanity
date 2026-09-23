@@ -4,14 +4,24 @@
 interface Flight {
   x0: number;
   y0: number;
+  z0: number;
   /** Log zoom, because that is what interpolates evenly. */
   lz0: number;
   x1: number;
   y1: number;
   lz1: number;
+  /** The world point that is at the same place on screen at both ends, which
+   *  the flight scales about; null when the zoom barely changes and the
+   *  flight is a pan. See `update`. */
+  px: number | null;
+  py: number;
   start: number;
   duration: number;
 }
+
+/** Zoom ratios closer to one than this are flown as a pan: the point both
+ *  ends share moves off towards infinity as the ratio approaches one. */
+const PAN_ONLY = 1e-3;
 
 export class Camera {
   x = 0;
@@ -118,13 +128,21 @@ export class Camera {
       this.zoom = target;
       return;
     }
+    const z0 = this.zoom;
+    const dz = target - z0;
+    const pan = Math.abs(dz) < PAN_ONLY * Math.max(z0, target);
     this.flight = {
       x0: this.x,
       y0: this.y,
-      lz0: Math.log(this.zoom),
+      z0,
+      lz0: Math.log(z0),
       x1: x,
       y1: y,
       lz1: Math.log(target),
+      // (P - c0) z0 = (P - c1) z1: the same screen offset from the centre
+      // at the start and at the end.
+      px: pan ? null : (x * target - this.x * z0) / dz,
+      py: pan ? 0 : (y * target - this.y * z0) / dz,
       start: performance.now(),
       duration: seconds * 1000,
     };
@@ -151,9 +169,27 @@ export class Camera {
     const raw = Math.min(1, (now - f.start) / f.duration);
     // Cubic ease in and out: no sudden start, no overshoot at the end.
     const t = raw < 0.5 ? 4 * raw * raw * raw : 1 - (-2 * raw + 2) ** 3 / 2;
-    this.x = f.x0 + (f.x1 - f.x0) * t;
-    this.y = f.y0 + (f.y1 - f.y0) * t;
     this.zoom = Math.exp(f.lz0 + (f.lz1 - f.lz0) * t);
-    if (raw >= 1) this.flight = null;
+    if (f.px === null) {
+      this.x = f.x0 + (f.x1 - f.x0) * t;
+      this.y = f.y0 + (f.y1 - f.y0) * t;
+    } else {
+      // A scaling about the point both ends share, so every point on screen
+      // moves in a straight line. The centre used to move linearly in the
+      // world while the zoom moved in log space, and the two disagree about
+      // where the middle of a flight is: zooming in, the zoom is most of the
+      // way there while the centre is halfway, so the target swung out
+      // towards the edge of the screen and came back.
+      const k = f.z0 / this.zoom;
+      this.x = f.px + (f.x0 - f.px) * k;
+      this.y = f.py + (f.y0 - f.py) * k;
+    }
+    if (raw >= 1) {
+      // Exactly the target, not the target up to rounding.
+      this.x = f.x1;
+      this.y = f.y1;
+      this.zoom = Math.exp(f.lz1);
+      this.flight = null;
+    }
   }
 }

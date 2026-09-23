@@ -45,6 +45,11 @@ export interface PanelAnim {
   dur: number;
   /** Elapsed seconds, including the delay. */
   t: number;
+  /**
+   * Played backwards: from where the panel is to the starting values, for a
+   * panel on its way out. The starting values are then where it ends.
+   */
+  out?: boolean;
 }
 
 /** What the renderer applies while pushing a panel's geometry. */
@@ -78,7 +83,10 @@ export function finished(a: PanelAnim): boolean {
  * `scale = s0` with its origin at `target.x + dx0`.
  */
 export function transformFor(target: Rect, anim: PanelAnim): Transform {
-  const e = easeOut(progress(anim));
+  // Backwards is the same path from the other end, still quick at first and
+  // slow at the end: a panel leaving gets out of the way of the ones sliding
+  // into its place rather than lingering over them.
+  const e = anim.out ? 1 - easeOut(progress(anim)) : easeOut(progress(anim));
   const scale = anim.s0 + (1 - anim.s0) * e;
   const shift = 1 - e;
   return {
@@ -144,6 +152,29 @@ export function settleIn(target: Rect, delay: number): PanelAnim {
     delay,
     dur: timing.appear,
     t: 0,
+  };
+}
+
+/**
+ * Take a panel whose file is gone off the canvas: it fades and shrinks a
+ * little about its centre, over the time its neighbours take to slide into
+ * its place.
+ *
+ * It used to vanish on the frame the file did, which read as the neighbours
+ * jumping for no reason: nothing said that anything had been deleted.
+ */
+export function fadeOut(target: Rect): PanelAnim {
+  const s0 = timing.appearScale;
+  const grow = (1 - s0) / 2;
+  return {
+    s0,
+    dx0: target.w * grow,
+    dy0: target.h * grow,
+    a0: 0,
+    delay: 0,
+    dur: timing.reflow,
+    t: 0,
+    out: true,
   };
 }
 

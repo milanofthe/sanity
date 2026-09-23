@@ -168,9 +168,15 @@ export const timing = {
    * one number, a ninety second decay, and it was wrong in both directions at
    * once: too long to read as something happening, and long enough that the
    * canvas never stopped redrawing while an agent worked. See recency.ts.
+   *
+   * The marks were held for four seconds, with the border lit alongside them
+   * for a while, and that read as a glow rather than as a change: what a
+   * change should look like is the file flashing and its lines flashing, red
+   * for what went and green for what came, and then nothing. So a second and
+   * a half, of which the last second is the fade.
    */
   flash: 0.5,
-  markHold: 4,
+  markHold: 1.5,
   markFade: 1,
   /** Seconds for a level-of-detail crossfade. */
   lodFade: 0.18,
