@@ -285,13 +285,18 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
     } else {
         std::fs::read(&full).ok()?
     };
-    let byte_len = size;
+    Some(data_from_bytes(rel, &bytes, size, mtime))
+}
 
+/// A file's payload and row from its bytes, wherever they came from: the
+/// disk, or a blob in the repository's history. `byte_len` is the whole
+/// file's size, which for a file too large to read is more than `bytes`.
+pub fn data_from_bytes(rel: &str, bytes: &[u8], byte_len: u64, mtime: u128) -> (FileData, ScannedFile) {
     // A picture is not text, but it is part of the project, so it is listed
     // with what its header says rather than skipped. Checked before the
     // binary sniff, since that is what used to swallow it.
-    if let Some(media) = crate::media::probe(rel, &bytes) {
-        return Some((
+    if let Some(media) = crate::media::probe(rel, bytes) {
+        return (
             binary_file_data(),
             ScannedFile {
                 path: rel.to_string(),
@@ -301,11 +306,11 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
                 byte_len,
                 mtime,
             },
-        ));
+        );
     }
 
-    if size > MAX_READ_BYTES || looks_binary(&bytes) {
-        return Some((
+    if byte_len > MAX_READ_BYTES || looks_binary(bytes) {
+        return (
             binary_file_data(),
             ScannedFile {
                 path: rel.to_string(),
@@ -315,10 +320,10 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
                 byte_len,
                 mtime,
             },
-        ));
+        );
     }
 
-    let raw = String::from_utf8_lossy(&bytes);
+    let raw = String::from_utf8_lossy(bytes);
     // A notebook is read once, and both its text and its spans come out of
     // that one reading: going through `display_text` here and then parsing
     // again would be parsing the cells as if they were the JSON, which is how
@@ -349,7 +354,7 @@ pub fn read_file(root: &Path, rel: &str) -> Option<(FileData, ScannedFile)> {
         byte_len,
         mtime,
     };
-    Some((data, scanned))
+    (data, scanned)
 }
 
 /// Modification time in nanoseconds, or 0 when there is none to be had.

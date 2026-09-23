@@ -5,6 +5,7 @@
 //! without a WebView.
 
 pub mod find;
+pub mod history;
 pub mod lang;
 pub mod media;
 pub mod notebook;
