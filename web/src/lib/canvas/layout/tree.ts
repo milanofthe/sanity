@@ -6,7 +6,7 @@
 
 import { columns as colBounds, metrics } from '$lib/metrics';
 import {
-  COLUMN_GUTTER, columnsWorth, fillSlot, MAX_COLUMNS, MAX_PANEL_COLS, MIN_PANEL_COLS,
+  COLUMN_GUTTER, columnsWorth, fillSlot, MAX_COLUMNS, MAX_PANEL_COLS, MIN_PANEL_COLS, numberColsFor,
   panelArea as panelArea_, panelGeometry,
   mediaGeometry, stubArea, stubGeometry, type PanelGeometry,
   SMALL_FILE_LINES,
@@ -297,7 +297,8 @@ function panelBounds(lineCols: ArrayLike<number>, geom: PanelGeometry): {
   minW: number; minH: number; maxAspect: number;
 } {
   const rows = Math.max(1, visualRowsCached(lineCols, geom.cols));
-  const pitch = geom.cols * metrics.charWidth + COLUMN_GUTTER;
+  // The geometry's own pitch, line-number margin included.
+  const pitch = geom.pitch;
   // At the column cap, not at the fewest columns the file is worth cutting
   // into. The two differ for short files, and this is the bound on what the
   // panel *can* fill rather than on what it would rather be: handed a slot
@@ -994,7 +995,12 @@ function fitPasses(
       const floorCols = soft && f.narrow ? Math.max(MIN_PANEL_COLS, f.fullCols) : MIN_PANEL_COLS;
       for (let c = natural.cols; ; c = Math.max(floorCols, Math.floor(c / 16) * 8)) {
         const rows = visualRowsCached(f.lineCols, c);
-        const pitch = c * metrics.charWidth + COLUMN_GUTTER;
+        // The line-number margin included, which `fillSlot` takes out of every
+        // column before the text: leaving it out asked for columns four
+        // characters short, so a panel offered the width for its lines came
+        // back with the same narrow columns and wrapped as before.
+        const margin = numberColsFor(f.lineCount, c + 8);
+        const pitch = (c + margin) * metrics.charWidth + COLUMN_GUTTER;
         // A crowded panel asks for a shape that keeps it in as few columns as
         // its rows are worth, which is what it was found lacking. Anything
         // else may take as many as it needs.

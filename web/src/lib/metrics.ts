@@ -143,15 +143,18 @@ export const columns = {
    * ones, exactly that much, the way a crowded one is. Swept on pathsim,
    * column breaks and wrapped rows per hundred lines against the canvas:
    *
-   *   off    14.0 breaks, 672 canvas
-   *   0.75   13.0 breaks, 696 canvas
-   *   0.9     5.9 breaks, 812 canvas
-   *   0.95    5.3 breaks, 831 canvas
+   *   off    11.9 breaks, 696 canvas
+   *   0.9     4.6 breaks, 836 canvas
+   *   0.95    3.6 breaks, 879 canvas
    *
-   * 0.9, where the breaks fall by 58 percent for a fifth more canvas. Past it
-   * the canvas keeps growing for a few breaks more.
+   * Against the layout before any of this, 14.0 breaks at 679: at 0.95, 226
+   * of pathsim's 328 text files have fewer breaks and 11 have more, by five
+   * at most; at 0.9, 17 have more, and without the preference 71, by up to
+   * 26, since the files that do not get width lose some of theirs to the ones
+   * that do. The first version of this left the line-number margin out of the
+   * width it asked for and gave half the gain.
    */
-  fullWidthShare: 0.9,
+  fullWidthShare: 0.95,
 } as const;
 
 

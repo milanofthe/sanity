@@ -417,9 +417,15 @@ export function panelGeometry(
   // is what made the treemap hand out slots its panel could not fill.
   const lines = Math.max(1, visualRowsCached(lineCols, cols));
 
+  // The line-number margin is part of every column, the way `fillSlot` lays
+  // it out: a shape without it is four characters a column too narrow, so
+  // every panel with line numbers came out larger than the file seemed to
+  // need, and the fitting pass asked for the width for lines without room for
+  // their numbers.
+  const numberCols = numberColsFor(lineCols.length, cols + 8);
   // n^2 = aspect * lines * lineHeight / (cols * charWidth), from solving
   // (n * colWidth) / (lines / n * lineHeight) = aspect for n.
-  const colWidth = cols * metrics.charWidth;
+  const colWidth = (cols + numberCols) * metrics.charWidth;
   const ideal = Math.sqrt((TARGET_ASPECT * lines * metrics.lineHeight) / colWidth);
   // Never more columns than the file has lines to fill them with: a short file
   // cut into four columns is four jumps back to the top for something that
@@ -435,10 +441,10 @@ export function panelGeometry(
 
   return {
     cols,
-    numberCols: 0,
+    numberCols,
     columns,
     linesPerColumn,
-    pitch: cols * metrics.charWidth + COLUMN_GUTTER,
+    pitch: colWidth + COLUMN_GUTTER,
     w: inner.w + 2 * metrics.panelPadX,
     h: inner.h + 2 * metrics.panelPadY + metrics.titleHeight,
   };

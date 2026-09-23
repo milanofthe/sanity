@@ -73,10 +73,10 @@ let failures = 0;
  * Ceiling on how much more of the canvas short files take than their lines
  * would give them; see `shortShare` in tree.ts.
  *
- * Measured across the nine shapes: 1.53, 1.75, 2.02, 2.00, 2.36, 1.07, 3.02,
- * 1.73, 1.86. Before short files were kept in fewer columns it sat between
+ * Measured across the nine shapes: 1.48, 1.66, 1.96, 2.04, 2.29, 1.07, 2.80,
+ * 1.72, 1.73. Before short files were kept in fewer columns it sat between
  * 0.97 and 1.05; the preference for columns as wide as the lines added the
- * rest. The 3.02 is the case of 200 files of 4000 lines, where the handful of
+ * rest. The 2.80 is the case of 200 files of 4000 lines, where the handful of
  * short ones are a rounding error of the canvas.
  */
 const SHORT_SHARE = 3.3;
@@ -85,8 +85,8 @@ const SHORT_SHARE = 3.3;
  * Ceiling on what the preferences cost the canvas as a whole; see
  * `inflation` in tree.ts.
  *
- * Measured across the nine shapes: 1.54, 1.28, 1.14, 1.08, 1.05, 2.24, 1.01,
- * 1.22, 1.22. The 2.24 is the project of 800 twelve line files, where every
+ * Measured across the nine shapes: 1.56, 1.30, 1.18, 1.12, 1.08, 2.33, 1.01,
+ * 1.26, 1.26. The 2.33 is the project of 800 twelve line files, where every
  * panel is at the floor of what a panel can be and the width a line needs is
  * a large part of it. Past this is a preference running away.
  */
