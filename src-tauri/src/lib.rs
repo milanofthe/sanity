@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 
 mod history;
+mod pdf;
 
 use sanity_core::find;
 use sanity_watch::{self as watch, is_under, reconcile, DirIndex, WatchSlot};
@@ -572,21 +573,18 @@ async fn file_bytes(path: String, state: State<'_, AppState>) -> Result<Response
     Ok(Response::new(bytes))
 }
 
-/// The first page of a PDF, rasterised, as PNG bytes.
+/// A page of a PDF as PNG, `width` pixels across: the first by default, any
+/// with `page`, counting from zero. See `pdf::render_page`.
 ///
-/// Through the platform's own renderer rather than a PDF library: mupdf is
-/// AGPL and this is MIT, pdfium is a ten megabyte binary to carry, and what
-/// is needed here is one page. macOS has ImageIO behind `sips`, which reads
-/// the page at the width asked for in about 80 milliseconds.
-///
-/// Only the first page, deliberately. At the zoom this app is watched at, a
-/// document's cover is what tells you which document it is and when it was
-/// rebuilt, and everything past that is a reader, not a monitor.
-///
-/// Windows and Linux have no equivalent wired up yet, so the panel keeps its
-/// placeholder there; see issue #22.
+/// The first page is what a document's panel shows; the rest are for the
+/// option that expands a document into all of its pages.
 #[tauri::command]
-async fn pdf_page(path: String, width: u32, state: State<'_, AppState>) -> Result<Response, String> {
+async fn pdf_page(
+    path: String,
+    width: u32,
+    page: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
     let root = {
         let repo = state.repo.lock().map_err(|e| e.to_string())?;
         repo.root.clone()
@@ -600,38 +598,8 @@ async fn pdf_page(path: String, width: u32, state: State<'_, AppState>) -> Resul
     if !canonical.starts_with(&root_canonical) {
         return Err("path outside the open folder".into());
     }
-    let png = rasterise_first_page(&canonical, width.clamp(64, 2048))?;
+    let png = pdf::render_page(&canonical, page.unwrap_or(0), width.clamp(16, 2048))?;
     Ok(Response::new(png))
-}
-
-#[cfg(target_os = "macos")]
-fn rasterise_first_page(path: &Path, width: u32) -> Result<Vec<u8>, String> {
-    // Into a temporary file rather than a pipe: sips writes images, not
-    // streams. Named by process and path so two windows cannot collide.
-    let mut hash: u64 = 1469598103934665603;
-    for b in path.as_os_str().as_encoded_bytes() {
-        hash = (hash ^ *b as u64).wrapping_mul(1099511628211);
-    }
-    let out = std::env::temp_dir().join(format!("sanity-page-{:x}-{width}.png", hash));
-    let status = Command::new("sips")
-        .args(["-s", "format", "png", "--resampleWidth"])
-        .arg(width.to_string())
-        .arg(path)
-        .arg("--out")
-        .arg(&out)
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !status.status.success() {
-        return Err(String::from_utf8_lossy(&status.stderr).trim().to_string());
-    }
-    let bytes = std::fs::read(&out).map_err(|e| e.to_string())?;
-    std::fs::remove_file(&out).ok();
-    Ok(bytes)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn rasterise_first_page(_path: &Path, _width: u32) -> Result<Vec<u8>, String> {
-    Err("no PDF renderer on this platform yet".into())
 }
 
 /// Every payload concatenated, with an index, as raw bytes.
@@ -1233,31 +1201,6 @@ mod tests {
         assert_ne!(thumb_key(&path).unwrap(), thumb_key(&other).unwrap());
         assert!(thumb_key(&dir.join("missing.png")).is_none());
     }
-
-    // The platform's PDF renderer, on the smallest valid document there is.
-    // Worth a test because it is a process call, and a process call is the
-    // kind of thing that works until a system update renames a flag.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn the_first_page_of_a_pdf_rasterises() {
-        let dir = std::env::temp_dir().join("sanity-pdf-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("one.pdf");
-        std::fs::write(&path, MINIMAL_PDF).unwrap();
-
-        let png = rasterise_first_page(&path, 200).expect("sips renders a page");
-        assert!(png.starts_with(&[0x89, b'P', b'N', b'G']), "not a png: {:?}", &png[..8.min(png.len())]);
-        // The width asked for, out of the header, so a silent fallback to the
-        // page's own size would fail here.
-        let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
-        assert_eq!(w, 200, "rendered at {w} pixels wide");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// One page, 200 by 100 points, with nothing on it. Hand-written because
-    /// a fixture file for this would be a binary in the repository.
-    #[cfg(target_os = "macos")]
-    const MINIMAL_PDF: &[u8] = b"%PDF-1.4\n1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n2 0 obj<< /Type /Pages /Count 1 /Kids [3 0 R] >>endobj\n3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>endobj\n4 0 obj<< /Length 44 >>stream\n1 0 0 RG 4 w 20 20 m 180 80 l S\nendstream\nendobj\ntrailer<< /Root 1 0 R >>\n";
 
     // The export failed twice by producing nothing and saying nothing, once
     // per platform, so both ways of having nothing to write are errors here
