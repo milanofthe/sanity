@@ -15,6 +15,7 @@ import type { MediaSize } from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
+import { history, type Commit } from '$lib/state/history.svelte';
 import { unpack } from './payload.ts';
 import { THUMB_MAX, unpackThumbs } from './thumbs.ts';
 
@@ -66,6 +67,9 @@ let decoded = new Map<string, FileData>();
  */
 class BackendText implements TextSource {
   private lines = new Map<string, string[]>();
+  /** The commit the canvas shows, or null for the working tree: in the
+   *  history, a file's text is read as it was there. */
+  at: string | null = null;
   private pending = new Set<string>();
   private inflight = new Set<Promise<unknown>>();
   /** Called when a file's text has arrived, so the frame that was missing it
@@ -79,7 +83,7 @@ class BackendText implements TextSource {
     if (hit) return line < hit.length ? hit[line] : '';
     if (!this.pending.has(path)) {
       this.pending.add(path);
-      const p = invoke<string>('file_text', { path })
+      const p = invoke<string>('file_text', { path, at: this.at })
         // Expanded here, once per file, rather than per frame: a column in a
         // span is a column with tabs expanded, so the text has to be too.
         .then((text) => this.lines.set(path, expandLines(text)))
@@ -104,6 +108,12 @@ class BackendText implements TextSource {
 
   invalidate(path: string): void {
     this.lines.delete(path);
+  }
+
+  /** Forget every file's text, for a step to another commit. Only the few
+   *  files readable on screen are held, so they are read again at once. */
+  clear(): void {
+    this.lines.clear();
   }
 }
 
@@ -232,7 +242,8 @@ async function loadThumbs(paths: string[], onBatch: () => void): Promise<void> {
 /** Build the scene from the loaded scan and the current view modes. */
 export function openLoaded(app: CanvasApp, keepView = false): void {
   if (!scan) return;
-  const entries = scan.files
+  const files = shownRows ? [...shownRows.values()] : scan.files;
+  const entries = files
     .map((f) => ({
       path: f.path,
       lineCount: f.lineCount,
@@ -253,7 +264,7 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
   app.open(
     {
       entries,
-      payload: (p) => payloads.get(p),
+      payload: (p) => (shownRows ? shownPayloads.get(p) : undefined) ?? payloads.get(p),
       text,
       find,
       ready: () => text.ready(),
@@ -347,6 +358,14 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
       .then(async () => {
         await forget(batch.removed);
         const fresh = await readFresh(batch.changed);
+        // Showing the history: the live state is kept current and the canvas
+        // is left alone. Coming back to the present is one step from the
+        // commit to the working tree as it then is, this batch included.
+        if (inHistory()) {
+          scan = await invoke<ScanResult>('repo_index');
+          project.refreshGroups(scan.groups);
+          return;
+        }
         const structural = await app.applyBatch(
           fresh, batch.removed, () => restructure(app), true,
         );
@@ -404,4 +423,97 @@ export async function stopWatching(): Promise<void> {
   } catch {
     // Nothing was being watched.
   }
+}
+
+// --- The history ticker ----------------------------------------------------
+
+/** Commits loaded for the ticker. A slider with fifty thousand stops is not
+ *  a control, and this is years of most projects. */
+const HISTORY_PAGE = 1000;
+
+/** What the canvas lays out while it shows a commit: the files as they are
+ *  there, and the payloads of the ones that differ from the working tree.
+ *  Null in the present. */
+let shownRows: Map<string, ScanFile> | null = null;
+const shownPayloads = new Map<string, ArrayBuffer>();
+/** A step is being played; the next waits for it. */
+let stepping = false;
+
+/** Whether the canvas shows anything other than the working tree, or is on
+ *  its way to. */
+const inHistory = (): boolean => history.at >= 0 || history.target >= 0 || stepping;
+
+/** Read the commits of the open folder, and start from the present. */
+export async function loadHistory(): Promise<void> {
+  history.commits = await invoke<Commit[]>('history_log', { skip: 0, limit: HISTORY_PAGE })
+    .catch(() => []);
+  history.at = -1;
+  history.target = -1;
+  shownRows = null;
+  shownPayloads.clear();
+  text.at = null;
+}
+
+/**
+ * Send the ticker to commit `index`, -1 for the working tree.
+ *
+ * The canvas catches up from whatever it shows, straight to the latest target:
+ * clicks that arrive while a step plays are not queued, they move the target,
+ * and the next step goes there directly. Going backwards is a step like any
+ * other, and plays backwards because the diff does: what the commit added
+ * goes, what it removed comes back.
+ */
+export function historyGo(app: CanvasApp, index: number): void {
+  history.target = Math.max(-1, Math.min(history.commits.length - 1, index));
+  void catchUp(app);
+}
+
+async function catchUp(app: CanvasApp): Promise<void> {
+  if (stepping) return;
+  stepping = true;
+  try {
+    while (history.target !== history.at) await stepTo(app, history.target);
+  } catch (e) {
+    uiLog(`history step failed: ${e}`);
+    history.target = history.at;
+  } finally {
+    stepping = false;
+  }
+}
+
+async function stepTo(app: CanvasApp, index: number): Promise<void> {
+  if (!scan) return;
+  const from = history.at >= 0 ? history.commits[history.at].sha : null;
+  const to = index >= 0 ? history.commits[index].sha : null;
+  const reply = await invoke<ArrayBuffer>('history_step', { from, to });
+  const view = new DataView(reply);
+  const headerLen = view.getUint32(0, true);
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(reply, 4, headerLen))) as {
+    rows: ScanFile[];
+    removed: string[];
+  };
+
+  if (!shownRows) shownRows = new Map(scan.files.map((f) => [f.path, f]));
+  const fresh = new Map<string, FileData>();
+  for (const path of header.removed) {
+    shownRows.delete(path);
+    shownPayloads.delete(path);
+  }
+  for (const row of header.rows) shownRows.set(row.path, row);
+  for (const [path, buf] of unpack(reply.slice(4 + headerLen))) {
+    shownPayloads.set(path, buf);
+    fresh.set(path, decodeFile(buf));
+  }
+  history.at = index;
+  text.at = to;
+  text.clear();
+  await app.applyBatch(fresh, header.removed, async () => openLoaded(app, true), true);
+  if (index < 0) {
+    shownRows = null;
+    shownPayloads.clear();
+  }
+  uiLog(
+    `history: ${to ? to.slice(0, 8) : 'working tree'}, ` +
+      `${header.rows.length} changed, ${header.removed.length} removed`,
+  );
 }

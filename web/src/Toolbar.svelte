@@ -10,6 +10,8 @@
 	import SanityMark from '$lib/ui/SanityMark.svelte';
 	import ThemePreview from '$lib/ui/ThemePreview.svelte';
 	import Search from '$lib/ui/Search.svelte';
+	import Ticker from '$lib/ui/Ticker.svelte';
+	import { history } from '$lib/state/history.svelte';
 	import FileTypePicker from './FileTypePicker.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { project } from '$lib/state/project.svelte';
@@ -30,7 +32,8 @@
 		matches = 0,
 		note = '',
 		at = 0,
-		busy = false
+		busy = false,
+		onhistory
 	}: {
 		onopen?: () => void;
 		onreload?: (path: string) => void;
@@ -48,7 +51,14 @@
 		note?: string;
 		at?: number;
 		busy?: boolean;
+		/** Send the history ticker to a commit, -1 for the present. */
+		onhistory?: (index: number) => void;
 	} = $props();
+
+	/** The commit the ticker is on, which the canvas is showing or about to. */
+	const ticked = $derived(history.target >= 0 ? history.commits[history.target] : null);
+	const when = (t: number) =>
+		new Date(t * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 
 	let search: ReturnType<typeof Search> | null = $state(null);
 
@@ -169,6 +179,22 @@
 	</Menu>
 
 	<span class="spacer"></span>
+
+	{#if history.commits.length > 0}
+		<Ticker
+			label={ticked ? ticked.sha.slice(0, 7) : 'now'}
+			detail={ticked?.subject ?? ''}
+			title={ticked
+				? `${ticked.subject}\n${ticked.author}, ${when(ticked.time)}\n[ and ] step, click the id for now`
+				: `The folder as it is. [ steps back through ${history.commits.length} commits`}
+			older={history.target < history.commits.length - 1}
+			newer={history.target >= 0}
+			present={history.target < 0}
+			onolder={() => onhistory?.(history.target + 1)}
+			onnewer={() => onhistory?.(history.target - 1)}
+			onpresent={() => onhistory?.(-1)}
+		/>
+	{/if}
 
 	<Search
 		bind:this={search}

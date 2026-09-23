@@ -11,6 +11,7 @@
 
 	export type IconName =
 		| 'chevron-down'
+		| 'chevron-left'
 		| 'chevron-right'
 		| 'fit'
 		| 'external'
@@ -22,6 +23,7 @@
 
 	const paths: Record<IconName, string> = {
 		'chevron-down': 'M4 6.5 8 10.5 12 6.5',
+		'chevron-left': 'M9.5 4 5.5 8 9.5 12',
 		'chevron-right': 'M6.5 4 10.5 8 6.5 12',
 		// A frame with corner marks: fit to view.
 		fit: 'M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10',

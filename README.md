@@ -37,6 +37,9 @@ Or open a folder from the Project menu.
 - Clicking a panel header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
   `$EDITOR` or the system default.
 - Right click exports the view or the whole project as a 4K PNG.
+- In a git repository, the arrows next to the search field step through the
+  history, and so do `[` and `]`. Each step plays like a save: removed lines
+  flash red, added ones green. Click the commit id to come back to now.
 - The View menu sets which file types are shown, whether files ignored by git
   are listed, and whether files are coloured by language. The Theme menu has
   eight themes.

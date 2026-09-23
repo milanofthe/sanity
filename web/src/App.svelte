@@ -10,6 +10,7 @@
 	import type { CanvasApp, CanvasStats } from '$lib/canvas/app';
 	import { project } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
+	import { history } from '$lib/state/history.svelte';
 	import { openSynthetic, syntheticQuery } from '$lib/sources/synthetic';
 	import {
 		fixtureLoaded, fixtureName, loadFixture, openFixture,
@@ -18,7 +19,7 @@
 		demoName, loadDemoIndex, rememberDemo, type DemoRepo,
 	} from '$lib/sources/demo';
 	import {
-		inTauri, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
+		historyGo, inTauri, loadHistory, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
 		startup, stopWatching, watchRepo,
 	} from '$lib/sources/tauri';
 	import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -154,6 +155,7 @@
 			await stopWatching();
 
 			await loadRepo(target);
+			await loadHistory();
 			// A fresh project is fitted; everything after this keeps the view.
 			lastModeKey = project.groups.map((g) => `${g.id}:${g.mode}`).join(',');
 			rebuild(false);
@@ -339,6 +341,10 @@
 			return;
 		}
 		if (e.key === 'f') app?.fit();
+		// Older and newer through the history, as the ticker's arrows do.
+		if (app && history.commits.length > 0 && (e.key === '[' || e.key === ']')) {
+			historyGo(app, history.target + (e.key === '[' ? 1 : -1));
+		}
 		if (e.key === 'Escape') {
 			ui.openMenu = null;
 			if (query) onSearch('');
@@ -363,6 +369,7 @@
 	note={searchNote}
 	{at}
 	{busy}
+	onhistory={(i) => app && historyGo(app, i)}
 />
 <Canvas
 	bind:app
