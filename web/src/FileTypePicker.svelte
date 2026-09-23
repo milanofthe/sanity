@@ -17,6 +17,7 @@
 	import { project, VIEW_MODES, type ViewMode } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { history } from '$lib/state/history.svelte';
+	import { inTauri } from '$lib/sources/tauri';
 
 	const n = (v: number) => v.toLocaleString('en-US');
 
@@ -113,6 +114,13 @@
 				label="Name directories over the canvas"
 				onchange={() => ui.setDirLabels(!ui.dirLabels)}
 			/>
+			{#if inTauri()}
+				<Switch
+					checked={ui.expandDocuments}
+					label="Expand documents to all their pages"
+					onchange={() => ui.setExpandDocuments(!ui.expandDocuments)}
+				/>
+			{/if}
 			{#if history.commits.length > 0}
 				<Switch
 					checked={ui.historyFollow}

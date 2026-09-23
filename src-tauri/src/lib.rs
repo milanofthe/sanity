@@ -598,7 +598,11 @@ async fn pdf_page(
     if !canonical.starts_with(&root_canonical) {
         return Err("path outside the open folder".into());
     }
+    let t = std::time::Instant::now();
     let png = pdf::render_page(&canonical, page.unwrap_or(0), width.clamp(16, 2048))?;
+    if watch_log() {
+        eprintln!("pdf_page {path} page {} at {width} px: {:.1} ms", page.unwrap_or(0), t.elapsed().as_secs_f64() * 1000.0);
+    }
     Ok(Response::new(png))
 }
 

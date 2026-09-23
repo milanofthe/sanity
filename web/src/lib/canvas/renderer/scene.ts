@@ -26,7 +26,7 @@ import {
   columnPitch, columnWidth, COLUMN_GUTTER, textIndent, textOriginX, textOriginY,
 } from '$lib/canvas/layout/panel';
 import { lineAtRow, visualRowsCached, wrapOffsets } from '$lib/canvas/layout/wrap';
-import type { DirNode, FileNode, Layout } from '$lib/canvas/layout/tree';
+import { PAGE_GAP, pageGrid, type DirNode, type FileNode, type Layout, type MediaSize } from '$lib/canvas/layout/tree';
 import { BASELINE_RATIO, GlyphAtlas } from './glyphatlas';
 import { BASE_LEVEL, OverviewTextures, type Slot } from './codetex';
 import { MediaTextures } from './mediatex';
@@ -663,6 +663,9 @@ export class Scene {
     this.dimTf.alpha = tf.alpha * SEARCH_DIM;
     this.tf = this.dimTf;
   }
+
+  /** The world rect the view being drawn covers, with its margin. */
+  private viewRect: [number, number, number, number] = [0, 0, 0, 0];
 
   /** Transform in force while the current panel's geometry is pushed. */
   private tf: Transform = IDENTITY;
@@ -1529,6 +1532,7 @@ export class Scene {
 
     cam.writeMatrix(this.view);
     const [vx0, vy0, vx1, vy1] = cam.visibleRect(64);
+    this.viewRect = [vx0, vy0, vx1, vy1];
 
     this.bgRects.reset();
     this.fgRects.reset();
@@ -1975,6 +1979,10 @@ export class Scene {
     if (availW <= 0 || availH <= 0 || availH * zoom < 2) return;
     const mw = m.w > 0 ? m.w : 595;
     const mh = m.h > 0 ? m.h : 842;
+    if (m.kind === 'document' && m.expanded && m.pages > 1) {
+      this.pushPages(n, m, zoom, availW, availH, mw, mh);
+      return;
+    }
     // Contained, so the proportion is the picture's and the panel keeps its
     // padding whichever way the two disagree.
     const scale = Math.min(availW / mw, availH / mh);
@@ -1983,6 +1991,57 @@ export class Scene {
     const x = n.x + metrics.panelPadX + (availW - w) / 2;
     const y = n.y + metrics.titleHeight + metrics.panelPadY + (availH - h) / 2;
 
+    this.pushPicture(n.path, n.path, m, x, y, w, h, mw, mh, zoom);
+  }
+
+  /**
+   * An expanded document: every page in a grid, each a picture of its own,
+   * keyed `path#page=n`, so the picture pipeline asks for a page only when it
+   * is on screen and large enough, at the size it is shown, and lets go of it
+   * the way it lets go of any picture.
+   *
+   * Only the pages in view are visited. A document of four hundred pages at
+   * a zoom where a dozen are on screen is a dozen pictures and a dozen sheets
+   * of paper, not four hundred of each.
+   */
+  private pushPages(
+    n: FileNode, m: MediaSize, zoom: number, availW: number, availH: number, pw: number, ph: number,
+  ): void {
+    const { cols, rows } = pageGrid(m.pages, pw / ph);
+    const gap = PAGE_GAP * pw;
+    const gridW = cols * pw + (cols - 1) * gap;
+    const gridH = rows * ph + (rows - 1) * gap;
+    const s = Math.min(availW / gridW, availH / gridH);
+    const x0 = n.x + metrics.panelPadX + (availW - gridW * s) / 2;
+    const y0 = n.y + metrics.titleHeight + metrics.panelPadY + (availH - gridH * s) / 2;
+    const stepX = (pw + gap) * s;
+    const stepY = (ph + gap) * s;
+    const [vx0, vy0, vx1, vy1] = this.viewRect;
+    const c0 = Math.max(0, Math.floor((vx0 - x0) / stepX));
+    const c1 = Math.min(cols - 1, Math.floor((vx1 - x0) / stepX));
+    const r0 = Math.max(0, Math.floor((vy0 - y0) / stepY));
+    const r1 = Math.min(rows - 1, Math.floor((vy1 - y0) / stepY));
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const page = r * cols + c;
+        if (page >= m.pages) break;
+        this.pushPicture(
+          `${n.path}#page=${page}`, n.path, m,
+          x0 + c * stepX, y0 + r * stepY, pw * s, ph * s, pw, ph, zoom,
+        );
+      }
+    }
+  }
+
+  /**
+   * One picture into a rect: the texture at the size the rect is on screen,
+   * or the sheet it will be drawn on while that is still coming. `key` is
+   * what the picture pipeline holds it by, `path` the file it is of.
+   */
+  private pushPicture(
+    key: string, path: string, m: MediaSize,
+    x: number, y: number, w: number, h: number, mw: number, mh: number, zoom: number,
+  ): void {
     // The picture itself, at the resolution this size on screen needs, or the
     // area it will occupy while that is still being decoded. Asked for by
     // screen pixels, not by world units: the same panel needs eight times the
@@ -1997,7 +2056,7 @@ export class Scene {
     // A drawing has no resolution of its own: it is drawn at whatever size
     // it is wanted, like a document page, rather than capped at the size its
     // header claims.
-    const sourceW = m.kind === 'image' && !isVector(n.path) ? mw : Infinity;
+    const sourceW = m.kind === 'image' && !isVector(path) ? mw : Infinity;
     // At rest, and not mid-animation, the picture is made for exactly the
     // pixels it covers: from where its edges land on the pixel grid, the same
     // rounding the panel's own rectangle gets, so the two meet exactly.
@@ -2015,10 +2074,10 @@ export class Scene {
     }
     const held =
       (w * zoom < MEDIA_MIN_PX
-        ? this.media?.have(n.path)
+        ? this.media?.have(key)
         : still && pxW > 0 && pxH > 0
-          ? this.media?.wantExact(n.path, pxW, pxH, sourceW)
-          : this.media?.want(n.path, onScreen, mw / mh, sourceW)) ?? null;
+          ? this.media?.wantExact(key, pxW, pxH, sourceW)
+          : this.media?.want(key, onScreen, mw / mh, sourceW)) ?? null;
 
     // What goes under it. Most of what a repository holds in pictures is ink
     // with nothing behind it: a PDF page comes out of ImageIO as black type on

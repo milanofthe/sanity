@@ -253,7 +253,10 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       lineCount: f.lineCount,
       maxCols: f.maxCols,
       clipCols: f.clipCols,
-      media: f.media,
+      // A document shows every page when the option is on; see `pageGrid`.
+      media: f.media && f.media.kind === 'document' && ui.expandDocuments
+        ? { ...f.media, expanded: true }
+        : f.media,
       // A file git ignores is a placeholder whatever its type is set to: its
       // contents were never read, so there is nothing to draw in it.
       stub: f.ignored === true || project.modeForPath(f.path) === 'reduced',
@@ -279,7 +282,14 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       // multi-megapixel decode in the window. Past it, the source, which is
       // read as it is for an image and rasterised by the platform for a
       // document, first page only. See `thumbs` and `pdf_page`.
-      imageBytes: (path: string, level: number) => {
+      imageBytes: (key: string, level: number) => {
+        // A page of an expanded document, keyed by the scene as `path#page=n`.
+        const page = /^(.*)#page=(\d+)$/.exec(key);
+        if (page) {
+          return invoke<ArrayBuffer>('pdf_page', { path: page[1], width: level, page: Number(page[2]) })
+            .catch(() => null);
+        }
+        const path = key;
         if (level <= THUMB_MAX) {
           const held = thumbs.get(path);
           if (held) return Promise.resolve(held);

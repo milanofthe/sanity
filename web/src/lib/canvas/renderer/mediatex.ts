@@ -174,6 +174,10 @@ const SOURCE_BUDGET_BYTES = 96 * 1024 * 1024;
  *  scan is not worth a gigabyte of texture. */
 const MAX_SOURCE = 8192;
 
+/** Pixels a picture may fall short of its rect by and still be resampled
+ *  onto it rather than asked for again; see `decodeExact`. */
+const ROUNDING_PX = 2;
+
 /** Above this share of transparent area a picture is treated as ink on a page
  *  rather than as a picture with a background of its own. A plot exported by
  *  matplotlib and a PDF page rendered by ImageIO are both near 1.0; a
@@ -710,15 +714,32 @@ export class MediaTextures {
     // size when that is smaller. A drawing has no size of its own and is
     // drawn at the target. A level has no height of its own; it takes the
     // source's proportion.
+    //
+    // Two pixels short counts as enough: a page is rendered at the width it is
+    // asked for and comes back at its own height, which rounds a pixel either
+    // side of the rect's, and falling through to the largest size for that
+    // rendered pages at 4096 pixels, 800 milliseconds each, for one pixel.
     const enough = (sw: number, sh: number) =>
-      (sw >= w && sh >= h) || (!vector && sw >= sourceW - 1);
+      (sw >= w && sh >= h - ROUNDING_PX) || (!vector && sw >= sourceW - 1);
     let src = this.sources.get(path) ?? null;
     if (src && !enough(src.w, src.h)) src = null;
     if (!src) {
       let px = await this.fetchPixels(path, w, h, w);
-      // A thumbnail where the source was needed: ask for the source, which is
-      // what anything past a thumbnail's size gets.
-      if (px && !enough(px.w, px.h)) px = await this.fetchPixels(path, w, h, Math.max(w, h, 4096));
+      const toOrder = sourceW === Infinity && !vector;
+      if (px && !enough(px.w, px.h)) {
+        if (!toOrder) {
+          // A thumbnail where the source was needed: ask for the source,
+          // which is what anything past a thumbnail's size gets.
+          px = await this.fetchPixels(path, w, h, Math.max(w, h, 4096));
+        } else if (px.w >= w) {
+          // A document, as wide as asked and not as tall: asked again at the
+          // width that covers the height too, now its proportion is known.
+          px = await this.fetchPixels(path, w, h, Math.ceil((h * px.w) / Math.max(1, px.h)));
+        }
+        // A document narrower than asked is as large as the renderer makes
+        // one, and asking again gets the same answer: that asked every page
+        // of a panel larger than 2048 pixels twice, for nothing.
+      }
       if (!px) return;
       const up = performance.now();
       const tex = this.uploadSource(px);

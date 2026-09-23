@@ -8,6 +8,7 @@ import { applyTheme, storedTheme, type ThemeId } from '$lib/theme';
 const TINT_KEY = 'sanity.tintLanguages';
 const LABELS_KEY = 'sanity.dirLabels';
 const FOLLOW_KEY = 'sanity.historyFollow';
+const EXPAND_KEY = 'sanity.expandDocuments';
 
 function storedFlag(key: string, fallback = false): boolean {
 	try {
@@ -56,6 +57,13 @@ class UiState {
 	 * view happens to be, often entirely off screen.
 	 */
 	historyFollow = $state(storedFlag(FOLLOW_KEY, true));
+	/**
+	 * A document shows every page instead of its first.
+	 *
+	 * Off by default: at the zoom this app is watched at, a document's first
+	 * page is what says which document it is, and the rest is reading.
+	 */
+	expandDocuments = $state(storedFlag(EXPAND_KEY));
 
 	setTheme(id: ThemeId) {
 		this.theme = id;
@@ -83,6 +91,11 @@ class UiState {
 	setHistoryFollow(on: boolean) {
 		this.historyFollow = on;
 		storeFlag(FOLLOW_KEY, on);
+	}
+
+	setExpandDocuments(on: boolean) {
+		this.expandDocuments = on;
+		storeFlag(EXPAND_KEY, on);
 	}
 
 	apply() {
