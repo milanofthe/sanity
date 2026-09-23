@@ -82,6 +82,11 @@ pub fn commits(root: &Path, skip: usize, limit: usize) -> Vec<Commit> {
 
 /// `git diff --raw -z` read into (status, new blob, path).
 fn raw_diff(out: &[u8]) -> Vec<(u8, String, String)> {
+    raw_entries(out).into_iter().map(|(status, _, new, path)| (status, new, path)).collect()
+}
+
+/// Raw entries as (status, old blob, new blob, path).
+fn raw_entries(out: &[u8]) -> Vec<(u8, String, String, String)> {
     let mut fields = out.split(|&b| b == 0);
     let mut rows = Vec::new();
     while let Some(meta) = fields.next() {
@@ -96,7 +101,12 @@ fn raw_diff(out: &[u8]) -> Vec<(u8, String, String)> {
             continue;
         }
         let status = parts[4].as_bytes().first().copied().unwrap_or(b'M');
-        rows.push((status, parts[3].to_string(), String::from_utf8_lossy(path).into_owned()));
+        rows.push((
+            status,
+            parts[2].to_string(),
+            parts[3].to_string(),
+            String::from_utf8_lossy(path).into_owned(),
+        ));
     }
     rows
 }
@@ -211,6 +221,63 @@ pub fn blobs(root: &Path, ids: &[String]) -> HashMap<String, Vec<u8>> {
     out
 }
 
+/// Every path the last `limit` commits along the first parent touched, with
+/// the blob and size of its largest version among them.
+///
+/// For laying the history out once for the whole window: every file gets a
+/// place big enough for any version it has there, so no step has to make
+/// room. The versions are the ones a change leaves and the ones it makes; the
+/// sizes come from `cat-file --batch-check`, which reads no contents.
+pub fn window(root: &Path, limit: usize) -> Vec<(String, String, u64)> {
+    let limit = format!("--max-count={limit}");
+    let Some(out) = git(
+        root,
+        &["log", "--first-parent", "--raw", "-z", "--no-renames", "--no-abbrev", "--format=", &limit],
+    ) else {
+        return Vec::new();
+    };
+    let absent = |id: &str| id.bytes().all(|b| b == b'0');
+    let mut versions: Vec<(String, String)> = Vec::new();
+    for (_, old, new, path) in raw_entries(&out) {
+        for id in [old, new] {
+            if !absent(&id) {
+                versions.push((path.clone(), id));
+            }
+        }
+    }
+    let sizes = sizes(root, versions.iter().map(|(_, id)| id.as_str()));
+    let mut best: HashMap<String, (String, u64)> = HashMap::new();
+    for (path, id) in versions {
+        let Some(&size) = sizes.get(&id) else { continue };
+        let slot = best.entry(path).or_insert((id.clone(), size));
+        if size > slot.1 {
+            *slot = (id, size);
+        }
+    }
+    let mut rows: Vec<(String, String, u64)> =
+        best.into_iter().map(|(p, (id, size))| (p, id, size)).collect();
+    rows.sort();
+    rows
+}
+
+/// Sizes of objects, by id, from one `git cat-file --batch-check`.
+fn sizes<'a>(root: &Path, ids: impl Iterator<Item = &'a str>) -> HashMap<String, u64> {
+    let ids: Vec<String> = ids.map(str::to_owned).collect();
+    let mut out = HashMap::new();
+    let Some(stdout) = crate::scan::git_stdin(root, &["cat-file", "--batch-check"], &ids, b'\n') else {
+        return out;
+    };
+    for line in String::from_utf8_lossy(&stdout).lines() {
+        let parts: Vec<&str> = line.split(' ').collect();
+        if parts.len() == 3 {
+            if let Ok(size) = parts[2].parse() {
+                out.insert(parts[0].to_string(), size);
+            }
+        }
+    }
+    out
+}
+
 /// A file's contents at a commit, or None when it is not there.
 pub fn file_at(root: &Path, sha: &str, path: &str) -> Option<Vec<u8>> {
     git(root, &["cat-file", "blob", &format!("{sha}:{path}")])
@@ -276,6 +343,15 @@ mod tests {
         let Side::Commit(sha) = &second else { panic!() };
         assert_eq!(file_at(&dir, sha, "a.rs").unwrap(), b"fn a() { 1 }\n");
         assert_eq!(file_at(&dir, sha, "nope.rs"), None);
+
+        // The window: every file at its largest version. a.rs at the longer
+        // of its two, although neither survives; b.rs at the one it has.
+        let w = window(&dir, 10);
+        let (_, a, size) = w.iter().find(|(p, _, _)| p == "a.rs").unwrap();
+        assert_eq!(blobs(&dir, std::slice::from_ref(a))[a], b"fn a() { 1 }\n");
+        assert_eq!(*size, 13);
+        assert!(w.iter().any(|(p, _, _)| p == "b.rs"));
+        assert_eq!(w.len(), 2);
         std::fs::remove_dir_all(&dir).ok();
     }
 

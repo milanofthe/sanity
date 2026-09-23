@@ -12,8 +12,8 @@
 // layout: it takes the rectangle the treemap assigned and derives the text
 // layout from it, so the panel ends up exactly the size of its slot.
 
-import { columns as colBounds, metrics } from '$lib/metrics';
-import { visualRowsCached } from './wrap';
+import { columns as colBounds, metrics } from '../../metrics.ts';
+import { visualRowsCached } from './wrap.ts';
 
 /** Width divided by height a panel aims for when nothing constrains it.
  *  Treemap slots come out close to square, so that is what to aim at. */

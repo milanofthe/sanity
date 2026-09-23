@@ -487,6 +487,12 @@ pub fn list_files_under(root: &Path, dir: &str) -> Vec<String> {
 /// The exit status is deliberately not checked: `check-ignore` exits 1 when
 /// nothing matched, which is a perfectly good answer.
 fn git_over_stdin(root: &Path, args: &[&str], paths: &[String]) -> Option<Vec<u8>> {
+    git_stdin(root, args, paths, 0)
+}
+
+/// `git_over_stdin` with the separator a subcommand wants between items:
+/// NUL for the ones that take `-z`, a newline for `cat-file`.
+pub(crate) fn git_stdin(root: &Path, args: &[&str], paths: &[String], sep: u8) -> Option<Vec<u8>> {
     if paths.is_empty() {
         return None;
     }
@@ -504,7 +510,7 @@ fn git_over_stdin(root: &Path, args: &[&str], paths: &[String]) -> Option<Vec<u8
     let mut buf = Vec::with_capacity(paths.iter().map(|p| p.len() + 1).sum());
     for p in paths {
         buf.extend_from_slice(p.as_bytes());
-        buf.push(0);
+        buf.push(sep);
     }
     let writer = std::thread::spawn(move || {
         if let Some(mut s) = stdin {

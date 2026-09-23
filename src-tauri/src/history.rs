@@ -76,10 +76,53 @@ pub async fn history_step(
     let side = |s: Option<String>| s.map(Side::Commit).unwrap_or(Side::Live);
     let step = history::step(&root, &side(from), &side(to)).ok_or("git could not say")?;
 
+    let (rows, payloads) = contents(&state, &root, &step.changed)?;
+    pack(&rows, &step.removed, &payloads)
+}
+
+/// The files the loaded window of history needs room for beyond the working
+/// tree: the ones the working tree does not have, and the ones that were
+/// larger somewhere in the window than they are now, each at its largest
+/// version, as rows and payloads in the format `history_step` uses, with
+/// nothing removed.
+///
+/// So the history can be laid out once, for every file that exists anywhere
+/// in it at the largest it gets, and a step moves nothing: a file that is not
+/// there at the commit shown keeps its place empty, and a smaller version of
+/// one fits the room a larger one was given.
+#[tauri::command]
+pub async fn history_window(limit: usize, state: State<'_, AppState>) -> Result<Response, String> {
+    let root = state.repo.lock().map_err(|e| e.to_string())?.root.clone();
+    if root.as_os_str().is_empty() {
+        return Err("no folder open".into());
+    }
+    let window = history::window(&root, limit);
+    let gone: Vec<(String, Source)> = {
+        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        window
+            .into_iter()
+            .filter(|(p, _, size)| repo.held.get(p).is_none_or(|h| *size > h.stamp.1))
+            .map(|(p, blob, _)| (p, Source::Blob(blob)))
+            .collect()
+    };
+    let (rows, payloads) = contents(&state, &root, &gone)?;
+    pack(&rows, &[], &payloads)
+}
+
+/// Rows, and payloads by path.
+type Contents = (Vec<FileInfo>, Vec<(String, Vec<u8>)>);
+
+/// Rows and payloads for paths whose contents are a blob or the disk,
+/// through the cache.
+fn contents(
+    state: &State<'_, AppState>,
+    root: &std::path::Path,
+    changed: &[(String, Source)],
+) -> Result<Contents, String> {
     // What the cache does not have, read in one go.
     let missing: Vec<String> = {
         let cache = state.history.held.lock().map_err(|e| e.to_string())?;
-        step.changed
+        changed
             .iter()
             .filter_map(|(_, s)| match s {
                 Source::Blob(id) if !cache.0.contains_key(id) => Some(id.clone()),
@@ -87,14 +130,14 @@ pub async fn history_step(
             })
             .collect()
     };
-    let read = history::blobs(&root, &missing);
+    let read = history::blobs(root, &missing);
 
     let mut rows: Vec<FileInfo> = Vec::new();
     let mut payloads: Vec<(String, Vec<u8>)> = Vec::new();
     {
         let mut cache = state.history.held.lock().map_err(|e| e.to_string())?;
         let repo = state.repo.lock().map_err(|e| e.to_string())?;
-        for (path, source) in &step.changed {
+        for (path, source) in changed {
             let got = match source {
                 // The working tree as the backend holds it, which the watcher
                 // keeps current.
@@ -130,13 +173,17 @@ pub async fn history_step(
             }
         }
     }
+    Ok((rows, payloads))
+}
 
+/// `[u32 header length][header: rows and removed paths][payloads]`.
+fn pack(rows: &[FileInfo], removed: &[String], payloads: &[(String, Vec<u8>)]) -> Result<Response, String> {
     #[derive(Serialize)]
     struct Header<'a> {
         rows: &'a [FileInfo],
         removed: &'a [String],
     }
-    let header = serde_json::to_vec(&Header { rows: &rows, removed: &step.removed })
+    let header = serde_json::to_vec(&Header { rows, removed })
         .map_err(|e| e.to_string())?;
     let packed: Vec<(&str, &[u8])> =
         payloads.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();

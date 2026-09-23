@@ -4,15 +4,15 @@
 // squarified treemap, and each panel picks the column count that fits the slot
 // it was given. See treemap.ts for why nesting rules out a rectangle packer.
 
-import { columns as colBounds, metrics } from '$lib/metrics';
+import { columns as colBounds, metrics } from '../../metrics.ts';
 import {
   COLUMN_GUTTER, columnsWorth, fillSlot, MAX_COLUMNS, MAX_PANEL_COLS, MIN_PANEL_COLS, numberColsFor,
   panelArea as panelArea_, panelGeometry,
   mediaGeometry, stubArea, stubGeometry, type PanelGeometry,
   SMALL_FILE_LINES,
-} from './panel';
-import { visualRowsCached, widthCovering } from './wrap';
-import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
+} from './panel.ts';
+import { visualRowsCached, widthCovering } from './wrap.ts';
+import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap.ts';
 
 /**
  * Width over height the whole canvas aims for.
@@ -121,6 +121,10 @@ export interface FileEntry {
    *  dimensions, or a document with pages. It carries no lines, so its panel
    *  is sized from this instead. See `sanity_core::media`. */
   media?: MediaSize;
+  /** Given a place and not listed: a file that exists elsewhere in what is
+   *  being shown, the history, and not here. Its slot stays empty, so a file
+   *  arriving or leaving moves nothing around it. */
+  absent?: boolean;
 }
 
 /** What the layout needs to know about a picture. */
@@ -161,6 +165,8 @@ export interface FileNode {
   geom: PanelGeometry;
   /** Laid out as a fixed-size placeholder rather than drawn. */
   stub: boolean;
+  /** Has a place and is not in `Layout.files`; see `FileEntry.absent`. */
+  absent: boolean;
   /** Set when the panel holds a picture instead of lines. */
   media?: MediaSize;
   /** False when the slot did not reach the preferred column width; the fitting
@@ -391,6 +397,7 @@ function buildTree(entries: FileEntry[]): DirNode {
       minH: bounds.minH,
       maxAspect: bounds.maxAspect,
       stub: Boolean(e.stub),
+      absent: Boolean(e.absent),
       media: e.media,
       fits: true,
       crowded: false,
@@ -1060,10 +1067,13 @@ export function computeLayout(
   collect(root, allFiles, allDirs, allBlocks);
   fitPasses(root, allFiles, allBlocks, rootAspect(viewport));
 
-  const files: FileNode[] = [];
+  const placed: FileNode[] = [];
   const dirs: DirNode[] = [];
   const blocks: StubBlock[] = [];
-  collect(root, files, dirs, blocks);
+  collect(root, placed, dirs, blocks);
+  // The absent keep the places they were given and are not listed: nothing
+  // downstream draws, indexes or hit-tests a file that is not there.
+  const files = placed.some((f) => f.absent) ? placed.filter((f) => !f.absent) : placed;
   // Outermost first, so nesting reads correctly when they are drawn. Sorted
   // here rather than in the renderer, which was copying and sorting the whole
   // list on every frame to get the same order.

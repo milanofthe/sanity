@@ -328,7 +328,9 @@ export class CanvasApp {
     // The canvas takes the window's proportions, so fitting it leaves no
     // screen unused; see rootAspect.
     this.layout = computeLayout(
-      source.entries.map((e) => ({ ...e, lineCols: this.decoded.get(e.path)?.lineCols })),
+      // An entry's own line widths when it brings them: the history sizes a
+      // panel for the largest version of its file while showing another.
+      source.entries.map((e) => ({ ...e, lineCols: e.lineCols ?? this.decoded.get(e.path)?.lineCols })),
       { w: this.cam.vw, h: this.cam.vh },
     );
     this.nodeByPath = new Map(this.layout.files.map((f) => [f.path, f]));
