@@ -251,6 +251,17 @@ export interface SlotFit extends PanelGeometry {
    * offered the area that would let it stay whole and no more than that.
    */
   crowded: boolean;
+  /**
+   * Columns narrower than the width most of the file's lines need, so that
+   * more than its longest tenth wrap; see `columns.fullWidthShare`.
+   *
+   * A preference, like `crowded`, and answered the same way. Wrapped rows
+   * were most of what a reader jumps over: fifteen to twenty per hundred
+   * lines, nearly all of them from a slot whose width did not divide into
+   * whole columns of the file's own width, so every column came out a fifth
+   * too narrow and one line in six broke.
+   */
+  narrow: boolean;
 }
 
 /** Characters of code a column keeps before a line-number margin is worth
@@ -265,6 +276,7 @@ export function numberColsFor(lineCount: number, availableCols: number): number 
 
 export function fillSlot(
   lineCols: ArrayLike<number>, clipCols: number, slotW: number, slotH: number,
+  fullCols = 0,
 ): SlotFit {
   const innerW = slotW - 2 * metrics.panelPadX;
   const innerH = slotH - metrics.titleHeight - 2 * metrics.panelPadY;
@@ -283,6 +295,7 @@ export function fillSlot(
       usable: false,
       holdsAll: false,
       crowded: false,
+      narrow: false,
     };
   }
 
@@ -343,6 +356,7 @@ export function fillSlot(
       usable: false,
       holdsAll: false,
       crowded: false,
+      narrow: false,
     };
   }
 
@@ -387,6 +401,7 @@ export function fillSlot(
     usable: available >= HARD_MIN_COLS,
     holdsAll,
     crowded: columns > columnsWorth(neededRows),
+    narrow: cols < fullCols,
   };
 }
 

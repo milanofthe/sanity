@@ -95,3 +95,55 @@ export function visualRowsCached(lineCols: ArrayLike<number>, cols: number): num
   per.set(cols, rows);
   return rows;
 }
+
+/**
+ * The width a share of a file's lines fit into, blank lines left out: the
+ * column width at which only the rest of them wrap.
+ */
+export function widthCovering(lineCols: ArrayLike<number>, share: number): number {
+  // Cached per line-width array, like the row counts: every relayout builds
+  // the tree again, and sorting every file's lines each time took a 2500 file
+  // layout from 46 to 269 milliseconds.
+  if (typeof lineCols === 'object') {
+    let per = coverCache.get(lineCols as object);
+    if (!per) {
+      per = new Map();
+      coverCache.set(lineCols as object, per);
+    }
+    const hit = per.get(share);
+    if (hit !== undefined) return hit;
+    const w = widthCoveringUncached(lineCols, share);
+    per.set(share, w);
+    return w;
+  }
+  return widthCoveringUncached(lineCols, share);
+}
+
+const coverCache = new WeakMap<object, Map<number, number>>();
+
+/** Scratch counts by width. Widths are at most 4095 columns in the wire
+ *  format, so counting is linear where sorting was not: the first layout of
+ *  a 2500 file project spent 200 of its 263 milliseconds sorting lines. */
+const widthCounts = new Uint32Array(4097);
+
+function widthCoveringUncached(lineCols: ArrayLike<number>, share: number): number {
+  widthCounts.fill(0);
+  let n = 0;
+  let top = 0;
+  for (let i = 0; i < lineCols.length; i++) {
+    const w = Math.min(4096, lineCols[i]);
+    if (w <= 0) continue;
+    widthCounts[w]++;
+    n++;
+    if (w > top) top = w;
+  }
+  if (n === 0) return 1;
+  // The same element a sort would have put at this index.
+  const index = Math.min(n - 1, Math.floor((n - 1) * share));
+  let seen = 0;
+  for (let w = 1; w <= top; w++) {
+    seen += widthCounts[w];
+    if (seen > index) return w;
+  }
+  return top;
+}

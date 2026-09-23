@@ -73,14 +73,24 @@ let failures = 0;
  * Ceiling on how much more of the canvas short files take than their lines
  * would give them; see `shortShare` in tree.ts.
  *
- * Measured across the nine shapes: 1.42, 1.55, 1.46, 1.55, 1.59, 1.04, 1.99,
- * 1.65, 1.60. Before short files were kept in fewer columns it sat between
- * 0.97 and 1.05. The 1.99 is the case of 200 files of 4000 lines, where the
- * handful of short ones are a rounding error of the canvas; everywhere else
- * this is what keeping them whole costs, and nothing else in this check would
- * notice it growing.
+ * Measured across the nine shapes: 1.53, 1.75, 2.02, 2.00, 2.36, 1.07, 3.02,
+ * 1.73, 1.86. Before short files were kept in fewer columns it sat between
+ * 0.97 and 1.05; the preference for columns as wide as the lines added the
+ * rest. The 3.02 is the case of 200 files of 4000 lines, where the handful of
+ * short ones are a rounding error of the canvas.
  */
-const SHORT_SHARE = 2.2;
+const SHORT_SHARE = 3.3;
+
+/**
+ * Ceiling on what the preferences cost the canvas as a whole; see
+ * `inflation` in tree.ts.
+ *
+ * Measured across the nine shapes: 1.54, 1.28, 1.14, 1.08, 1.05, 2.24, 1.01,
+ * 1.22, 1.22. The 2.24 is the project of 800 twelve line files, where every
+ * panel is at the floor of what a panel can be and the width a line needs is
+ * a large part of it. Past this is a preference running away.
+ */
+const INFLATION = 2.5;
 
 for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   lastLine = null;
@@ -120,6 +130,8 @@ for (const { cfg, fill: minFill, bloat: maxBloat } of CASES) {
   if (!(shortShare <= SHORT_SHARE)) {
     problems.push(`short share=${shortShare.toFixed(2)} > ${SHORT_SHARE}`);
   }
+  const inflation = num('inflation');
+  if (!(inflation <= INFLATION)) problems.push(`inflation=${inflation.toFixed(2)} > ${INFLATION}`);
   // The pass count is reported, not asserted: the pathological case converges
   // on its last allowed pass, and the layout it produces is still valid. What
   // actually has to hold is `unusable`, `overlaps` and `offgrid`, above.

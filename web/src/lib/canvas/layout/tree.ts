@@ -4,14 +4,14 @@
 // squarified treemap, and each panel picks the column count that fits the slot
 // it was given. See treemap.ts for why nesting rules out a rectangle packer.
 
-import { metrics } from '$lib/metrics';
+import { columns as colBounds, metrics } from '$lib/metrics';
 import {
-  COLUMN_GUTTER, columnsWorth, fillSlot, MAX_COLUMNS, MIN_PANEL_COLS,
+  COLUMN_GUTTER, columnsWorth, fillSlot, MAX_COLUMNS, MAX_PANEL_COLS, MIN_PANEL_COLS,
   panelArea as panelArea_, panelGeometry,
   mediaGeometry, stubArea, stubGeometry, type PanelGeometry,
   SMALL_FILE_LINES,
 } from './panel';
-import { visualRowsCached } from './wrap';
+import { visualRowsCached, widthCovering } from './wrap';
 import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap';
 
 /**
@@ -169,6 +169,13 @@ export interface FileNode {
   /** In more columns than its rows are worth. A preference, not a misfit; see
    *  `SlotFit.crowded`. */
   crowded: boolean;
+  /** In columns narrower than `fullCols`; see `SlotFit.narrow`. */
+  narrow: boolean;
+  /** Given area for a preference, crowded or narrow, by the fitting pass. */
+  offered: boolean;
+  /** Column width that holds `columns.fullWidthShare` of the lines unwrapped,
+   *  or zero when there is no such preference. */
+  fullCols: number;
   /** False when the panel is too narrow to draw at all. The layout check
    *  asserts this is never false. */
   usable: boolean;
@@ -386,6 +393,11 @@ function buildTree(entries: FileEntry[]): DirNode {
       media: e.media,
       fits: true,
       crowded: false,
+      narrow: false,
+      offered: false,
+      fullCols: e.stub || e.media || colBounds.fullWidthShare <= 0
+        ? 0
+        : Math.min(MAX_PANEL_COLS, widthCovering(lineCols, colBounds.fullWidthShare)),
       usable: true,
       holdsAll: true,
       // The treemap weight: a stub's fixed box, or the area the file needs
@@ -675,12 +687,13 @@ function placeFile(f: FileNode, slot: IntRect): void {
 
   // The panel is the slot. Everything about its text layout is derived from
   // the rectangle it was given, which is what makes the edges align.
-  const fit = fillSlot(f.lineCols, f.clipCols, w, h);
+  const fit = fillSlot(f.lineCols, f.clipCols, w, h, f.fullCols);
   f.geom = fit;
   f.w = w;
   f.h = h;
   f.fits = fit.ok;
   f.crowded = fit.crowded;
+  f.narrow = fit.narrow;
   f.usable = fit.usable;
   f.holdsAll = fit.holdsAll;
 }
@@ -915,7 +928,7 @@ function fitPasses(
       b.area = Math.max(b.area, need) * 1.06;
     }
     for (const f of files) {
-      if (f.stub || (f.fits && !f.crowded)) continue;
+      if (f.stub || (f.fits && !f.crowded && !f.narrow)) continue;
       // Only the column preference is missing; handled below.
       const soft = f.fits;
       if (!soft) remaining++;
@@ -976,7 +989,10 @@ function fitPasses(
       // Widths halved down to the floor rather than every step of eight: the
       // minimum is flat enough that three or four samples find it, and each
       // width costs a walk over every line of the file.
-      for (let c = natural.cols; ; c = Math.max(MIN_PANEL_COLS, Math.floor(c / 16) * 8)) {
+      // A narrow panel asks only for shapes whose columns are at least the
+      // width it was found lacking.
+      const floorCols = soft && f.narrow ? Math.max(MIN_PANEL_COLS, f.fullCols) : MIN_PANEL_COLS;
+      for (let c = natural.cols; ; c = Math.max(floorCols, Math.floor(c / 16) * 8)) {
         const rows = visualRowsCached(f.lineCols, c);
         const pitch = c * metrics.charWidth + COLUMN_GUTTER;
         // A crowded panel asks for a shape that keeps it in as few columns as
@@ -991,7 +1007,7 @@ function fitPasses(
           const area = Math.max(w, h * aspect) * Math.max(h, w / aspect);
           if (area < need) need = area;
         }
-        if (c <= MIN_PANEL_COLS) break;
+        if (c <= floorCols) break;
       }
       if (soft) {
         // Exactly the area the preferred shape needs in a slot like this one,
@@ -1005,6 +1021,7 @@ function fitPasses(
         // files took 34 percent of the canvas for 24 percent of the lines.
         if (need > f.area * 1.01) {
           f.area = need;
+          f.offered = true;
           remaining++;
         }
         continue;
@@ -1129,6 +1146,12 @@ export interface LayoutStats {
    */
   shortShare: number;
   /**
+   * Panel area of all text files over the area they would take at their
+   * preferred shapes: what the preferences for fewer columns and for columns
+   * as wide as the lines together cost the canvas.
+   */
+  inflation: number;
+  /**
    * Column breaks plus wrapped rows, per hundred lines of text: how often a
    * reader has to jump. The other side of `shortShare`.
    *
@@ -1153,6 +1176,8 @@ export function layoutStats(l: Layout): LayoutStats {
   let overflowing = 0;
   let hiddenStubs = 0;
   const bloat: number[] = [];
+  let panelSum = 0;
+  let naturalSum = 0;
   let shortArea = 0;
   let textArea = 0;
   let shortLines = 0;
@@ -1172,7 +1197,14 @@ export function layoutStats(l: Layout): LayoutStats {
     // a real one behind it.
     if (!f.stub) {
       const b = (f.w * f.h) / Math.max(1, panelArea_(f.lineCols, f.maxCols));
-      if (f.lineCount > SMALL_FILE_LINES) bloat.push(b);
+      // Files given area for a preference are left out: that area is a
+      // decision, `inflation` accounts for it, and counted here it would hide
+      // a correction running away behind it.
+      if (f.lineCount > SMALL_FILE_LINES && !f.offered) bloat.push(b);
+      if (!f.media) {
+        panelSum += f.w * f.h;
+        naturalSum += panelArea_(f.lineCols, f.maxCols);
+      }
     }
     if (!f.stub && !f.media) {
       const a = f.w * f.h;
@@ -1236,6 +1268,7 @@ export function layoutStats(l: Layout): LayoutStats {
       ? (shortArea / textArea) / (shortLines / textLines)
       : 1,
     breaks: (100 * jumps) / Math.max(1, textLines),
+    inflation: panelSum / Math.max(1, naturalSum),
     bloatMax: bloat.length ? bloat[bloat.length - 1] : 1,
     fill: panelArea / Math.max(1, l.root.w * l.root.h),
     aspect: l.root.w / Math.max(1, l.root.h),

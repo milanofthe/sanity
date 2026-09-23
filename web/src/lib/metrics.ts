@@ -131,6 +131,27 @@ export const columns = {
    * 14.0 against 15.0, for four percent more canvas than it took.
    */
   minPerColumn: 60,
+  /**
+   * Share of a file's lines a column should be wide enough for, so that only
+   * the rest wrap; see `fullCols` in tree.ts. Zero turns the preference off.
+   *
+   * Wrapped rows were most of what a reader jumps over, and nearly all of
+   * them came from columns a fifth narrower than the file's usual line, not
+   * from lines too long for any column: the treemap hands a file its area in
+   * a shape that does not divide into whole columns of its width. A panel
+   * whose columns come out narrower than this is offered the area for wider
+   * ones, exactly that much, the way a crowded one is. Swept on pathsim,
+   * column breaks and wrapped rows per hundred lines against the canvas:
+   *
+   *   off    14.0 breaks, 672 canvas
+   *   0.75   13.0 breaks, 696 canvas
+   *   0.9     5.9 breaks, 812 canvas
+   *   0.95    5.3 breaks, 831 canvas
+   *
+   * 0.9, where the breaks fall by 58 percent for a fifth more canvas. Past it
+   * the canvas keeps growing for a few breaks more.
+   */
+  fullWidthShare: 0.9,
 } as const;
 
 

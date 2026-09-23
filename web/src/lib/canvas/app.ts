@@ -340,6 +340,7 @@ export class CanvasApp {
       `mean cols ${st.meanCols.toFixed(1)} · ` +
       `bloat p95 ${st.bloatP95.toFixed(2)} · bloat max ${st.bloatMax.toFixed(2)} · ` +
       `short share ${st.shortShare.toFixed(2)} · breaks ${st.breaks.toFixed(1)} · ` +
+      `inflation ${st.inflation.toFixed(2)} · ` +
       `passes ${passesUsed} · ${(performance.now() - t0).toFixed(0)} ms` +
       (st.overlaps > 0
         ? ` · worst ${st.worstOverlap.path} ${st.worstOverlap.children} kids in ` +
