@@ -7,7 +7,7 @@
 import { Camera } from '$lib/canvas/camera';
 import {
   computeLayout, layoutStats, passesUsed,
-  type DirNode, type FileEntry, type FileNode, type Layout,
+  type FileEntry, type FileNode, type Layout,
 } from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
@@ -716,41 +716,6 @@ export class CanvasApp {
     this.cam.flyToRect(
       node.x - pad, node.y - pad, node.x + node.w + pad, node.y + node.h + pad, seconds,
     );
-  }
-
-  /**
-   * Fly to the panels of some paths, all of them in view.
-   *
-   * Absent ones included: a file the history shows as not there still has
-   * its place in the layout, which is where it went and where it comes back,
-   * so they are found in the tree rather than in the list of drawn files.
-   */
-  focusPaths(paths: string[], seconds = 0.5): void {
-    if (!this.layout || paths.length === 0) return;
-    const want = new Set(paths);
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    const take = (f: FileNode) => {
-      if (!want.has(f.path)) return;
-      x0 = Math.min(x0, f.x);
-      y0 = Math.min(y0, f.y);
-      x1 = Math.max(x1, f.x + f.w);
-      y1 = Math.max(y1, f.y + f.h);
-    };
-    const visit = (d: DirNode) => {
-      for (const c of d.children) {
-        if (c.kind === 'file') take(c);
-        else if (c.kind === 'stubs') c.children.forEach(take);
-        else visit(c);
-      }
-    };
-    visit(this.layout.root);
-    if (x0 === Infinity) return;
-    this.invalidate();
-    const pad = metrics.lineHeight * 2;
-    this.cam.flyToRect(x0 - pad, y0 - pad, x1 + pad, y1 + pad, seconds);
   }
 
   /** Fly to a directory, the whole of it in view. */

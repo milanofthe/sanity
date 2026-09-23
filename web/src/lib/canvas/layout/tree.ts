@@ -121,10 +121,6 @@ export interface FileEntry {
    *  dimensions, or a document with pages. It carries no lines, so its panel
    *  is sized from this instead. See `sanity_core::media`. */
   media?: MediaSize;
-  /** Given a place and not listed: a file that exists elsewhere in what is
-   *  being shown, the history, and not here. Its slot stays empty, so a file
-   *  arriving or leaving moves nothing around it. */
-  absent?: boolean;
 }
 
 /** What the layout needs to know about a picture. */
@@ -206,8 +202,6 @@ export interface FileNode {
   geom: PanelGeometry;
   /** Laid out as a fixed-size placeholder rather than drawn. */
   stub: boolean;
-  /** Has a place and is not in `Layout.files`; see `FileEntry.absent`. */
-  absent: boolean;
   /** Set when the panel holds a picture instead of lines. */
   media?: MediaSize;
   /** False when the slot did not reach the preferred column width; the fitting
@@ -438,7 +432,6 @@ function buildTree(entries: FileEntry[]): DirNode {
       minH: bounds.minH,
       maxAspect: bounds.maxAspect,
       stub: Boolean(e.stub),
-      absent: Boolean(e.absent),
       media: e.media,
       fits: true,
       crowded: false,
@@ -1108,13 +1101,10 @@ export function computeLayout(
   collect(root, allFiles, allDirs, allBlocks);
   fitPasses(root, allFiles, allBlocks, rootAspect(viewport));
 
-  const placed: FileNode[] = [];
+  const files: FileNode[] = [];
   const dirs: DirNode[] = [];
   const blocks: StubBlock[] = [];
-  collect(root, placed, dirs, blocks);
-  // The absent keep the places they were given and are not listed: nothing
-  // downstream draws, indexes or hit-tests a file that is not there.
-  const files = placed.some((f) => f.absent) ? placed.filter((f) => !f.absent) : placed;
+  collect(root, files, dirs, blocks);
   // Outermost first, so nesting reads correctly when they are drawn. Sorted
   // here rather than in the renderer, which was copying and sorting the whole
   // list on every frame to get the same order.

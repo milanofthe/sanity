@@ -121,7 +121,7 @@
 			{#if history.commits.length > 0}
 				<Switch
 					checked={ui.historyFollow}
-					label="Fit the view to each step through the history"
+					label="Fit the whole project on each step through the history"
 					onchange={() => ui.setHistoryFollow(!ui.historyFollow)}
 				/>
 			{/if}

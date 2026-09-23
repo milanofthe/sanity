@@ -1174,8 +1174,7 @@ pub fn run() {
             save_png,
             log_line,
             history::history_log,
-            history::history_step,
-            history::history_window
+            history::history_step
         ])
         .run(tauri::generate_context!())
         .expect("error while running sanity");
