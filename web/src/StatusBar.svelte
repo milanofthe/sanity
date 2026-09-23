@@ -165,6 +165,9 @@
 	.crumb {
 		font-family: var(--font-mono);
 		white-space: nowrap;
+		/* A path is one word: no gap between the directory and the name, the
+		   way the panel headers write it. */
+		gap: 0;
 	}
 	.dot {
 		color: var(--text-faint);

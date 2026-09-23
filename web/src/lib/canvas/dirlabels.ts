@@ -198,7 +198,8 @@ export function placeLabels(dirs: ScreenDir[], o: PlaceOpts): Placement {
 function placeCrumb(chain: ScreenDir[], o: PlaceOpts): Breadcrumb {
   const size = LABEL_SIZE;
   const ch = o.advance * size;
-  const sep = ' / ';
+  // A path, written the way the panel headers and the status bar write it.
+  const sep = '/';
   const room = Math.max(1, Math.floor((o.vw - 4 * INSET_PX - 2 * PLATE_PAD * size) / ch));
   let first = 0;
   const width = (from: number) =>
