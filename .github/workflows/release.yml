@@ -78,9 +78,6 @@ jobs:
             **Windows** (`.exe` installer, or the `.msi`): the build is not
             signed, so SmartScreen shows "Windows protected your PC". More
             info, then Run anyway.
-
-            A PDF's first page is rendered by the platform, and only macOS has
-            that wired up; on Windows those panels stay as placeholders.
       - name: Keep the bundles when nothing is being released
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
