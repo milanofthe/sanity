@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "sanity"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "sanity-core",
  "sanity-watch",
@@ -2731,7 +2731,7 @@ dependencies = [
 
 [[package]]
 name = "sanity-core"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "codebook-tree-sitter-latex",
  "flate2",
@@ -2757,7 +2757,7 @@ dependencies = [
 
 [[package]]
 name = "sanity-watch"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "notify",
  "serde",
