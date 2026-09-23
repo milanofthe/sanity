@@ -1,12 +1,12 @@
 // Directory names on the canvas, and the colour each directory takes.
 //
-// The names are placed the way a map places its labels: in screen space, at a
-// size that follows how large the directory is on screen, outermost first, and
-// left out where they would collide with one placed before them. A label in
-// world units, which is what this replaced, was either unreadable or absent in
-// exactly the view that is meant to show the structure: the whole project,
-// where every directory is a few hundred pixels across and its name was a
-// sliver a few pixels tall.
+// The names are placed the way a map places its labels: in screen space, once
+// a directory is large enough on screen to be worth naming, outermost first,
+// and left out where they would collide with one placed before them. A label
+// in world units, the default, is unreadable in exactly the view that is meant
+// to show the structure: the whole project, where every directory is a few
+// hundred pixels across and its name a sliver a few pixels tall. This is the
+// option that names them there.
 //
 // Pure arithmetic on rectangles, so it can be tested without a GL context.
 // The renderer measures the directories on screen, calls `placeLabels`, and
@@ -14,22 +14,24 @@
 
 import type { DirNode } from './layout/tree';
 
-/** Em sizes a label is drawn at, in CSS pixels. A handful rather than a
- *  continuous range, so each has an atlas of its own drawn 1:1. */
-export const LABEL_SIZES = [11, 13, 16, 20] as const;
-
-/** Em size of the breadcrumb, in CSS pixels. */
-export const CRUMB_SIZE = 13;
+/**
+ * Em size of every label and of the breadcrumb, in CSS pixels.
+ *
+ * One size. The first version sized labels by how large their directory was
+ * on screen, from 11 to 20 pixels, so the hierarchy would read from the type,
+ * and it read as loud and inconsistent instead: the top-level names were
+ * headlines over the code, and the same directory changed size as you
+ * zoomed. The order of placement already says which directory is outer.
+ */
+export const LABEL_SIZE = 12;
 
 /**
- * Square root of a directory's screen area per pixel of label em.
- *
- * What makes the size follow the hierarchy: a directory a quarter of the
- * screen gets the largest size, one of its children the next, and a directory
- * a hundred pixels square none at all, which at the whole-project zoom is
- * what keeps the labels to a few dozen instead of one per directory.
+ * Side of the square a directory has to cover on screen to be named, in CSS
+ * pixels: about the smallest region a name still reads as the name of,
+ * rather than as a caption on one panel. At the whole-project zoom that keeps
+ * the labels to a few dozen instead of one per directory.
  */
-const AREA_PER_EM = 14;
+const MIN_SIDE = 170;
 
 /** A plate is this many ems tall, and this many ems wider than its text. */
 export const PLATE_LINE = 1.5;
@@ -46,8 +48,8 @@ const HEIGHTS_PER_LABEL = 3;
 /** Smallest a directory can be on screen and still take a label, so the
  *  renderer can pass over the rest without measuring them. */
 export const MIN_LABELLED = {
-  w: 2 * INSET_PX + 2 * PLATE_PAD * LABEL_SIZES[0],
-  h: LABEL_SIZES[0] * PLATE_LINE * HEIGHTS_PER_LABEL,
+  w: 2 * INSET_PX + 2 * PLATE_PAD * LABEL_SIZE,
+  h: LABEL_SIZE * PLATE_LINE * HEIGHTS_PER_LABEL,
 };
 
 export interface Box {
@@ -67,7 +69,7 @@ export interface ScreenDir extends Box {
 export interface PlacedLabel {
   path: string;
   text: string;
-  /** Em size in CSS pixels, one of `LABEL_SIZES`. */
+  /** Em size in CSS pixels. */
   size: number;
   /** The plate behind the text; the text starts `PLATE_PAD` ems in. */
   plate: Box;
@@ -114,25 +116,18 @@ const plateW = (chars: number, size: number, advance: number): number =>
   chars * advance * size + 2 * PLATE_PAD * size;
 
 /**
- * The size a directory's label is drawn at, and how opaque, or none.
+ * Whether a directory takes a label, as how opaque it is: 0 for none.
  *
- * The largest size its area allows that also fits the part of it on screen.
- * Faded in over the last two pixels of em below the smallest size, so a label
- * does not pop into existence at one zoom step.
+ * It has to cover `MIN_SIDE` squared on screen, and its name has to fit the
+ * part of it showing. Faded in over the last tenth below that area, so a
+ * label does not pop into existence at one zoom step.
  */
-export function labelSize(
-  whole: Box, shown: Box, chars: number, advance: number,
-): { size: number; alpha: number } {
-  const byArea = Math.sqrt(Math.max(0, whole.w) * Math.max(0, whole.h)) / AREA_PER_EM;
-  for (let i = LABEL_SIZES.length - 1; i >= 0; i--) {
-    const s = LABEL_SIZES[i];
-    const fits = plateW(chars, s, advance) <= shown.w - 2 * INSET_PX
-      && s * PLATE_LINE * HEIGHTS_PER_LABEL <= shown.h;
-    if (!fits) continue;
-    if (s <= byArea) return { size: s, alpha: 1 };
-    if (i === 0 && byArea > s - 2) return { size: s, alpha: (byArea - (s - 2)) / 2 };
-  }
-  return { size: 0, alpha: 0 };
+export function labelAlpha(whole: Box, shown: Box, chars: number, advance: number): number {
+  const side = Math.sqrt(Math.max(0, whole.w) * Math.max(0, whole.h));
+  const fits = plateW(chars, LABEL_SIZE, advance) <= shown.w - 2 * INSET_PX
+    && LABEL_SIZE * PLATE_LINE * HEIGHTS_PER_LABEL <= shown.h;
+  if (!fits) return 0;
+  return Math.min(1, Math.max(0, (side - 0.9 * MIN_SIDE) / (0.1 * MIN_SIDE)));
 }
 
 /** The part of a box inside the viewport. */
@@ -175,8 +170,9 @@ export function placeLabels(dirs: ScreenDir[], o: PlaceOpts): Placement {
     if (!d.name || inChain.has(d.path)) continue;
     const shown = clip(d, o.vw, o.vh);
     if (shown.w <= 0 || shown.h <= 0) continue;
-    const { size, alpha } = labelSize(d, shown, d.name.length, o.advance);
-    if (size === 0) continue;
+    const alpha = labelAlpha(d, shown, d.name.length, o.advance);
+    if (alpha <= 0) continue;
+    const size = LABEL_SIZE;
     const w = plateW(d.name.length, size, o.advance);
     const h = size * PLATE_LINE;
     // Where the directory's own frame puts it: text aligned with the
@@ -204,7 +200,7 @@ export function placeLabels(dirs: ScreenDir[], o: PlaceOpts): Placement {
 /** One line, top left, outermost first, dropping from the front with a
  *  leading ".." when it is wider than the view. */
 function placeCrumb(chain: ScreenDir[], o: PlaceOpts): Breadcrumb {
-  const size = CRUMB_SIZE;
+  const size = LABEL_SIZE;
   const ch = o.advance * size;
   const sep = ' / ';
   const room = Math.max(1, Math.floor((o.vw - 4 * INSET_PX - 2 * PLATE_PAD * size) / ch));

@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  branchHues, labelAt, LABEL_SIZES, labelSize, placeLabels, type Box, type ScreenDir,
+  branchHues, labelAlpha, labelAt, placeLabels, type Box, type ScreenDir,
 } from './dirlabels.ts';
 import type { DirNode } from './layout/tree.ts';
 
@@ -16,22 +16,23 @@ const dir = (path: string, depth: number, x: number, y: number, w: number, h: nu
 const apart = (a: Box, b: Box) =>
   a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
 
-test('a larger directory gets a label at least as large', () => {
+test('a directory is named once it is large enough, and more so the larger', () => {
   let last = 0;
-  for (const side of [120, 200, 300, 450, 700]) {
+  for (const side of [100, 150, 160, 170, 300]) {
     const b = { x: 0, y: 0, w: side, h: side };
-    const { size } = labelSize(b, b, 6, 0.6);
-    assert.ok(size >= last, `${side} px: ${size} after ${last}`);
-    last = size;
+    const a = labelAlpha(b, b, 6, 0.6);
+    assert.ok(a >= last, `${side} px: ${a} after ${last}`);
+    last = a;
   }
-  assert.equal(last, LABEL_SIZES[LABEL_SIZES.length - 1]);
+  assert.equal(labelAlpha({ x: 0, y: 0, w: 100, h: 100 }, { x: 0, y: 0, w: 100, h: 100 }, 6, 0.6), 0);
+  assert.equal(last, 1);
 });
 
 test('a directory too small for its name gets none', () => {
   const b = { x: 0, y: 0, w: 60, h: 400 };
-  assert.equal(labelSize(b, b, 20, 0.6).size, 0);
-  const flat = { x: 0, y: 0, w: 600, h: 30 };
-  assert.equal(labelSize(flat, flat, 4, 0.6).size, 0);
+  assert.equal(labelAlpha(b, b, 20, 0.6), 0);
+  const flat = { x: 0, y: 0, w: 900, h: 40 };
+  assert.equal(labelAlpha(flat, flat, 4, 0.6), 0);
 });
 
 test('labels never overlap and stay inside their directory', () => {

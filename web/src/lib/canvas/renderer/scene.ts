@@ -218,10 +218,9 @@ const REST_TILE_BUDGET_MS = 4;
 const REST_QUIET_MS = 150;
 
 /** Slots of the label inks, in place of the token kinds the glyph pass
- *  normally colours by: six hues at two strengths, then three neutrals. */
+ *  normally colours by: six hues, then three neutrals. */
 const LabelInk = {
   Hue: 0,
-  HueBright: 6,
   Dim: 12,
   Bright: 13,
   Faint: 14,
@@ -538,9 +537,14 @@ export class Scene {
   /** Path whose header the pointer is over, for the hover highlight. */
   hoveredPath: string | null = null;
 
-  /** Draw the directory labels and the breadcrumb. Off only for the
-   *  measurement that shows they are there. */
-  labels = true;
+  /**
+   * Name the directories in screen space, with a breadcrumb, instead of in
+   * their frames; see `drawLabels`. An option, off by default: the names in
+   * the frames are part of the canvas and quiet, and these sit over it.
+   */
+  labels = false;
+  /** The option as last drawn into the tiles, which hold the frame names. */
+  private labelsWas = false;
 
   /** Sharpen the overview texture's vertical interpolation. Off only for the
    *  measurement that shows what it is worth. */
@@ -1411,6 +1415,11 @@ export class Scene {
     this.dpr = cam.dpr;
     // Asked for by a view that is no longer on screen.
     if (moving) this.wanted.clear();
+    if (this.labels !== this.labelsWas) {
+      this.labelsWas = this.labels;
+      this.tiles.invalidateAll();
+      if (this.rest) this.rest.dirty = true;
+    }
     if (this.tintLanguages !== this.tintWas) {
       this.tintWas = this.tintLanguages;
       this.tiles.invalidateAll();
@@ -1519,7 +1528,7 @@ export class Scene {
       // A directory with nothing matching inside it recedes with its files,
       // so the lit panels are not sitting in bright boxes.
       if (this.matched && !this.matchedDirs.has(d.path)) this.dim();
-      this.pushDir(d);
+      this.pushDir(d, cam.zoom);
     }
     this.tf = IDENTITY;
 
@@ -1636,10 +1645,11 @@ export class Scene {
    * branch, see `branchHues`, and keeping it to the frame and a wash rather
    * than a fill leaves the code itself as the only saturated thing on screen.
    *
-   * The name is not drawn here. It is in screen space, over everything, and
-   * placed per frame; see `drawLabels`.
+   * The name sits in the frame's own strip, so it never overlaps a panel,
+   * unless the labels are on, which draw it in screen space instead; see
+   * `drawLabels`.
    */
-  private pushDir(d: DirNode): void {
+  private pushDir(d: DirNode, zoom: number): void {
     const { tint, edge } = this.dirColours(d);
     // Thicker the further out, so the nesting is readable at a glance. A
     // uniform hairline made a four-level tree look flat, and a border in world
@@ -1650,6 +1660,19 @@ export class Scene {
     // theirs: the children are drawn in between.
     this.pushRect(this.bgRects, d.x, d.y, d.w, d.h, tint, 1, 0, 0);
     this.pushRect(this.fgRects, d.x, d.y, d.w, d.h, tint, 0, edge, weight);
+
+    if (this.labels) return;
+    const px = metrics.dirLabelHeight * zoom;
+    const fade = Math.min(1, Math.max(0, (px - 6) / 5));
+    if (fade <= 0.004 || !d.name) return;
+    const room = Math.floor((d.w - 2 * metrics.dirPad) / metrics.charWidth);
+    if (room < 3) return;
+    const shown = d.name.length <= room ? d.name : `${d.name.slice(0, Math.max(1, room - 2))}..`;
+    this.pushText(
+      shown, d.x + metrics.dirPad,
+      this.chromeTop(d.y + metrics.dirPad - metrics.dirLabelHeight, metrics.dirLabelHeight),
+      UiInk.DirLabel, fade, room,
+    );
   }
 
   /**
@@ -3086,7 +3109,7 @@ export class Scene {
     if (p.crumb) {
       const c = p.crumb;
       const s = this.pal.surface;
-      this.pushRect(this.labelRects, c.plate.x, c.plate.y, c.plate.w, c.plate.h, s.dirBg, 0.94, s.borderStrong, HAIRLINE_PX);
+      this.pushRect(this.labelRects, c.plate.x, c.plate.y, c.plate.w, c.plate.h, s.panelBg, 0.94, s.borderStrong, HAIRLINE_PX);
       for (const sep of c.seps) this.pushLabelText(sep.text, sep.x, c.plate, c.size, dpr, LabelInk.Faint, 1);
       c.crumbs.forEach((k, i) => {
         const ink = i === c.crumbs.length - 1 ? LabelInk.Bright : LabelInk.Dim;
@@ -3096,13 +3119,12 @@ export class Scene {
     for (const l of p.labels) {
       const i = this.dirIndex.get(l.path);
       if (i === undefined) continue;
-      const { tint, hue } = this.dirColours(dirs[i]);
+      const { hue } = this.dirColours(dirs[i]);
       const alpha = l.alpha * (this.matched && !this.matchedDirs.has(l.path) ? SEARCH_DIM : 1);
-      this.pushRect(this.labelRects, l.plate.x, l.plate.y, l.plate.w, l.plate.h, tint, 0.9 * alpha, 0, 0);
-      const bright = l.size >= 16;
-      const ink = hue >= 0
-        ? hue + (bright ? LabelInk.HueBright : LabelInk.Hue)
-        : bright ? LabelInk.Bright : LabelInk.Dim;
+      // The panels' own ground, so a plate reads as a scrap of canvas
+      // rather than as a sticker on it.
+      this.pushRect(this.labelRects, l.plate.x, l.plate.y, l.plate.w, l.plate.h, this.pal.surface.panelBg, 0.88 * alpha, 0, 0);
+      const ink = hue >= 0 ? hue + LabelInk.Hue : LabelInk.Dim;
       this.pushLabelText(l.text, l.plate.x + PLATE_PAD * l.size, l.plate, l.size, dpr, ink, alpha);
     }
 
@@ -3184,8 +3206,7 @@ export class Scene {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.count);
   }
 
-  /** The label inks: each data hue at two strengths, then neutral ones; see
-   *  `LabelInk`. Rotated towards the hue by the theme's tint, and keeping
+  /** The label inks: each data hue, then neutral ones; see `LabelInk`. Rotated towards the hue by the theme's tint, and keeping
    *  the ink's own luminance, so a label reads the same on every branch. */
   private writeLabelInk(): void {
     const s = this.pal.surface;
@@ -3197,7 +3218,6 @@ export class Scene {
     };
     this.pal.data.forEach((hue, k) => {
       set(LabelInk.Hue + k, mixToward(s.inkDim, hue, this.pal.dirTint));
-      set(LabelInk.HueBright + k, mixToward(s.ink, hue, this.pal.dirTint));
     });
     set(LabelInk.Dim, s.inkDim);
     set(LabelInk.Bright, s.ink);

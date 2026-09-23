@@ -14,11 +14,12 @@ import { decodePng } from './png.mjs';
 import { base, canvasBox, frameOnScreen, launch, settled } from './browser.mjs';
 
 /** Labels the whole view of pathsim has at least: its four top-level parts
- *  and a few below them. Measured 16. */
+ *  and a few below them. Measured 15. */
 const MIN_LABELS = 8;
-/** Share of a plate's pixels the label changes, at least: the plate covers
- *  the code under it. Measured 0.85 for the weakest. */
-const MIN_DRAWN = 0.25;
+/** Share of a plate's pixels the label changes, at least: the text, and the
+ *  code the plate covers. Measured 0.26 for the weakest; with nothing drawn
+ *  it is 0. */
+const MIN_DRAWN = 0.12;
 /** Milliseconds the label pass may take on the CPU. Measured under 0.1 on
  *  the demo and 0.1 at ten thousand files. */
 const MAX_MS = 1.5;
@@ -37,6 +38,8 @@ const open = async (query) => {
   await page.waitForFunction(() => Boolean(window.__sanity?.app?.layout), null, { timeout: 600000 });
   await settled(page, 600000);
   await page.evaluate(async () => {
+    // An option, off by default.
+    window.__sanity.app.setDirLabels(true);
     window.__sanity.app.fit(0);
     for (let i = 0; i < 10; i++) {
       window.__sanity.app.invalidate();

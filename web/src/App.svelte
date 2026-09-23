@@ -216,6 +216,11 @@
 		app?.setLanguageTint(ui.tintLanguages);
 	});
 
+	// Directory names over the canvas, likewise.
+	$effect(() => {
+		app?.setDirLabels(ui.dirLabels);
+	});
+
 	/** Set while the GPU has taken the WebGL context away; see `watchContext`. */
 	let contextLost = $state(false);
 

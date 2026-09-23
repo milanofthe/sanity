@@ -142,6 +142,7 @@ export class CanvasApp {
   private scene: Scene | null = null;
   /** Held here rather than on the scene, which is replaced on every open. */
   private languageTint = false;
+  private dirLabels = false;
   private layout: Layout | null = null;
   private pal: Palette;
 
@@ -360,6 +361,7 @@ export class CanvasApp {
       this.scene = new Scene(this.gl, this.layout, source.text, this.pal);
       this.scene.onChange = () => this.invalidate();
       this.scene.tintLanguages = this.languageTint;
+      this.scene.labels = this.dirLabels;
       // Pictures, when the source can hand their bytes over. Held by the
       // scene because it knows what is on screen and at what size, and it
       // wakes the loop when one arrives: the loop parks when nothing moves.
@@ -801,6 +803,14 @@ export class CanvasApp {
   setLanguageTint(on: boolean): void {
     this.languageTint = on;
     if (this.scene) this.scene.tintLanguages = on;
+    this.invalidate();
+  }
+
+  /** Name the directories in screen space, or in their frames; see
+   *  `Scene.labels`. Held here for the same reason as the tint. */
+  setDirLabels(on: boolean): void {
+    this.dirLabels = on;
+    if (this.scene) this.scene.labels = on;
     this.invalidate();
   }
 

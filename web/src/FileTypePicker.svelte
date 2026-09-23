@@ -107,6 +107,11 @@
 				label="Tint by language at the outermost zoom"
 				onchange={() => ui.setTintLanguages(!ui.tintLanguages)}
 			/>
+			<Switch
+				checked={ui.dirLabels}
+				label="Name directories over the canvas"
+				onchange={() => ui.setDirLabels(!ui.dirLabels)}
+			/>
 			{#if project.ignoredTotal > 0 || project.includeIgnored}
 				<Switch
 					checked={project.includeIgnored}
