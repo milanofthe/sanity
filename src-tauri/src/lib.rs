@@ -397,6 +397,17 @@ fn ignored_info(rel: &str) -> FileInfo {
 /// which is fine once and pointless every time the same folder is opened. The
 /// key is the path, the modification time and the length, so an edited picture
 /// misses and is made again, and nothing has to be invalidated by hand.
+/// Write a file whole or not at all: to a name of this process's own, then
+/// renamed into place, which is atomic.
+///
+/// The thumbnail cache is shared by every instance of the app, and two of
+/// them open on the same folder make the same thumbnails. Written directly,
+/// one could read the other's half-written file.
+fn write_atomic(path: &Path, bytes: &[u8]) -> bool {
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_ok()
+}
+
 fn thumb_cache_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     let dir = app.path().app_cache_dir().ok()?.join("thumbs");
     std::fs::create_dir_all(&dir).ok()?;
@@ -518,7 +529,7 @@ async fn thumbs(
         if data.is_empty() && inside[i].is_some() {
             if let Some(png) = fresh.next().flatten() {
                 if let Some(key) = &keys[i] {
-                    wrote |= std::fs::write(key, &png).is_ok();
+                    wrote |= write_atomic(key, &png);
                 }
                 data = png;
             }
