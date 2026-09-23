@@ -9,6 +9,7 @@
 	import MenuSection from '$lib/ui/MenuSection.svelte';
 	import SanityMark from '$lib/ui/SanityMark.svelte';
 	import ThemePreview from '$lib/ui/ThemePreview.svelte';
+	import Choice from '$lib/ui/Choice.svelte';
 	import Search from '$lib/ui/Search.svelte';
 	import Ticker from '$lib/ui/Ticker.svelte';
 	import { history } from '$lib/state/history.svelte';
@@ -165,17 +166,18 @@
 
 	<Menu
 		label="Theme"
-		width="300px"
+		width="auto"
 		open={ui.openMenu === 'theme'}
 		ontoggle={toggle('theme')}
 		onclose={close}
 	>
-		{#each THEMES as t (t.id)}
-			<MenuItem tall checked={ui.theme === t.id} onclick={() => ui.setTheme(t.id)}>
-				<ThemePreview theme={t.id} />
-				{t.label}
-			</MenuItem>
-		{/each}
+		<div class="themes">
+			{#each THEMES as t (t.id)}
+				<Choice label={t.label} checked={ui.theme === t.id} onclick={() => ui.setTheme(t.id)}>
+					<ThemePreview theme={t.id} />
+				</Choice>
+			{/each}
+		</div>
 	</Menu>
 
 	<span class="spacer"></span>
@@ -238,6 +240,14 @@
 	}
 	.spacer {
 		flex: 1;
+	}
+	/* Four across, so the eight themes are two rows of pictures that can be
+	   compared side by side rather than a column to scroll. */
+	.themes {
+		display: grid;
+		grid-template-columns: repeat(4, auto);
+		gap: var(--sp-1);
+		padding: var(--sp-1);
 	}
 	.path {
 		font-family: var(--font-mono);

@@ -139,7 +139,7 @@ await settled(page);
 await page.click('header button:has-text("Theme")');
 await page.waitForTimeout(300);
 const previews = await page.evaluate(() =>
-  [...document.querySelectorAll('.item.tall')].map((row) => {
+  [...document.querySelectorAll('.themes .cell')].map((row) => {
     const frame = row.querySelector('.frame');
     const cs = (sel) => getComputedStyle(row.querySelector(sel)).backgroundColor;
     return { id: frame.getAttribute('data-theme'), panel: cs('.panel'), ground: cs('.frame') };

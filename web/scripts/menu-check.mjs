@@ -24,7 +24,10 @@ for (const menu of ['Project', 'View', 'Theme']) {
   const r = await page.evaluate(() => {
     const sheet = document.querySelector('.sheet');
     if (!sheet) return { err: 'no sheet' };
-    const rows = [...sheet.querySelectorAll('.item, .row')];
+    // Rows, and the cells of a grid, which sit next to each other as well as
+    // under: overlap is a question about rectangles, not about one bottom
+    // passing the next top.
+    const rows = [...sheet.querySelectorAll('.item, .row, .cell')];
     const sr = sheet.getBoundingClientRect();
     const boxes = rows.map((el) => el.getBoundingClientRect());
     let overlaps = 0;
@@ -33,7 +36,11 @@ for (const menu of ['Project', 'View', 'Theme']) {
     for (let i = 0; i < rows.length; i++) {
       // Content taller than its own row: the label will draw over a neighbour.
       if (rows[i].scrollHeight > Math.ceil(boxes[i].height) + 1) spills++;
-      if (i + 1 < rows.length && boxes[i].bottom > boxes[i + 1].top + 0.5) overlaps++;
+      for (let j = i + 1; j < rows.length; j++) {
+        const a = boxes[i];
+        const b = boxes[j];
+        if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps++;
+      }
       // Contents outside their own row. Checking the rows alone missed the
       // real bug once: the buttons stacked correctly while every label inside
       // them was positioned at the top of the sheet by a stray global rule.
