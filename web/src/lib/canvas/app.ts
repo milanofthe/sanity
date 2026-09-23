@@ -442,6 +442,7 @@ export class CanvasApp {
     const deferred: [string, FileData][] = [];
     const created: string[] = [];
 
+    const inPlace: [string, FileData][] = [];
     for (const [path, data] of fresh) {
       if (!this.scene?.has(path)) {
         created.push(path);
@@ -451,17 +452,24 @@ export class CanvasApp {
         deferred.push([path, data]);
         continue;
       }
-      this.touch(path, data, warm);
+      inPlace.push([path, data]);
     }
 
     const structural = created.length > 0 || deferred.length > 0 || removed.length > 0;
-    if (!structural) return false;
+    if (!structural) {
+      const delays = this.waveDelays(inPlace.map(([p]) => p));
+      for (const [path, data] of inPlace) this.touch(path, data, warm, delays.get(path) ?? 0);
+      return false;
+    }
 
     await relayout();
-    // The scene kept the version on screen through the relayout, so the diff
-    // these produce is the same one an in-place update would have made.
-    for (const [path, data] of deferred) this.touch(path, data, warm);
-    if (warm) this.scene?.markCreated(created);
+    // All of them after the relayout, which is where they will be seen and
+    // what the wave is timed from. The scene kept the version on screen
+    // through it, so the diffs these produce are the ones an in-place update
+    // would have made.
+    const delays = this.waveDelays([...inPlace, ...deferred].map(([p]) => p).concat(created));
+    for (const [path, data] of [...inPlace, ...deferred]) this.touch(path, data, warm, delays.get(path) ?? 0);
+    if (warm) this.scene?.markCreated(created, delays);
     this.invalidate();
     return true;
   }
@@ -876,9 +884,29 @@ export class CanvasApp {
    * `warm` is false when only the change state moved, not the file: see
    * Scene.touch.
    */
-  touch(path: string, data?: FileData, warm = true): void {
+  touch(path: string, data?: FileData, warm = true, delay = 0): void {
     this.invalidate();
-    this.scene?.touch(path, data, warm);
+    this.scene?.touch(path, data, warm, delay);
+  }
+
+  /**
+   * When each file of a batch starts its change, in seconds from now: a
+   * sweep from the top left of the canvas to the bottom right over
+   * `timing.batchWave`, by where each file's panel is. A single file starts
+   * at once.
+   */
+  private waveDelays(paths: string[]): Map<string, number> {
+    const out = new Map<string, number>();
+    const at: [string, number][] = [];
+    for (const p of paths) {
+      const n = this.nodeByPath.get(p);
+      if (n) at.push([p, n.x + n.w / 2 + n.y + n.h / 2]);
+    }
+    if (at.length < 2) return out;
+    const lo = Math.min(...at.map(([, d]) => d));
+    const hi = Math.max(...at.map(([, d]) => d));
+    for (const [p, d] of at) out.set(p, hi > lo ? ((d - lo) / (hi - lo)) * timing.batchWave : 0);
+    return out;
   }
 
   /**

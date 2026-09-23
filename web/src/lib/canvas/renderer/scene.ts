@@ -883,7 +883,11 @@ export class Scene {
     const i = this.nodeIndex.get(path);
     if (i !== undefined) this.byNode[i] = file;
     if (file.anim) this.animated.add(file);
-    if (this.toMark.delete(path)) this.markAdded(file);
+    const delay = this.toMark.get(path);
+    if (delay !== undefined) {
+      this.toMark.delete(path);
+      this.markAdded(file, delay);
+    }
   }
 
   /** Half the layout's diagonal, which the appearance stagger is spread over. */
@@ -1119,15 +1123,12 @@ export class Scene {
    * from someone writing the file: a commit turns every panel cold at once,
    * and flashing two hundred of them would say the opposite of what happened.
    */
-  touch(path: string, data?: FileData, warm = true): void {
+  touch(path: string, data?: FileData, warm = true, delay = 0): void {
     const f = this.files.get(path);
     if (!f) return;
     this.active.add(f);
     if (!data) {
-      if (warm) {
-        f.since = 0;
-        f.shownMark = 1;
-      }
+      if (warm) this.warmUp(f, delay);
       return;
     }
 
@@ -1146,10 +1147,7 @@ export class Scene {
     // panel. A checkout is the second case.
     if (diff.wholesale || (diff.removed.length === 0 && diff.added.length === 0)) {
       this.applyData(f, data);
-      if (warm) {
-        f.since = 0;
-        f.shownMark = 1;
-      }
+      if (warm) this.warmUp(f, delay);
       return;
     }
 
@@ -1157,19 +1155,24 @@ export class Scene {
     // keeps showing the version the removed lines belong to.
     f.change = {
       phase: 'remove',
-      t: 0,
+      // Negative while it waits its turn in a batch; nothing is drawn of it
+      // until it reaches zero.
+      t: -delay,
       removedRows: diff.removed,
       addedRows: diff.added,
       gaps: seams(diff, f.data.lineCount, data.lineCount),
       pending: data,
       warm,
     };
-    // The glow starts now rather than when the content lands: the file was
+    // The clock starts now rather than when the content lands: the file was
     // written now.
-    if (warm) {
-      f.since = 0;
-      f.shownMark = 1;
-    }
+    if (warm) this.warmUp(f, delay);
+  }
+
+  /** Start a file's change clock, `delay` seconds from now. */
+  private warmUp(f: SceneFile, delay: number): void {
+    f.since = -delay;
+    f.shownMark = delay > 0 ? 0 : 1;
   }
 
   /** Put a new version of a file on screen. */
@@ -1274,25 +1277,26 @@ export class Scene {
    * added says what happened, and it fades with the heat like any other
    * change rather than standing forever.
    */
-  markCreated(paths: Iterable<string>): void {
+  markCreated(paths: Iterable<string>, delays?: Map<string, number>): void {
     for (const path of paths) {
       const f = this.files.get(path);
+      const delay = delays?.get(path) ?? 0;
       // Not here yet, which after a relayout is the usual case: a new panel
       // is added when its texture is written, over the frames that follow.
       // Marking only what was already here marked nothing, and a created
       // file arrived with no sign at all.
-      if (f) this.markAdded(f);
-      else this.toMark.add(path);
+      if (f) this.markAdded(f, delay);
+      else this.toMark.set(path, delay);
     }
   }
 
-  /** Created files whose panels have not arrived yet; see `markCreated`. */
-  private toMark = new Set<string>();
+  /** Created files whose panels have not arrived yet, with their delays;
+   *  see `markCreated`. */
+  private toMark = new Map<string, number>();
 
-  private markAdded(f: SceneFile): void {
+  private markAdded(f: SceneFile, delay = 0): void {
     this.active.add(f);
-    f.since = 0;
-    f.shownMark = 1;
+    this.warmUp(f, delay);
     f.data.lineState.fill(LineState.Added);
     f.state = LineState.Added;
   }
@@ -3461,6 +3465,8 @@ export class Scene {
     const colW = columnWidth(f.node.geom);
     const g = f.node.geom;
 
+    // Not its turn yet.
+    if (ch.t < 0) return;
     const removing = ch.phase === 'remove';
     const rows = removing ? ch.removedRows : ch.addedRows;
     if (rows.length === 0) return;

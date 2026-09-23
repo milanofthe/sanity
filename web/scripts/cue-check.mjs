@@ -115,6 +115,41 @@ report(red > 200, `zoomed out, the lines taken away flash red: ${red} pixels`);
 report(green > 200, `and the lines put in flash green: ${green} pixels`);
 report(left < 20, `two seconds later nothing is left of it: ${left} pixels`);
 
+// A batch of several files: one after another, not all at once.
+const wave = await page.evaluate(async () => {
+  const app = window.__sanity.app;
+  const files = [...app.scene.files.values()].filter((f) => !f.node.stub && !f.node.media && f.data.lineCount > 20);
+  // Three far apart, so their order across the canvas is clear.
+  const pick = [files[0], files[Math.floor(files.length / 2)], files[files.length - 1]];
+  const edit = (f) => {
+    const d = f.data;
+    const order = [...Array(d.lineCount).keys()].map((i) => (i < 5 ? i + 10 : i));
+    const spanStart = new Uint32Array(order.length + 1);
+    const spans = [];
+    order.forEach((i, k) => {
+      spanStart[k] = spans.length;
+      for (let s = d.spanStart[i]; s < d.spanStart[i + 1]; s++) spans.push(d.spans[s]);
+    });
+    spanStart[order.length] = spans.length;
+    return {
+      lineCount: order.length, langId: d.langId, flags: d.flags, spanStart,
+      lineCols: Uint16Array.from(order.map((i) => d.lineCols[i])),
+      lineIndent: Uint8Array.from(order.map((i) => d.lineIndent[i])),
+      lineState: new Uint8Array(order.length),
+      spans: Uint32Array.from(spans),
+    };
+  };
+  await app.applyBatch(pick.map((f) => [f.node.path, edit(f)]), [], async () => {}, true);
+  return pick.map((f) => ({ path: f.node.path, since: f.since, pos: f.node.x + f.node.w / 2 + f.node.y + f.node.h / 2 }))
+    .sort((a, b) => a.pos - b.pos);
+});
+const waits = wave.map((w) => -w.since);
+report(
+  waits[0] === 0 && waits[1] > 0 && waits[2] > waits[1] && waits[2] <= 0.25 + 1e-9,
+  `a batch of three starts as a wave across the canvas: ${waits.map((w) => w.toFixed(3)).join(', ')} s`,
+);
+await page.evaluate(() => window.__step(2));
+
 // A file deleted.
 const del = await page.evaluate(async (path) => {
   const app = window.__sanity.app;

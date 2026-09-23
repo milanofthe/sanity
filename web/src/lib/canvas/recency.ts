@@ -49,9 +49,16 @@ export function markAt(since: number): number {
   return left / timing.markFade;
 }
 
-/** Whether anything about this file is still being drawn from its clock. */
+/**
+ * Whether anything about this file is still being drawn from its clock, or
+ * is about to be.
+ *
+ * A negative clock is a change waiting for its turn: the files of one batch
+ * start one after another, see `CanvasApp.applyBatch`, and one whose turn has
+ * not come is not finished, it has not started.
+ */
 export function recent(since: number): boolean {
-  return since >= 0 && since < timing.markHold;
+  return since < timing.markHold && since > -Infinity;
 }
 
 /**

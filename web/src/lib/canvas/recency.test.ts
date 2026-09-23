@@ -47,7 +47,8 @@ test('a file with no change reports nothing', () => {
   assert.equal(flashAt(Infinity), 0);
   assert.equal(markAt(Infinity), 0);
   assert.equal(recent(Infinity), false);
-  assert.equal(recent(-1), false);
+  // Waiting for its turn in a batch is not over.
+  assert.equal(recent(-0.1), true);
 });
 
 test('recent covers exactly the window something is drawn in', () => {

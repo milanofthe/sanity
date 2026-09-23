@@ -178,6 +178,14 @@ export const timing = {
   flash: 0.5,
   markHold: 1.5,
   markFade: 1,
+  /**
+   * Seconds from the first file of a batch starting its change to the last:
+   * a commit, a save of several files, a formatter's pass. They go one after
+   * another, top left to bottom right, so the eye can follow them round the
+   * canvas; all at once they were one flicker in several places, and which
+   * files it had been was gone before it could be seen.
+   */
+  batchWave: 0.25,
   /** Seconds for a level-of-detail crossfade. */
   lodFade: 0.18,
   /** Seconds for a layout reflow animation: a panel sliding and scaling from
