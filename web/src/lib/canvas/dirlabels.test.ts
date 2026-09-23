@@ -7,7 +7,7 @@ import {
 } from './dirlabels.ts';
 import type { DirNode } from './layout/tree.ts';
 
-const OPTS = { vw: 1400, vh: 900, advance: 0.6, strip: 4, inset: 2 };
+const OPTS = { vw: 1400, vh: 900, advance: 0.6, dpr: 2 };
 
 const dir = (path: string, depth: number, x: number, y: number, w: number, h: number): ScreenDir => ({
   path, name: path.split('/').pop()!, depth, x, y, w, h,
@@ -35,7 +35,7 @@ test('a directory too small for its name gets none', () => {
   assert.equal(labelAlpha(flat, flat, 4, 0.6), 0);
 });
 
-test('labels never overlap and stay inside their directory', () => {
+test('labels sit in their corner, never overlap and stay inside', () => {
   // A parent with children tiled inside it, the first one in its corner.
   const dirs = [
     dir('a', 1, 0, 0, 700, 900),
@@ -46,17 +46,19 @@ test('labels never overlap and stay inside their directory', () => {
     dir('b/w', 2, 702, 4, 690, 880),
   ];
   const p = placeLabels(dirs, OPTS);
-  assert.ok(p.labels.length >= 5, `${p.labels.length} placed`);
+  // a/x and b/w are in their parents' corners.
+  assert.deepEqual(p.labels.map((l) => l.path), ['a', 'b', 'a/y', 'a/z']);
   for (let i = 0; i < p.labels.length; i++) {
     const l = p.labels[i];
     const d = dirs.find((x) => x.path === l.path)!;
-    assert.ok(l.plate.x >= d.x && l.plate.x + l.plate.w <= d.x + d.w, `${l.path} across`);
-    assert.ok(l.plate.y >= d.y && l.plate.y + l.plate.h <= d.y + d.h, `${l.path} down`);
+    assert.equal(l.plate.x, d.x, `${l.path} across`);
+    assert.equal(l.plate.y, d.y, `${l.path} down`);
+    assert.ok(l.plate.x + l.plate.w <= d.x + d.w && l.plate.y + l.plate.h <= d.y + d.h, `${l.path} inside`);
     for (let j = 0; j < i; j++) assert.ok(apart(l.plate, p.labels[j].plate), `${l.path} on ${p.labels[j].path}`);
   }
-  // The child in its parent's corner is pushed below the parent's label
-  // rather than dropped.
-  assert.ok(p.labels.some((l) => l.path === 'a/x'));
+  // The child in its parent's corner is left out rather than moved away
+  // from its own.
+  assert.ok(!p.labels.some((l) => l.path === 'a/x'));
 });
 
 test('the directories the view is inside of become the breadcrumb', () => {
@@ -82,7 +84,12 @@ test('a directory whose corner is off screen keeps its label in view', () => {
   const p = placeLabels(dirs, OPTS);
   assert.equal(p.crumb, null);
   assert.equal(p.labels.length, 1);
-  assert.ok(p.labels[0].plate.x >= 0 && p.labels[0].plate.y >= 0);
+  assert.deepEqual([p.labels[0].plate.x, p.labels[0].plate.y], [0, 0]);
+});
+
+test('a corner between device pixels is snapped the way the frame is', () => {
+  const p = placeLabels([dir('a', 1, 10.3, 20.8, 600, 600)], OPTS);
+  assert.deepEqual([p.labels[0].plate.x, p.labels[0].plate.y], [10.5, 21]);
 });
 
 test('a breadcrumb wider than the view drops from the front', () => {

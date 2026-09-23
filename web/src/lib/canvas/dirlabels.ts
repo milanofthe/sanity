@@ -37,7 +37,8 @@ const MIN_SIDE = 170;
 export const PLATE_LINE = 1.5;
 export const PLATE_PAD = 0.45;
 
-/** Smallest distance from a directory's edge, and between two plates. */
+/** Room a label leaves to its directory's right edge, and between two
+ *  plates. */
 const INSET_PX = 3;
 const GAP_PX = 2;
 
@@ -102,10 +103,8 @@ export interface PlaceOpts {
   vh: number;
   /** Character advance as a multiple of the em. */
   advance: number;
-  /** A directory's frame on screen: the band above its contents, and the
-   *  margin to their left, in CSS pixels. */
-  strip: number;
-  inset: number;
+  /** Device pixels per CSS pixel, which a plate's edges are snapped to. */
+  dpr: number;
 }
 
 const overlaps = (a: Box, b: Box): boolean =>
@@ -148,9 +147,15 @@ function clip(b: Box, vw: number, vh: number): Box {
  * The breadcrumb is the chain of directories holding the centre of the view
  * whose own corner is off screen: the ones you are inside of and would
  * otherwise have no name for. It goes first, top left, and the labels keep
- * clear of it. Every other directory whose corner is off screen has its
- * label held at the top left of the part that is showing, the way a sticky
- * header is.
+ * clear of it.
+ *
+ * A label is a tab in its directory's top left corner, flush with the frame
+ * and snapped to the device pixel the frame's corner is snapped to, so the
+ * two are one shape. Where it would run into one placed before it, it is
+ * left out rather than moved: a name away from its corner is a name that
+ * could belong to anything around it. A directory whose corner is off screen
+ * has its tab held against the edge of the screen, along its own frame, the
+ * way a sticky header is.
  */
 export function placeLabels(dirs: ScreenDir[], o: PlaceOpts): Placement {
   const cx = o.vw / 2;
@@ -173,24 +178,13 @@ export function placeLabels(dirs: ScreenDir[], o: PlaceOpts): Placement {
     const alpha = labelAlpha(d, shown, d.name.length, o.advance);
     if (alpha <= 0) continue;
     const size = LABEL_SIZE;
-    const w = plateW(d.name.length, size, o.advance);
-    const h = size * PLATE_LINE;
-    // Where the directory's own frame puts it: text aligned with the
-    // contents' left edge, centred in the band above them when the band is
-    // tall enough, and just inside the corner when it is not.
-    const x = Math.max(d.x + Math.max(INSET_PX, o.inset - PLATE_PAD * size), shown.x + INSET_PX);
-    let y = Math.max(d.y + Math.max(INSET_PX, (o.strip - h) / 2), shown.y + INSET_PX);
-    let plate = { x, y, w, h };
-    // Pushed down once, below whatever it ran into, as long as it stays in
-    // the upper part of the directory. A child in its parent's corner would
-    // otherwise always lose its label to the parent's.
-    const hit = placed.find((p) => overlaps(p, plate));
-    if (hit) {
-      y = hit.y + hit.h + GAP_PX;
-      plate = { x, y, w, h };
-      if (y + h > shown.y + shown.h / 2 || placed.some((p) => overlaps(p, plate))) continue;
-    }
-    if (x + w > shown.x + shown.w - INSET_PX) continue;
+    const snap = (v: number) => Math.round(v * o.dpr) / o.dpr;
+    const plate = {
+      x: snap(shown.x), y: snap(shown.y),
+      w: snap(plateW(d.name.length, size, o.advance)), h: snap(size * PLATE_LINE),
+    };
+    if (placed.some((p) => overlaps(p, plate))) continue;
+    if (plate.x + plate.w > shown.x + shown.w - INSET_PX) continue;
     placed.push(plate);
     labels.push({ path: d.path, text: d.name, size, plate, alpha });
   }
@@ -210,9 +204,10 @@ function placeCrumb(chain: ScreenDir[], o: PlaceOpts): Breadcrumb {
     + (chain.length - from - 1) * sep.length + (from > 0 ? 2 + sep.length : 0);
   while (first < chain.length - 1 && width(first) > room) first++;
 
+  // In the canvas's own corner, the way a label sits in its directory's.
   const h = size * PLATE_LINE;
-  const x0 = 2 * INSET_PX;
-  const y = 2 * INSET_PX;
+  const x0 = 0;
+  const y = 0;
   let x = x0 + PLATE_PAD * size;
   const crumbs: Crumb[] = [];
   const seps: { text: string; x: number }[] = [];

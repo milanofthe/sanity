@@ -2,9 +2,9 @@
 // in scene.ts.
 //
 //   whole view   the directories are named: a label for each large one, none
-//                overlapping, each inside its directory and on screen, and
-//                actually drawn, which is measured against the same frame
-//                with the labels off.
+//                overlapping, each a tab in its directory's corner, on the
+//                device pixel the frame's corner is on, and actually drawn,
+//                which is measured against the same frame with them off.
 //   inside       zoomed into a directory, the breadcrumb names the ones the
 //                view is inside of, outermost first.
 //   click        a label takes the camera to its directory.
@@ -14,11 +14,11 @@ import { decodePng } from './png.mjs';
 import { base, canvasBox, frameOnScreen, launch, settled } from './browser.mjs';
 
 /** Labels the whole view of pathsim has at least: its four top-level parts
- *  and a few below them. Measured 15. */
+ *  and a few below them. Measured 11. */
 const MIN_LABELS = 8;
 /** Share of a plate's pixels the label changes, at least: the text, and the
- *  code the plate covers. Measured 0.26 for the weakest; with nothing drawn
- *  it is 0. */
+ *  code the tab covers. Measured 0.71 for the weakest; with nothing drawn it
+ *  is 0. */
 const MIN_DRAWN = 0.12;
 /** Milliseconds the label pass may take on the CPU. Measured under 0.1 on
  *  the demo and 0.1 at ten thousand files. */
@@ -74,13 +74,15 @@ const whole = await page.evaluate(() => {
   const p = app.scene.placement;
   const dirs = new Map(app.layout.dirs.map((d) => [d.path, d]));
   const cam = app.cam;
+  // The corner as the rect shader snaps it: to the nearest device pixel.
+  const snap = (v) => Math.round(Math.max(0, v) * cam.dpr) / cam.dpr;
   const inside = p.labels.every((l) => {
     const d = dirs.get(l.path);
     const [x0, y0] = cam.worldToScreen(d.x, d.y);
     const [x1, y1] = cam.worldToScreen(d.x + d.w, d.y + d.h);
     const b = l.plate;
-    return b.x >= x0 - 0.5 && b.y >= y0 - 0.5 && b.x + b.w <= x1 + 0.5 && b.y + b.h <= y1 + 0.5
-      && b.x >= 0 && b.y >= 0 && b.x + b.w <= cam.vw && b.y + b.h <= cam.vh;
+    return b.x === snap(x0) && b.y === snap(y0) && b.x + b.w <= x1 && b.y + b.h <= y1
+      && b.x + b.w <= cam.vw && b.y + b.h <= cam.vh;
   });
   let overlaps = 0;
   for (let i = 0; i < p.labels.length; i++) {
@@ -94,7 +96,7 @@ const whole = await page.evaluate(() => {
 });
 report(whole.labels.length >= MIN_LABELS, `${whole.labels.length} directories named in the whole view, at least ${MIN_LABELS}`);
 report(whole.overlaps === 0, `${whole.overlaps} labels overlapping`);
-report(whole.inside, 'every label inside its directory and on screen');
+report(whole.inside, 'every label a tab in its directory\'s corner, on the frame\'s pixel');
 report(whole.crumb === null, 'no breadcrumb with the whole project in view');
 
 const on = await shot();

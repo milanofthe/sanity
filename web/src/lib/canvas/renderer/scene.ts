@@ -218,12 +218,10 @@ const REST_TILE_BUDGET_MS = 4;
 const REST_QUIET_MS = 150;
 
 /** Slots of the label inks, in place of the token kinds the glyph pass
- *  normally colours by: six hues, then three neutrals. */
+ *  normally colours by; see `writeLabelInk`. */
 const LabelInk = {
-  Hue: 0,
-  Dim: 12,
-  Bright: 13,
-  Faint: 14,
+  Text: 0,
+  Faint: 1,
 } as const;
 
 const RECT_STRIDE = 12;
@@ -3098,7 +3096,7 @@ export class Scene {
     list.sort((a, b) => a.depth - b.depth || b.w * b.h - a.w * a.h);
     const p = placeLabels(list, {
       vw: cam.vw, vh: cam.vh, advance: this.atlas.advanceRatio,
-      strip: (metrics.dirPad + metrics.dirLabelHeight) * zoom, inset: metrics.dirPad * zoom,
+      dpr: cam.dpr,
     });
     this.placement = p;
 
@@ -3108,24 +3106,19 @@ export class Scene {
     const dpr = cam.dpr;
     if (p.crumb) {
       const c = p.crumb;
-      const s = this.pal.surface;
-      this.pushRect(this.labelRects, c.plate.x, c.plate.y, c.plate.w, c.plate.h, s.panelBg, 0.94, s.borderStrong, HAIRLINE_PX);
+      // A tab like the labels, in the frame colour of the trunk.
+      this.pushRect(this.labelRects, c.plate.x, c.plate.y, c.plate.w, c.plate.h, this.pal.surface.borderStrong, 1, 0, 0);
       for (const sep of c.seps) this.pushLabelText(sep.text, sep.x, c.plate, c.size, dpr, LabelInk.Faint, 1);
-      c.crumbs.forEach((k, i) => {
-        const ink = i === c.crumbs.length - 1 ? LabelInk.Bright : LabelInk.Dim;
-        this.pushLabelText(k.text, k.box.x, c.plate, c.size, dpr, ink, 1);
-      });
+      for (const k of c.crumbs) this.pushLabelText(k.text, k.box.x, c.plate, c.size, dpr, LabelInk.Text, 1);
     }
     for (const l of p.labels) {
       const i = this.dirIndex.get(l.path);
       if (i === undefined) continue;
-      const { hue } = this.dirColours(dirs[i]);
+      const { edge } = this.dirColours(dirs[i]);
       const alpha = l.alpha * (this.matched && !this.matchedDirs.has(l.path) ? SEARCH_DIM : 1);
-      // The panels' own ground, so a plate reads as a scrap of canvas
-      // rather than as a sticker on it.
-      this.pushRect(this.labelRects, l.plate.x, l.plate.y, l.plate.w, l.plate.h, this.pal.surface.panelBg, 0.88 * alpha, 0, 0);
-      const ink = hue >= 0 ? hue + LabelInk.Hue : LabelInk.Dim;
-      this.pushLabelText(l.text, l.plate.x + PLATE_PAD * l.size, l.plate, l.size, dpr, ink, alpha);
+      // The frame's own colour, so the tab and the frame are one shape.
+      this.pushRect(this.labelRects, l.plate.x, l.plate.y, l.plate.w, l.plate.h, edge, alpha, 0, 0);
+      this.pushLabelText(l.text, l.plate.x + PLATE_PAD * l.size, l.plate, l.size, dpr, LabelInk.Text, alpha);
     }
 
     const lc = this.labelCam;
@@ -3206,8 +3199,14 @@ export class Scene {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.count);
   }
 
-  /** The label inks: each data hue, then neutral ones; see `LabelInk`. Rotated towards the hue by the theme's tint, and keeping
-   *  the ink's own luminance, so a label reads the same on every branch. */
+  /**
+   * The label inks: text on a tab, and the same halfway into the tab for the
+   * breadcrumb's separators.
+   *
+   * Whichever of the theme's ink and its ground stands further from the
+   * frame colour in luminance. A frame's hue is rotated at the border's own
+   * luminance, see `mixToward`, so one choice holds for every branch.
+   */
   private writeLabelInk(): void {
     const s = this.pal.surface;
     const set = (slot: number, c: number) => {
@@ -3216,12 +3215,14 @@ export class Scene {
       this.labelInk[slot * 3 + 1] = g;
       this.labelInk[slot * 3 + 2] = b;
     };
-    this.pal.data.forEach((hue, k) => {
-      set(LabelInk.Hue + k, mixToward(s.inkDim, hue, this.pal.dirTint));
-    });
-    set(LabelInk.Dim, s.inkDim);
-    set(LabelInk.Bright, s.ink);
-    set(LabelInk.Faint, s.dirLabel);
+    const lum = (c: number) => {
+      const [r, g, b] = rgb(c);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const tab = lum(s.borderStrong);
+    const text = Math.abs(lum(s.ink) - tab) >= Math.abs(lum(s.bg) - tab) ? s.ink : s.bg;
+    set(LabelInk.Text, text);
+    set(LabelInk.Faint, lerp(text, s.borderStrong, 0.45));
   }
 
   /** What a click at a screen position lands on: a directory's label or a
