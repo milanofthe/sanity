@@ -222,7 +222,7 @@ for (let i = 0; i < 40; i++) {
   last = now;
 }
 await settled(page);
-await shoot('screenshot-search.webp', 'sanity-search.png');
+await shoot('screenshot-search.webp');
 
 // --- Pictures and the first pages of PDFs. -----------------------------------
 await open('rslab');
@@ -247,6 +247,6 @@ await page.evaluate(async () => {
   await app.scene.media?.settled();
 });
 await settled(page);
-await shoot('screenshot-pictures.webp', 'sanity-pdf.png');
+await shoot('screenshot-pictures.webp');
 
 await browser.close();

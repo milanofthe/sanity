@@ -42,7 +42,7 @@ Or open a folder from the Project menu.
 - The View menu sets which file types are shown, whether files ignored by git
   are listed, whether files are coloured by language, whether directories are
   named over the canvas, whether documents show all their pages, and whether
-  stepping through the history flies to each change. The Theme menu has eight
+  each step through the history fits the whole project. The Theme menu has eight
   themes.
 
 ## Watching changes
@@ -69,12 +69,12 @@ a save: the lines the commit removed flash red, the ones it added flash green,
 files it deleted fade out and files it created fade in. Stepping back plays
 the same commit in reverse. Clicking the commit id returns to the present.
 
-While you are in the history the layout does not move: it is computed once
-for every file that exists anywhere in the loaded commits, each at its largest
-version, and a file that does not exist yet keeps its place empty. By default
-the view flies to what each step changed. The working tree is never touched;
-the contents come out of git's object store, and the watcher keeps running
-in the background, so returning to the present shows the folder as it is.
+Each commit is laid out for the files it has, so there are no empty places
+for files that come later or went earlier. When a step adds or removes files,
+the panels slide to their new places, and by default the view fits the whole
+project again. The working tree is never touched; the contents come out of
+git's object store, and the watcher keeps running in the background, so
+returning to the present shows the folder as it is.
 
 ![stepping through the history, a commit's four files changing](assets/screenshot-history.webp)
 

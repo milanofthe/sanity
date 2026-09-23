@@ -7,7 +7,7 @@
 import { Camera } from '$lib/canvas/camera';
 import {
   computeLayout, layoutStats, passesUsed,
-  type DirNode, type FileEntry, type FileNode, type Layout,
+  type FileEntry, type FileNode, type Layout,
 } from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
 import { createContext } from '$lib/canvas/renderer/gl';
@@ -270,6 +270,7 @@ export class CanvasApp {
       // a scene: scripts/stability-check.mjs asks it the same question twice
       // with one file changed.
       computeLayout,
+      layoutStats,
       // Decoded payloads, which is where the per-line widths live. The layout
       // needs them and the entries do not carry them.
       decoded: () => this.decoded,
@@ -326,12 +327,12 @@ export class CanvasApp {
 
     const t0 = performance.now();
     // The canvas takes the window's proportions, so fitting it leaves no
-    // screen unused; see rootAspect.
+    // screen unused; see rootAspect. A relayout is cut the way the layout on
+    // screen was, so what moves is what changed; see computeLayout.
     this.layout = computeLayout(
-      // An entry's own line widths when it brings them: the history sizes a
-      // panel for the largest version of its file while showing another.
       source.entries.map((e) => ({ ...e, lineCols: e.lineCols ?? this.decoded.get(e.path)?.lineCols })),
       { w: this.cam.vw, h: this.cam.vh },
+      reuse ? this.layout ?? undefined : undefined,
     );
     this.nodeByPath = new Map(this.layout.files.map((f) => [f.path, f]));
     const st = layoutStats(this.layout);
@@ -340,7 +341,7 @@ export class CanvasApp {
     // three numbers that say whether the layout is doing its job, and they
     // are what scripts/layout-check.mjs asserts on.
     console.log(
-      `layout: fill ${(st.fill * 100).toFixed(1)}% · aspect ${st.aspect.toFixed(2)} · ` +
+      `layout${this.layout.continued ? ' (continued)' : ''}: fill ${(st.fill * 100).toFixed(1)}% · aspect ${st.aspect.toFixed(2)} · ` +
       `${st.dirCount} dirs · misfits ${st.misfits} · unusable ${st.unusable} · ` +
       `overflowing ${st.overflowing} · hidden ${st.hiddenStubs} · ` +
       `escapes ${st.escapes} · ` +
@@ -716,41 +717,6 @@ export class CanvasApp {
     this.cam.flyToRect(
       node.x - pad, node.y - pad, node.x + node.w + pad, node.y + node.h + pad, seconds,
     );
-  }
-
-  /**
-   * Fly to the panels of some paths, all of them in view.
-   *
-   * Absent ones included: a file the history shows as not there still has
-   * its place in the layout, which is where it went and where it comes back,
-   * so they are found in the tree rather than in the list of drawn files.
-   */
-  focusPaths(paths: string[], seconds = 0.5): void {
-    if (!this.layout || paths.length === 0) return;
-    const want = new Set(paths);
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    const take = (f: FileNode) => {
-      if (!want.has(f.path)) return;
-      x0 = Math.min(x0, f.x);
-      y0 = Math.min(y0, f.y);
-      x1 = Math.max(x1, f.x + f.w);
-      y1 = Math.max(y1, f.y + f.h);
-    };
-    const visit = (d: DirNode) => {
-      for (const c of d.children) {
-        if (c.kind === 'file') take(c);
-        else if (c.kind === 'stubs') c.children.forEach(take);
-        else visit(c);
-      }
-    };
-    visit(this.layout.root);
-    if (x0 === Infinity) return;
-    this.invalidate();
-    const pad = metrics.lineHeight * 2;
-    this.cam.flyToRect(x0 - pad, y0 - pad, x1 + pad, y1 + pad, seconds);
   }
 
   /** Fly to a directory, the whole of it in view. */

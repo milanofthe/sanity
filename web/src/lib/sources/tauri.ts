@@ -243,10 +243,9 @@ async function loadThumbs(paths: string[], onBatch: () => void): Promise<void> {
 /** Build the scene from the loaded scan and the current view modes. */
 export function openLoaded(app: CanvasApp, keepView = false): void {
   if (!scan) return;
-  // In the history, every file the window has, sized for its largest
-  // version, and the ones not there at the commit shown only holding their
-  // place; see `enterHistory`.
-  const files = unionRows ? [...unionRows.values()] : scan.files;
+  // In the history, the files as they are at the commit shown: laid out for
+  // that commit alone, so nothing leaves an empty place behind.
+  const files = shownRows ? [...shownRows.values()] : scan.files;
   const entries = files
     .map((f) => ({
       path: f.path,
@@ -260,8 +259,6 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       // A file git ignores is a placeholder whatever its type is set to: its
       // contents were never read, so there is nothing to draw in it.
       stub: f.ignored === true || project.modeForPath(f.path) === 'reduced',
-      absent: shownRows !== null && !shownRows.has(f.path),
-      lineCols: unionCols.get(f.path),
     }))
     .filter((e) => project.modeForPath(e.path) !== 'off');
 
@@ -452,11 +449,6 @@ const HISTORY_PAGE = 1000;
  *  Null in the present. */
 let shownRows: Map<string, ScanFile> | null = null;
 const shownPayloads = new Map<string, ArrayBuffer>();
-/** Every file anywhere in the window, at the largest version seen, and its
- *  line widths: what the history is laid out from, so a step moves nothing.
- *  Null in the present. */
-let unionRows: Map<string, ScanFile> | null = null;
-const unionCols = new Map<string, ArrayLike<number>>();
 /** A step is being played; the next waits for it. */
 let stepping = false;
 
@@ -472,13 +464,10 @@ export async function loadHistory(): Promise<void> {
   history.target = -1;
   shownRows = null;
   shownPayloads.clear();
-  unionRows = null;
-  unionCols.clear();
   text.at = null;
 }
 
-/** A reply of `history_step` or `history_window`: rows, removed paths and
- *  payloads. */
+/** A reply of `history_step`: rows, removed paths and payloads. */
 function readStep(reply: ArrayBuffer): { rows: ScanFile[]; removed: string[]; parts: [string, ArrayBuffer][] } {
   const headerLen = new DataView(reply).getUint32(0, true);
   const header = JSON.parse(new TextDecoder().decode(new Uint8Array(reply, 4, headerLen))) as {
@@ -486,43 +475,6 @@ function readStep(reply: ArrayBuffer): { rows: ScanFile[]; removed: string[]; pa
     removed: string[];
   };
   return { ...header, parts: [...unpack(reply.slice(4 + headerLen))] };
-}
-
-/** Line widths of a live file, for sizing it in the history. */
-const liveCols = (path: string): ArrayLike<number> | undefined => {
-  const held = decoded.get(path);
-  if (held) return held.lineCols;
-  const buf = payloads.get(path);
-  return buf ? decodeFile(buf).lineCols : undefined;
-};
-
-/**
- * Lay the canvas out for the history, before its first step.
- *
- * Once, for the window: the working tree's files and every file the loaded
- * commits touched that it no longer has, each sized for its largest version
- * there. The
- * canvas moves once, to make room for those, and then not again while the
- * ticker is in the history.
- */
-async function enterHistory(app: CanvasApp): Promise<void> {
-  if (!scan) return;
-  const win = readStep(await invoke<ArrayBuffer>('history_window', { limit: HISTORY_PAGE }));
-  shownRows = new Map(scan.files.map((f) => [f.path, f]));
-  unionRows = new Map(shownRows);
-  for (const f of scan.files) {
-    const cols = liveCols(f.path);
-    if (cols) unionCols.set(f.path, cols);
-  }
-  const bytes = new Map(win.parts);
-  for (const row of win.rows) {
-    unionRows.set(row.path, row);
-    const buf = bytes.get(row.path);
-    if (buf) unionCols.set(row.path, decodeFile(buf).lineCols);
-  }
-  // Absent does not change where anything goes, only what is listed, so the
-  // files the working tree lacks get their places now, empty.
-  openLoaded(app, true);
 }
 
 /**
@@ -556,10 +508,9 @@ async function stepTo(app: CanvasApp, index: number): Promise<void> {
   if (!scan) return;
   const from = history.at >= 0 ? history.commits[history.at].sha : null;
   const to = index >= 0 ? history.commits[index].sha : null;
-  if (!unionRows) await enterHistory(app);
   const header = readStep(await invoke<ArrayBuffer>('history_step', { from, to }));
-  const rows = shownRows!;
-  const union = unionRows!;
+  // Into the history from the working tree as it was scanned.
+  const rows = (shownRows ??= new Map(scan.files.map((f) => [f.path, f])));
 
   const fresh = new Map<string, FileData>();
   for (const path of header.removed) {
@@ -569,33 +520,22 @@ async function stepTo(app: CanvasApp, index: number): Promise<void> {
   for (const row of header.rows) rows.set(row.path, row);
   for (const [path, buf] of header.parts) {
     shownPayloads.set(path, buf);
-    const data = decodeFile(buf);
-    fresh.set(path, data);
-    // Grown, never shrunk: a smaller version fits the panel a larger one
-    // was given, and only one that does not fit moves anything.
-    const had = union.get(path);
-    const row = header.rows.find((r) => r.path === path);
-    if (row && (!had || row.lineCount > had.lineCount)) {
-      union.set(path, row);
-      unionCols.set(path, data.lineCols);
-    }
+    fresh.set(path, decodeFile(buf));
   }
   history.at = index;
   text.at = to;
   text.clear();
-  await app.applyBatch(fresh, header.removed, async () => openLoaded(app, true), true);
-  // To what the step changed, where it still has a place: the ones it
-  // removed keep theirs in the history, and lose it in the present.
-  if (ui.historyFollow) app.focusPaths([...header.rows.map((r) => r.path), ...header.removed]);
   if (index < 0) {
-    // Back in the present: laid out for the working tree alone again, which
-    // takes the empty places away.
+    // Back in the present: laid out from the working tree again, which the
+    // watcher kept current while the history was shown.
     shownRows = null;
     shownPayloads.clear();
-    unionRows = null;
-    unionCols.clear();
-    openLoaded(app, true);
   }
+  await app.applyBatch(fresh, header.removed, async () => openLoaded(app, true), true);
+  // The whole project, which is what a step can have moved: a commit that
+  // adds or removes files is laid out again, and its panels slide to their
+  // new places.
+  if (ui.historyFollow) app.fit();
   uiLog(
     `history: ${to ? to.slice(0, 8) : 'working tree'}, ` +
       `${header.rows.length} changed, ${header.removed.length} removed`,
