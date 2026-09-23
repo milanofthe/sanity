@@ -33,12 +33,6 @@ jobs:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # For the first page of a PDF. A separate process, not a linked
-      # library: the renderers that are any good are AGPL, and this repository
-      # is MIT. Without it those panels keep their placeholder, which is why
-      # the dump does not fail on its absence.
-      - name: Install a PDF rasteriser
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       # The dumps are generated rather than committed: they are megabytes of
       # somebody else's source and they go stale the moment those repositories
       # move. This clones the four and runs the real scanner over them, so the

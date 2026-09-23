@@ -193,9 +193,9 @@ if (budget.bytes > BUDGET_MB * 1.02 * 1048576) {
 if (budget.count === 0) fail('nothing held with every picture on screen');
 
 // A document, where there is one: its first page has to be on the panel, and
-// that page came from a renderer outside the browser (pdftoppm or sips at dump
-// time, the platform's own in the app). So this is the one picture path whose
-// pixels were produced somewhere else entirely.
+// that page came from a renderer outside the browser (sanity-core's, through
+// the dump here and through the backend in the app). So this is the one
+// picture path whose pixels were produced somewhere else entirely.
 const docs = await page.evaluate(() =>
   [...window.__sanity.app.scene.files.values()].filter(
     (f) => f.node.media?.kind === 'document',
