@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/sanity-logo.png" width="340" alt="sanity">
+  <img src="assets/sanity-logo.svg" width="340" alt="sanity">
 </p>
 
 sanity opens a folder and shows every file in it at once, as read-only panels
