@@ -86,6 +86,7 @@ layout, text, pictures, performance, themes and more.
 
 ```
 crates/sanity-core     scanning, tokenising, the wire format
+crates/sanity-watch    watching the folder, debounced into batches
 src-tauri              the desktop shell and file watcher
 web/src/lib/canvas     layout and the WebGL2 renderer
 web/src/lib/ui         interface components
