@@ -53,7 +53,7 @@ export function rounded(points, corners = []) {
  * a butt cap is square to the stroke, and a diagonal ending square would
  * poke above the letters beside it.
  */
-export function wordmark(t = ORIGINAL_STROKE, { letters = true } = {}) {
+export function wordmark(t = ORIGINAL_STROKE, { letters = true, gap = 36 } = {}) {
   const c = t / 2;
   // What grows with the stroke is the ink, not the white: the gaps between
   // the rails and the letters, and inside the letters, stay the original's.
@@ -81,8 +81,8 @@ export function wordmark(t = ORIGINAL_STROKE, { letters = true } = {}) {
 
   // The mark, for the places that want a square: the S and the y and the
   // frame they make, with the letters between left out and the two brought
-  // together, about a letter's gap apart.
-  if (!letters) x += 76 + grow;
+  // together, `gap` apart.
+  if (!letters) x += gap;
 
   // a: an arch from a cut terminal over to the stem, and a bowl hung off the
   // stem.

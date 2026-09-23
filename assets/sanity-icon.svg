@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
 <title>sanity</title>
 <rect x="100" y="100" width="824" height="824" rx="185" fill="#16181a"/>
-<clipPath id="sanity-cut"><rect x="0" y="95" width="483" height="392"/></clipPath>
-<g transform="translate(258.658 256.56) scale(1.049)" fill="none" stroke="#ff0000" stroke-width="58" stroke-linecap="butt" stroke-linejoin="miter">
-  <path d="M483 29L99 29A58 58 0 0 0 41 87L41 131.33A28 28 0 0 0 51.77 153.41L162.23 239.59A28 28 0 0 1 173 261.67L173 308.5A60.5 60.5 0 0 1 112.5 369L0 369"/>
+<clipPath id="sanity-cut"><rect x="0" y="111" width="462.2" height="408"/></clipPath>
+<g transform="translate(284.516 256.56) scale(0.984)" fill="none" stroke="#ff0000" stroke-width="74" stroke-linecap="butt" stroke-linejoin="miter">
+  <path d="M462.2 37L111 37A62 62 0 0 0 49 99L49 147.33A28 28 0 0 0 59.77 169.41L170.23 255.59A28 28 0 0 1 181 277.67L181 324.5A60.5 60.5 0 0 1 120.5 385L0 385"/>
   <g clip-path="url(#sanity-cut)">
-    <path d="M467.14 37L378.67 404.39A70 70 0 0 1 310.61 458L0 458"/>
-    <path d="M303.86 37L390.56 355"/>
+    <path d="M441.96 37L347.71 428.39A70 70 0 0 1 279.66 482L0 482"/>
+    <path d="M268.24 37L357.68 387"/>
   </g>
 </g>
 </svg>

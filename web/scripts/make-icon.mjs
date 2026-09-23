@@ -33,6 +33,13 @@ import { wordmark, wordmarkBody } from './logo.mjs';
  *  fifteen pixels, where 48 came out a pixel and a half. */
 const STROKE = 58;
 
+/** The mark's weight and the white between its S and its y. Heavier than the
+ *  wordmark's: an icon is read at 16 to 32 pixels, where the mark is the
+ *  whole of it, and two letters with nothing between them read as one sign
+ *  rather than as a word with its middle missing. */
+const ICON_STROKE = 74;
+const ICON_GAP = 30;
+
 const CHARCOAL = '#16181a';
 /** The logo's own red. */
 const RED = '#ff0000';
@@ -41,7 +48,7 @@ const r = (v) => Math.round(v * 1000) / 1000;
 
 /** The mark in a body of `body` at `radius`, taking `share` of the body's side. */
 function icon({ body, radius, share }) {
-  const m = wordmark(STROKE, { letters: false });
+  const m = wordmark(ICON_STROKE, { letters: false, gap: ICON_GAP });
   const k = (body.w * share) / Math.max(m.width, m.height);
   const x = body.x + (body.w - m.width * k) / 2;
   const y = body.y + (body.h - m.height * k) / 2;
