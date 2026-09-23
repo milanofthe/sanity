@@ -270,6 +270,7 @@ export class CanvasApp {
       // a scene: scripts/stability-check.mjs asks it the same question twice
       // with one file changed.
       computeLayout,
+      layoutStats,
       // Decoded payloads, which is where the per-line widths live. The layout
       // needs them and the entries do not carry them.
       decoded: () => this.decoded,
@@ -326,12 +327,12 @@ export class CanvasApp {
 
     const t0 = performance.now();
     // The canvas takes the window's proportions, so fitting it leaves no
-    // screen unused; see rootAspect.
+    // screen unused; see rootAspect. A relayout is cut the way the layout on
+    // screen was, so what moves is what changed; see computeLayout.
     this.layout = computeLayout(
-      // An entry's own line widths when it brings them: the history sizes a
-      // panel for the largest version of its file while showing another.
       source.entries.map((e) => ({ ...e, lineCols: e.lineCols ?? this.decoded.get(e.path)?.lineCols })),
       { w: this.cam.vw, h: this.cam.vh },
+      reuse ? this.layout ?? undefined : undefined,
     );
     this.nodeByPath = new Map(this.layout.files.map((f) => [f.path, f]));
     const st = layoutStats(this.layout);
@@ -340,7 +341,7 @@ export class CanvasApp {
     // three numbers that say whether the layout is doing its job, and they
     // are what scripts/layout-check.mjs asserts on.
     console.log(
-      `layout: fill ${(st.fill * 100).toFixed(1)}% · aspect ${st.aspect.toFixed(2)} · ` +
+      `layout${this.layout.continued ? ' (continued)' : ''}: fill ${(st.fill * 100).toFixed(1)}% · aspect ${st.aspect.toFixed(2)} · ` +
       `${st.dirCount} dirs · misfits ${st.misfits} · unusable ${st.unusable} · ` +
       `overflowing ${st.overflowing} · hidden ${st.hiddenStubs} · ` +
       `escapes ${st.escapes} · ` +

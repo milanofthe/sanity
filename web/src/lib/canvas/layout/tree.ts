@@ -12,7 +12,7 @@ import {
   SMALL_FILE_LINES,
 } from './panel.ts';
 import { visualRowsCached, widthCovering } from './wrap.ts';
-import { CELL, cells, layoutTreemap, toWorld, type IntRect } from './treemap.ts';
+import { CELL, cells, layoutTreemap, toWorld, type IntRect, type Plan } from './treemap.ts';
 
 /**
  * Width over height the whole canvas aims for.
@@ -226,6 +226,9 @@ export interface FileNode {
   /** Treemap weight: the area this file needs. Corrected by the fitting
    *  passes when the shape it was given turns out to need more. */
   area: number;
+  /** The weight before any correction, so a relayout can carry a correction
+   *  over as a factor; see `computeLayout`. */
+  baseArea: number;
   /** Smallest slot the panel can be drawn in, and the widest shape it can
    *  take, in grid cells. Handed to the treemap so it can respect them while
    *  it cuts, rather than being discovered afterwards. See `Sized`. */
@@ -267,6 +270,13 @@ export interface DirNode {
    * front of children that could not fill them.
    */
   maxAspect: number;
+  /** How its rectangle was divided among its children, for the next layout
+   *  to divide it the same way; see `layoutTreemap`. Null for a directory of
+   *  pictures, which is laid out in rows instead. */
+  plan: Plan | null;
+  /** The plan of the same directory in the layout before, when there was
+   *  one. */
+  planBefore: Plan | null;
   x: number;
   y: number;
   w: number;
@@ -292,9 +302,13 @@ export interface DirNode {
  */
 export interface StubBlock {
   kind: 'stubs';
+  /** Its directory's path and a suffix no file path can have, as its key in
+   *  a plan. */
+  path: string;
   /** The placeholders in this block, in the order they are packed. */
   children: FileNode[];
   area: number;
+  baseArea: number;
   minW: number;
   minH: number;
   maxAspect: number;
@@ -315,12 +329,15 @@ export interface Layout {
   dirs: DirNode[];
   bounds: [number, number, number, number];
   totalLines: number;
+  /** Laid out from the layout before it rather than from scratch; see
+   *  `computeLayout`. */
+  continued: boolean;
 }
 
 function newDir(name: string, path: string, depth: number): DirNode {
   return {
     kind: 'dir', name, path, children: [], depth, area: 0,
-    minW: 1, minH: 1, maxAspect: Infinity, x: 0, y: 0, w: 0, h: 0,
+    minW: 1, minH: 1, maxAspect: Infinity, plan: null, planBefore: null, x: 0, y: 0, w: 0, h: 0,
   };
 }
 
@@ -419,6 +436,11 @@ function buildTree(entries: FileEntry[]): DirNode {
           maxAspect: geom.w / Math.max(1, geom.h),
         }
         : panelBounds(lineCols, geom);
+    const area = shape
+      ? cells(geom.w) * cells(geom.h)
+      : e.stub
+        ? stubArea()
+        : panelArea_(lineCols, e.maxCols);
     parent.children.push({
       kind: 'file',
       name: fileName,
@@ -444,11 +466,8 @@ function buildTree(entries: FileEntry[]): DirNode {
       holdsAll: true,
       // The treemap weight: a stub's fixed box, or the area the file needs
       // once its long lines have wrapped.
-      area: shape
-        ? cells(geom.w) * cells(geom.h)
-        : e.stub
-          ? stubArea()
-          : panelArea_(lineCols, e.maxCols),
+      area,
+      baseArea: area,
       slotW: 0,
       slotH: 0,
       x: 0,
@@ -519,7 +538,7 @@ function sortChildren(dir: DirNode): void {
   const drawn = files.filter((f) => !f.stub);
   const stubs = files.filter((f) => f.stub);
   dir.children = stubs.length > 0
-    ? [...drawn, stubBlock(stubs), ...subs]
+    ? [...drawn, stubBlock(dir.path, stubs), ...subs]
     : [...drawn, ...subs];
   for (const sub of subs) sortChildren(sub);
 }
@@ -531,7 +550,7 @@ function chipCells(): { w: number; h: number } {
 }
 
 /** Wrap a directory's placeholders into a block the treemap can place. */
-function stubBlock(stubs: FileNode[]): StubBlock {
+function stubBlock(dir: string, stubs: FileNode[]): StubBlock {
   const chip = chipCells();
   const n = stubs.length;
   // Area in world units, from whole chips, so the weight it asks for is the
@@ -543,8 +562,10 @@ function stubBlock(stubs: FileNode[]): StubBlock {
   // that was never in trouble.
   return {
     kind: 'stubs',
+    path: `${dir}//stubs`,
     children: stubs,
     area,
+    baseArea: area,
     minW: chip.w,
     minH: chip.h,
     maxAspect: Math.max(1, (n * chip.w) / chip.h),
@@ -868,11 +889,17 @@ function placeDir(dir: DirNode, slot: IntRect): void {
     return;
   }
 
-  layoutTreemap(dir.children, inner, (child, childSlot) => {
-    if (child.kind === 'file') placeFile(child, childSlot);
-    else if (child.kind === 'stubs') placeStubs(child, childSlot);
-    else placeDir(child, childSlot);
-  });
+  dir.plan = layoutTreemap(
+    dir.children,
+    inner,
+    (child, childSlot) => {
+      if (child.kind === 'file') placeFile(child, childSlot);
+      else if (child.kind === 'stubs') placeStubs(child, childSlot);
+      else placeDir(child, childSlot);
+    },
+    (child) => child.path,
+    dir.planBefore ?? undefined,
+  );
 }
 
 function collect(
@@ -888,7 +915,6 @@ function collect(
   }
 }
 
-/** How many times to re-run the subdivision with corrected areas. */
 /**
  * Cap on the correction loop. It stops as soon as nothing misfits, so this is
  * a safety limit rather than a cost.
@@ -922,27 +948,16 @@ const ASPECT_TRUST = 3;
  * file's area raised to what it actually needed converges in a handful of
  * passes, and unlike a safety factor it costs nothing in fill where the first
  * guess was already right.
- */
-/**
- * Lay out once, then correct.
  *
- * Known weakness, measured rather than suspected: the root extent is derived
- * from the *corrected* total area, so which files happened to need a
- * correction decides how big the whole canvas is. Adding five lines to one
- * file can change that, the root moves by about a percent, every integer
- * split lands differently, and 95 percent of panels change place. It is not
- * the common case: the median five line edit moves nothing at all, and
- * scripts/stability-check.mjs reports both numbers.
- *
- * Fixing the root on the first pass, from the uncorrected areas, was tried and
- * does not work. The first estimate is badly wrong for files whose natural
- * shape cannot match their slot, and the loop has to be able to grow the
- * canvas to accommodate them: with the root fixed and headroom swept from 1.0
- * to 1.25, a repository of 200 files of 4000 lines left 95 to 104 panels
- * unusable and 145 overflowing, and 800 files of twelve lines fell to 81
- * percent fill. The amplification is in the integer treemap, where a one
- * percent change to a parent rectangle flips a row boundary, so that is where
- * a fix has to go. Tracked as issue #8.
+ * From scratch this is not continuous in its input: the root extent is
+ * derived from the corrected total area, the order of each rectangle's
+ * children comes from their corrected weights, and which of them share a row
+ * is a greedy test, so five lines added to one file could reshuffle most of
+ * the canvas. Fixing the root on the first pass was tried and does not work:
+ * the loop has to be able to grow the canvas for files whose first estimate
+ * is badly off, and with the root fixed 200 files of 4000 lines left 95
+ * panels unusable. A relayout instead starts from the layout before, with
+ * its rows and its corrections; see `computeLayout`.
  */
 function fitPasses(
   root: DirNode, files: FileNode[], blocks: StubBlock[], aspect: number,
@@ -1087,9 +1102,59 @@ function fitPasses(
 /** How many subdivision passes the last layout actually needed. */
 export let passesUsed = 0;
 
+/**
+ * How much less of the canvas a layout carried over from the one before may
+ * cover than a fresh one before the fresh one is taken instead, and how much
+ * more a panel may be bloated at the 95th percentile.
+ */
+const CONTINUE_FILL_SLACK = 0.02;
+const CONTINUE_BLOAT_SLACK = 1.15;
+
+/**
+ * Lay the entries out.
+ *
+ * Given the layout on screen, the new one is cut the way that one was: each
+ * directory divides its rectangle among the same children, in the same order
+ * and the same rows, and only the weights are new. That is what keeps a
+ * relayout from reshuffling the canvas. Laid out from scratch, a squarified
+ * treemap is not continuous in its input: on pathsim, five lines added to one
+ * file moved a median of 46 percent of the panels and one new file moved 60,
+ * because the order by area and the greedy choice of rows each flip on small
+ * differences, and every flip moves everything after it.
+ *
+ * Carried over across many changes, a layout drifts from what a fresh one
+ * would be, so every relayout is also computed fresh and the carried one is
+ * only kept while it is about as good: no panel that cannot be drawn or does
+ * not hold its lines where the fresh one has none, and about the same fill
+ * and bloat. When it is not, the fresh one is taken and the panels slide to
+ * it, which is the reshuffle this avoids, once, when it buys something.
+ */
 export function computeLayout(
   entries: FileEntry[],
   viewport?: { w: number; h: number },
+  before?: Layout,
+): Layout {
+  const fresh = layoutFrom(entries, viewport, null);
+  if (!before) return fresh;
+  const carried = layoutFrom(entries, viewport, before);
+  return asGood(layoutStats(carried), layoutStats(fresh)) ? carried : fresh;
+}
+
+function asGood(carried: LayoutStats, fresh: LayoutStats): boolean {
+  return carried.unusable <= fresh.unusable
+    && carried.overflowing <= fresh.overflowing
+    && carried.hiddenStubs <= fresh.hiddenStubs
+    && carried.overlaps <= fresh.overlaps
+    && carried.escapes <= fresh.escapes
+    && carried.offGrid <= fresh.offGrid
+    && carried.fill >= fresh.fill - CONTINUE_FILL_SLACK
+    && carried.bloatP95 <= fresh.bloatP95 * CONTINUE_BLOAT_SLACK;
+}
+
+function layoutFrom(
+  entries: FileEntry[],
+  viewport: { w: number; h: number } | undefined,
+  before: Layout | null,
 ): Layout {
   const root = buildTree(entries);
   collapseChains(root);
@@ -1099,6 +1164,7 @@ export function computeLayout(
   const allDirs: DirNode[] = [];
   const allBlocks: StubBlock[] = [];
   collect(root, allFiles, allDirs, allBlocks);
+  if (before) carryOver(before, allFiles, allDirs, allBlocks);
   fitPasses(root, allFiles, allBlocks, rootAspect(viewport));
 
   const files: FileNode[] = [];
@@ -1119,7 +1185,39 @@ export function computeLayout(
     dirs,
     bounds: [root.x, root.y, root.x + root.w, root.y + root.h],
     totalLines,
+    continued: before !== null,
   };
+}
+
+/**
+ * What a layout takes over from the one before: each directory's plan, and
+ * the correction each weight was given, as a factor.
+ *
+ * The plan alone is not enough, and measured worse than nothing: the fitting
+ * passes then find every correction again from the uncorrected weights, the
+ * weights come out different from last time, and with the same rows that
+ * moved 91 percent of pathsim's panels for five lines added, against 45 from
+ * scratch. Carried over, the weights start where they ended, a pass has
+ * nothing to correct but what changed, and the five lines move nothing.
+ */
+function carryOver(
+  before: Layout, files: FileNode[], dirs: DirNode[], blocks: StubBlock[],
+): void {
+  const plans = new Map(before.dirs.map((d) => [d.path, d.plan]));
+  for (const d of dirs) d.planBefore = plans.get(d.path) ?? null;
+  const was = new Map<string, { area: number; baseArea: number; offered?: boolean }>();
+  const beforeBlocks: StubBlock[] = [];
+  collect(before.root, [], [], beforeBlocks);
+  for (const f of before.files) was.set(f.path, f);
+  for (const b of beforeBlocks) was.set(b.path, b);
+  for (const n of [...files, ...blocks]) {
+    const w = was.get(n.path);
+    if (!w || w.baseArea <= 0) continue;
+    n.area = Math.max(n.baseArea, n.baseArea * (w.area / w.baseArea));
+    // Area given for a preference stays a preference, not bloat; see
+    // `LayoutStats.bloatP95`.
+    if (n.kind === 'file' && w.offered) n.offered = true;
+  }
 }
 
 export interface LayoutStats {

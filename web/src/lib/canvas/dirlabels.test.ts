@@ -105,7 +105,7 @@ test('a breadcrumb wider than the view drops from the front', () => {
 
 const node = (path: string, area: number, children: DirNode[] = []): DirNode => ({
   kind: 'dir', name: path.split('/').pop()!, path, children, depth: path ? path.split('/').length : 0,
-  area, minW: 1, minH: 1, maxAspect: 1, x: 0, y: 0, w: 0, h: 0,
+  area, minW: 1, minH: 1, maxAspect: 1, plan: null, planBefore: null, x: 0, y: 0, w: 0, h: 0,
 });
 
 test('branches take hues in turn, below the trunk, and pass them down', () => {

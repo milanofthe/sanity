@@ -298,16 +298,47 @@ function depthRange<T extends Sized>(
   return { min, max: Math.max(min, max) };
 }
 
+/** One row of a subdivision: how many items, in order, and which way it
+ *  runs. Horizontal means side by side along the width. */
+export interface Row {
+  count: number;
+  horizontal: boolean;
+}
+
 /**
  * Subdivide `rect` among `items` in proportion to their area, in whole cells.
  * Returns one rectangle per item, in the order given.
  */
 export function squarify<T extends Sized>(items: T[], rect: IntRect): IntRect[] {
+  return subdivide(items, rect, []).rects;
+}
+
+/**
+ * `squarify`, with the first rows given rather than chosen, and the rows it
+ * used reported back.
+ *
+ * Which items share a row, and which way the row runs, is the one decision
+ * in a squarified treemap that is not continuous in the areas: a weight that
+ * moves a little moves a row boundary a little, until it tips the greedy
+ * test, and then the row takes one item more or less and everything after it
+ * in the rectangle lands somewhere else. Handing in the rows of the last
+ * layout takes that decision out of a relayout, so what moves is what
+ * changed, by as much as it changed.
+ *
+ * A given row the rectangle can no longer hold, because its members' minimum
+ * lengths do not fit along the side it runs on, ends the given ones: from
+ * there on the rows are chosen as usual.
+ */
+export function subdivide<T extends Sized>(
+  items: T[], rect: IntRect, given: Row[],
+): { rects: IntRect[]; rows: Row[] } {
   const out: IntRect[] = new Array(items.length);
-  if (items.length === 0) return out;
+  const rows: Row[] = [];
+  if (items.length === 0) return { rects: out, rows };
   if (items.length === 1) {
     out[0] = { ...rect };
-    return out;
+    rows.push({ count: 1, horizontal: rect.w <= rect.h });
+    return { rects: out, rows };
   }
 
   const total = items.reduce((s, it) => s + Math.max(0, it.area), 0);
@@ -319,7 +350,8 @@ export function squarify<T extends Sized>(items: T[], rect: IntRect): IntRect[] 
       out[i] = { x, y: rect.y, w: next - x, h: rect.h };
       x = next;
     });
-    return out;
+    rows.push({ count: items.length, horizontal: true });
+    return { rects: out, rows };
   }
 
   // Work in cell-area units so the scale cancels out. Recomputed after every
@@ -333,11 +365,26 @@ export function squarify<T extends Sized>(items: T[], rect: IntRect): IntRect[] 
   let left = total;
   let free: IntRect = { ...rect };
   let i = 0;
+  let next = 0;
 
   while (i < items.length) {
+    // A given row, while there is one and the rectangle can still hold it.
+    let fixed: Row | null = null;
+    if (next < given.length) {
+      const g = given[next++];
+      const count = Math.min(g.count, items.length - i);
+      const along = g.horizontal ? free.w : free.h;
+      let run = 0;
+      for (let k = i; k < i + count; k++) {
+        run += Math.max(1, (g.horizontal ? items[k].minW : items[k].minH) ?? 1);
+      }
+      if (count > 0 && run <= along) fixed = { count, horizontal: g.horizontal };
+      else next = given.length;
+    }
+
     // The row runs along the shorter side, which keeps rectangles near square.
-    const side = Math.min(free.w, free.h);
-    const horizontal = free.w <= free.h;
+    const horizontal = fixed ? fixed.horizontal : free.w <= free.h;
+    const side = horizontal ? free.w : free.h;
 
     const row: number[] = [Math.max(0, items[i].area) * scale];
     let sum = row[0];
@@ -352,25 +399,33 @@ export function squarify<T extends Sized>(items: T[], rect: IntRect): IntRect[] 
     // had to scale them all down: measured on 800 files of twelve lines, two
     // panels came out too narrow to draw.
     let minRun = Math.max(1, (horizontal ? items[i].minW : items[i].minH) ?? 1);
-    while (j < items.length) {
-      const next = Math.max(0, items[j].area) * scale;
+    if (fixed) {
+      for (; j < i + fixed.count; j++) {
+        const add = Math.max(0, items[j].area) * scale;
+        row.push(add);
+        sum += add;
+      }
+    }
+    while (!fixed && j < items.length) {
+      const add = Math.max(0, items[j].area) * scale;
       const nextMin = Math.max(1, (horizontal ? items[j].minW : items[j].minH) ?? 1);
       if (minRun + nextMin > side) break;
       const bounds = depthRange(items, i, j, scale, horizontal);
       const shallow = sum / side < bounds.min;
       if (!shallow) {
-        if (worstAspect([...row, next], sum + next, side) > worstAspect(row, sum, side)) break;
+        if (worstAspect([...row, add], sum + add, side) > worstAspect(row, sum, side)) break;
         // A deeper vertical row makes every member wider, so growing it can
         // push one past the widest shape it is able to take.
         const grown = depthRange(items, i, j + 1, scale, horizontal);
-        if (!horizontal && (sum + next) / side > grown.max) break;
+        if (!horizontal && (sum + add) / side > grown.max) break;
       }
-      row.push(next);
-      sum += next;
+      row.push(add);
+      sum += add;
       minRun += nextMin;
       j++;
     }
 
+    rows.push({ count: j - i, horizontal });
     const across = horizontal ? free.h : free.w;
     const isLast = j >= items.length;
     const after = items.length - j;
@@ -429,7 +484,7 @@ export function squarify<T extends Sized>(items: T[], rect: IntRect): IntRect[] 
       break;
     }
   }
-  return out;
+  return { rects: out, rows };
 }
 
 /**
@@ -463,19 +518,56 @@ function gridFallback(count: number, rect: IntRect, out: IntRect[], offset: numb
 }
 
 /**
- * Sorts by descending area, subdivides, and hands each item its rectangle.
- * Sorting is what makes a squarified treemap squarified, and it is stable
- * against small edits only because panel areas are quantized upstream: a file
- * has to grow past a whole size step before it can change places.
+ * How a rectangle was divided: its items by key, in the order they were
+ * placed, and the rows they were placed in. Enough to divide it the same way
+ * again; see `layoutTreemap`.
+ */
+export interface Plan {
+  keys: string[];
+  rows: Row[];
+}
+
+/**
+ * Subdivides and hands each item its rectangle, and returns how it did.
+ *
+ * Fresh, the items go by descending area, which is what makes a squarified
+ * treemap squarified. Given the plan of the last layout, they go in the
+ * order they had there and in the same rows, so a relayout moves what
+ * changed rather than whatever the sort and the row test decide this time:
+ * sorting by area alone moved half of pathsim's panels when one file grew by
+ * five lines. An item the plan does not know goes after the others, where the
+ * rows are chosen as usual, and one it knows that is gone leaves its row.
  */
 export function layoutTreemap<T extends Sized>(
   items: T[],
   rect: IntRect,
   assign: (item: T, r: IntRect) => void,
-): void {
-  const order = items
-    .map((it, i) => ({ it, i }))
-    .sort((a, b) => b.it.area - a.it.area || a.i - b.i);
-  const rects = squarify(order.map((o) => o.it), rect);
+  key?: (item: T) => string,
+  plan?: Plan,
+): Plan {
+  const byArea = (a: { it: T; i: number }, b: { it: T; i: number }) =>
+    b.it.area - a.it.area || a.i - b.i;
+  const indexed = items.map((it, i) => ({ it, i }));
+  let order = indexed.sort(byArea);
+  let given: Row[] = [];
+  if (key && plan) {
+    const at = new Map(plan.keys.map((k, i) => [k, i]));
+    const known = order.filter((o) => at.has(key(o.it)))
+      .sort((a, b) => at.get(key(a.it))! - at.get(key(b.it))!);
+    const fresh = order.filter((o) => !at.has(key(o.it)));
+    order = [...known, ...fresh];
+    // The old rows, less what is gone.
+    const here = new Set(known.map((o) => key(o.it)));
+    let k = 0;
+    for (const r of plan.rows) {
+      let count = 0;
+      for (let n = 0; n < r.count && k < plan.keys.length; n++, k++) {
+        if (here.has(plan.keys[k])) count++;
+      }
+      if (count > 0) given.push({ count, horizontal: r.horizontal });
+    }
+  }
+  const { rects, rows } = subdivide(order.map((o) => o.it), rect, given);
   order.forEach((o, k) => assign(o.it, rects[k]));
+  return { keys: key ? order.map((o) => key(o.it)) : [], rows };
 }

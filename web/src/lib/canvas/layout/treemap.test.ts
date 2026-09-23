@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { distribute } from './treemap.ts';
+import { distribute, subdivide } from './treemap.ts';
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
@@ -70,4 +70,31 @@ test('the largest weight gets the largest piece', () => {
   for (let i = 1; i < out.length; i++) {
     assert.ok(out[i] >= out[i - 1], `${JSON.stringify(out)} is not ordered by weight`);
   }
+});
+
+test('a subdivision given its own rows comes out the same', () => {
+  const items = [40, 31, 22, 17, 9, 6, 3, 2].map((area) => ({ area }));
+  const rect = { x: 0, y: 0, w: 60, h: 40 };
+  const first = subdivide(items, rect, []);
+  const again = subdivide(items, rect, first.rows);
+  assert.deepEqual(again.rects, first.rects);
+  assert.deepEqual(again.rows, first.rows);
+});
+
+test('given rows hold when a weight changes, and the tiling stays exact', () => {
+  const items = [40, 31, 22, 17, 9, 6, 3, 2].map((area) => ({ area }));
+  const rect = { x: 0, y: 0, w: 60, h: 40 };
+  const { rows } = subdivide(items, rect, []);
+  const grown = items.map((it, i) => (i === 3 ? { area: it.area * 1.5 } : it));
+  const out = subdivide(grown, rect, rows);
+  assert.deepEqual(out.rows, rows);
+  const cells = out.rects.reduce((s, r) => s + r.w * r.h, 0);
+  assert.equal(cells, rect.w * rect.h);
+});
+
+test('a given row the rectangle cannot hold ends the given ones', () => {
+  const items = [10, 10, 10].map((area) => ({ area, minW: 8 }));
+  // Three abreast need 24 cells of width, and there are 12.
+  const out = subdivide(items, { x: 0, y: 0, w: 12, h: 40 }, [{ count: 3, horizontal: true }]);
+  for (const r of out.rects) assert.ok(r.w >= 8, `${r.w} wide`);
 });
