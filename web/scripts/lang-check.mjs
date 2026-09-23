@@ -80,42 +80,63 @@ const rects = await page.evaluate(
 );
 await settled(page);
 
-/** Mean colour and luminance spread of every panel, per family. */
+/**
+ * Mean ink colour and luminance spread of every panel, per family.
+ *
+ * The colour is taken over the panel's ink only, the pixels that differ from
+ * its background. The tint colours the code, not the space around it, and a
+ * mean over the whole panel counts empty space as if it were content: when
+ * short files went into one column with room beside it, the whole-panel
+ * measure fell from 8.5 to 3.9 with the tint unchanged, because every panel
+ * that gained empty space was pulled toward the neutral background. The
+ * background is the panel's most common luminance, which is its fill whatever
+ * the theme, light or dark.
+ */
 function sample(png) {
   const { width, data } = decodePng(png);
   const panels = [];
+  const lumAt = (o) => 0.2126 * data[o] / 255 + 0.7152 * data[o + 1] / 255 + 0.0722 * data[o + 2] / 255;
   for (const r of rects) {
+    // The background: the most common luminance, in 64 steps.
+    const hist = new Uint32Array(64);
+    for (let y = r.y; y < r.y + r.h; y++) {
+      for (let x = r.x; x < r.x + r.w; x++) hist[Math.min(63, (lumAt((y * width + x) * 4) * 64) | 0)]++;
+    }
+    let mode = 0;
+    for (let i = 1; i < 64; i++) if (hist[i] > hist[mode]) mode = i;
+    const bg = (mode + 0.5) / 64;
     let sr = 0;
     let sg = 0;
     let sb = 0;
+    let si = 0;
+    let ni = 0;
     let sl = 0;
     let sll = 0;
     let n = 0;
     for (let y = r.y; y < r.y + r.h; y++) {
       for (let x = r.x; x < r.x + r.w; x++) {
         const o = (y * width + x) * 4;
-        const cr = data[o] / 255;
-        const cg = data[o + 1] / 255;
-        const cb = data[o + 2] / 255;
-        const l = 0.2126 * cr + 0.7152 * cg + 0.0722 * cb;
-        sr += cr;
-        sg += cg;
-        sb += cb;
+        const l = lumAt(o);
         sl += l;
         sll += l * l;
         n++;
+        if (Math.abs(l - bg) < 0.04) continue;
+        sr += data[o] / 255;
+        sg += data[o + 1] / 255;
+        sb += data[o + 2] / 255;
+        si += l;
+        ni++;
       }
     }
-    if (n < 40) continue;
+    if (n < 40 || ni < 20) continue;
     const mean = sl / n;
-    const rgb = [sr / n, sg / n, sb / n];
-    // The mean colour at unit luminance: what is left once density is out of
-    // it. The shader tints the same way, applying the family hue at each
+    // The mean ink colour at unit luminance: what is left once density is out
+    // of it. The shader tints the same way, applying the family hue at each
     // texel's own luminance, so this is the axis the pass actually writes on.
-    const k = 1 / Math.max(1e-4, mean);
+    const k = 1 / Math.max(1e-4, si / ni);
     panels.push({
       family: r.family,
-      chroma: [rgb[0] * k, rgb[1] * k, rgb[2] * k],
+      chroma: [(sr / ni) * k, (sg / ni) * k, (sb / ni) * k],
       lum: mean,
       // Within-panel luminance spread: the structure the texture is drawing.
       sd: Math.sqrt(Math.max(0, sll / n - mean * mean)),
