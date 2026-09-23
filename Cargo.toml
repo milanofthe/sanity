@@ -3,7 +3,7 @@ members = ["crates/sanity-core", "crates/sanity-watch", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "1.5.0"
+version = "1.6.0"
 edition = "2021"
 license = "MIT"
 
