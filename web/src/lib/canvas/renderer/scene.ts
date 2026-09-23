@@ -35,6 +35,7 @@ import { SpatialGrid } from '$lib/canvas/spatial';
 import {
   branchHues, labelAt, MIN_LABELLED, PLATE_PAD, placeLabels, type Placement, type ScreenDir,
 } from '$lib/canvas/dirlabels';
+import { edgeMarkAt, edgeMarks, type EdgeMark, type EdgeTarget } from '$lib/canvas/edgemarks';
 import { TILE_GUTTER, TileCache, tileWorld } from './tiles';
 import { sharedPool, type RasterPool } from './rasterpool';
 import {
@@ -1461,8 +1462,7 @@ export class Scene {
       for (const b of this.overviewByChunk.values()) overviewQuads += b.count;
       rectQuads = this.bgRects.count + this.fgRects.count;
     }
-    if (this.labels) this.drawLabels(cam);
-    else this.placement = { labels: [], crumb: null };
+    this.drawOverlay(cam);
 
     this.stats = {
       visibleFiles,
@@ -2169,12 +2169,22 @@ export class Scene {
     // query stands. It reads as one of the same family of signals rather than
     // a mode of its own, and it outranks recency while it is on: someone who
     // typed a name is looking for that file, not for the last thing written.
+    //
+    // After the flash the border keeps the heat colour, a pixel wider than a
+    // hairline, for as long as the lines stay marked, and fades with them. At
+    // the zoom where a project fits the window the marks on the lines cannot
+    // be drawn, so the flash was the only sign there and it was over in half
+    // a second: look away for that long and nothing said where the change
+    // had been.
     const flash = flashAt(f.since);
-    const hot = flash > 0.02;
+    const glow = markStep(f.since);
+    const s = this.pal.surface;
     const border = found
-      ? this.pal.surface.accent
-      : hot ? this.pal.surface.heat : this.pal.surface.border;
-    const borderPx = found ? HAIRLINE_PX + 2 : hot ? HAIRLINE_PX + 2 * flash : HAIRLINE_PX;
+      ? s.accent
+      : flash > 0.02 || glow >= 1 ? s.heat : glow > 0 ? lerp(s.border, s.heat, glow) : s.border;
+    const borderPx = found
+      ? HAIRLINE_PX + 2
+      : HAIRLINE_PX + Math.max(2 * flash, glow > 0 ? 1 : 0);
     // Transparent fill, so this draws only the outline over what is there.
     this.pushRect(this.fgRects, n.x, n.y, n.w, n.h, this.pal.surface.panelBg, 0, border, borderPx);
   }
@@ -3099,8 +3109,65 @@ export class Scene {
    * with it. A few dozen plates and a few hundred glyphs, next to a frame of
    * thousands of panels.
    */
-  private drawLabels(cam: Camera): void {
+  private drawOverlay(cam: Camera): void {
     const { gl } = this;
+    const hw = cam.vw / 2;
+    const hh = cam.vh / 2;
+    const dpr = cam.dpr;
+    this.labelRects.reset();
+    for (const b of this.labelGlyphs.values()) b.reset();
+    this.tf = IDENTITY;
+
+    this.placement = this.labels ? this.pushLabels(cam) : { labels: [], crumb: null };
+    this.pushEdgeMarks(cam);
+    if (this.labelRects.count === 0) return;
+
+    const lc = this.labelCam;
+    lc.vw = cam.vw;
+    lc.vh = cam.vh;
+    lc.dpr = dpr;
+    lc.zoom = 1;
+    lc.x = hw;
+    lc.y = hh;
+    lc.writeMatrix(this.view);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.viewW = gl.drawingBufferWidth;
+    this.viewH = gl.drawingBufferHeight;
+    gl.viewport(0, 0, this.viewW, this.viewH);
+    this.drawRects(this.labelRects);
+    this.writeLabelInk();
+    for (const [size, b] of this.labelGlyphs) if (b.count > 0) this.drawLabelGlyphs(size, b, dpr);
+  }
+
+  /**
+   * Bars on the edge of the view pointing at changed panels outside it; see
+   * edgemarks.ts. For as long as the panel's lines stay marked, and in the
+   * same steps, so they cost no frames the marks do not already cost.
+   */
+  private pushEdgeMarks(cam: Camera): void {
+    if (this.active.size === 0) {
+      this.edges = [];
+      return;
+    }
+    const [vx0, vy0, vx1, vy1] = cam.visibleRect(0);
+    const targets: EdgeTarget[] = [];
+    for (const f of this.active) {
+      const alpha = markStep(f.since);
+      if (alpha <= 0) continue;
+      const n = f.node;
+      if (n.x < vx1 && n.x + n.w > vx0 && n.y < vy1 && n.y + n.h > vy0) continue;
+      const [x, y] = cam.worldToScreen(n.x + n.w / 2, n.y + n.h / 2);
+      targets.push({ path: n.path, x, y, alpha, since: f.since });
+    }
+    this.edges = edgeMarks(targets, cam.vw, cam.vh, cam.dpr);
+    for (const m of this.edges) {
+      this.pushRect(this.labelRects, m.x, m.y, m.w, m.h, this.pal.surface.heat, m.alpha, 0, 0);
+    }
+  }
+
+  /** The directory labels and the breadcrumb, placed and pushed; see
+   *  dirlabels.ts. */
+  private pushLabels(cam: Camera): Placement {
     const zoom = cam.zoom;
     const hw = cam.vw / 2;
     const hh = cam.vh / 2;
@@ -3126,11 +3193,6 @@ export class Scene {
       vw: cam.vw, vh: cam.vh, advance: this.atlas.advanceRatio,
       dpr: cam.dpr,
     });
-    this.placement = p;
-
-    this.labelRects.reset();
-    for (const b of this.labelGlyphs.values()) b.reset();
-    this.tf = IDENTITY;
     const dpr = cam.dpr;
     if (p.crumb) {
       const c = p.crumb;
@@ -3148,22 +3210,7 @@ export class Scene {
       this.pushRect(this.labelRects, l.plate.x, l.plate.y, l.plate.w, l.plate.h, edge, alpha, 0, 0);
       this.pushLabelText(l.text, l.plate.x + PLATE_PAD * l.size, l.plate, l.size, dpr, LabelInk.Text, alpha);
     }
-
-    const lc = this.labelCam;
-    lc.vw = cam.vw;
-    lc.vh = cam.vh;
-    lc.dpr = dpr;
-    lc.zoom = 1;
-    lc.x = hw;
-    lc.y = hh;
-    lc.writeMatrix(this.view);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    this.viewW = gl.drawingBufferWidth;
-    this.viewH = gl.drawingBufferHeight;
-    gl.viewport(0, 0, this.viewW, this.viewH);
-    this.drawRects(this.labelRects);
-    this.writeLabelInk();
-    for (const [size, b] of this.labelGlyphs) if (b.count > 0) this.drawLabelGlyphs(size, b, dpr);
+    return p;
   }
 
   /** A line of label text in a plate, centred on what is visible of it, cap
@@ -3258,6 +3305,15 @@ export class Scene {
   labelAt(sx: number, sy: number): string | null {
     return labelAt(this.placement, sx, sy);
   }
+
+  /** The changed file a mark on the edge of the view points at, if the
+   *  position is on one. */
+  edgeMarkAt(sx: number, sy: number): string | null {
+    return edgeMarkAt(this.edges, sx, sy);
+  }
+
+  /** The marks the last frame drew; see `pushEdgeMarks`. */
+  private edges: EdgeMark[] = [];
 
   /**
    * Changed lines, as a band across the line plus a marker in the margin, and
