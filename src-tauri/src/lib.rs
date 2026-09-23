@@ -8,6 +8,8 @@ use std::process::Command;
 use std::sync::Mutex;
 
 
+mod history;
+
 use sanity_core::find;
 use sanity_watch::{self as watch, is_under, reconcile, DirIndex, WatchSlot};
 use sanity_core::scan::{self, ScannedFile};
@@ -192,6 +194,8 @@ pub struct AppState {
     /// body, which carries no arguments of its own and whose headers are
     /// ASCII, while a path is neither.
     save_to: Mutex<Option<PathBuf>>,
+    /// Payloads read out of the history; see `history::BlobCache`.
+    history: history::BlobCache,
 }
 
 /// 90th percentile of non-blank line widths.
@@ -1152,6 +1156,7 @@ pub fn run() {
                 repo: Mutex::new(Repo::default()),
                 watch: watch::WatchSlot::default(),
                 save_to: Mutex::new(None),
+                history: history::BlobCache::default(),
             });
             Ok(())
         })
@@ -1171,7 +1176,9 @@ pub fn run() {
             repo_index,
             stage_save,
             save_png,
-            log_line
+            log_line,
+            history::history_log,
+            history::history_step
         ])
         .run(tauri::generate_context!())
         .expect("error while running sanity");
