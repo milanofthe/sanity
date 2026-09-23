@@ -78,7 +78,11 @@
 	}
 	.on .knob {
 		background: var(--on-accent);
-		transform: translateX(calc(var(--w-switch) - var(--h-mark) + 2 * var(--sep-w)));
+		/* The inner width, less the knob and a border's width of gap on each
+		   side: the same gap on the right when on as on the left when off. The
+		   borders cancel out, which is why it is the track's width less its
+		   height. It had two borders more, and the knob sat on the frame. */
+		transform: translateX(calc(var(--w-switch) - var(--h-mark)));
 	}
 	input:focus-visible + .track {
 		outline: var(--sep-w) solid var(--accent);
