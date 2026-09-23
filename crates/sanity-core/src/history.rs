@@ -211,6 +211,11 @@ pub fn blobs(root: &Path, ids: &[String]) -> HashMap<String, Vec<u8>> {
     out
 }
 
+/// A file's contents at a commit, or None when it is not there.
+pub fn file_at(root: &Path, sha: &str, path: &str) -> Option<Vec<u8>> {
+    git(root, &["cat-file", "blob", &format!("{sha}:{path}")])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +273,9 @@ mod tests {
         let Source::Blob(id) = &step(&dir, &third, &second).unwrap().changed[0].1 else { panic!() };
         let got = blobs(&dir, std::slice::from_ref(id));
         assert_eq!(got[id], b"fn a() { 1 }\n");
+        let Side::Commit(sha) = &second else { panic!() };
+        assert_eq!(file_at(&dir, sha, "a.rs").unwrap(), b"fn a() { 1 }\n");
+        assert_eq!(file_at(&dir, sha, "nope.rs"), None);
         std::fs::remove_dir_all(&dir).ok();
     }
 

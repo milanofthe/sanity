@@ -1006,13 +1006,25 @@ fn startup() -> Startup {
 
 /// The text of one file, for the readable zoom level. Read on demand rather
 /// than held: the payloads are compact, the source text is not.
+///
+/// `at` a commit when the canvas is showing the history: the file as it was
+/// there, out of the object store rather than off the disk.
 #[tauri::command]
-async fn file_text(path: String, state: State<'_, AppState>) -> Result<String, String> {
+async fn file_text(
+    path: String,
+    at: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     let root = {
         let repo = state.repo.lock().map_err(|e| e.to_string())?;
         repo.root.clone()
     };
-    read_text(&root, &path)
+    match at {
+        Some(sha) => sanity_core::history::file_at(&root, &sha, &path)
+            .map(|bytes| scan::display_text(&path, &bytes))
+            .ok_or_else(|| format!("{path} is not in {sha}")),
+        None => read_text(&root, &path),
+    }
 }
 
 /// Hits for a query across the whole open folder.
