@@ -10,6 +10,7 @@
 // stays in the tens of thousands no matter how large the repository is.
 
 import { Camera } from '$lib/canvas/camera';
+import { clock } from '$lib/canvas/clock';
 import { metrics, overview, timing } from '$lib/metrics';
 import {
   applyTo, fadeOut, finished, IDENTITY, same, settleIn, slideFrom, transformFor,
@@ -1460,7 +1461,7 @@ export class Scene {
     // having to move the camera again.
     if (!this.cameraStill) {
       ticking = true;
-      if (performance.now() - this.movedAt >= REST_QUIET_MS) redraw = true;
+      if (clock.now() - this.movedAt >= REST_QUIET_MS) redraw = true;
     }
     if (this.animating || this.streamPending || this.tilesPending || this.media?.fading()) {
       ticking = true;
@@ -1478,7 +1479,7 @@ export class Scene {
     // the view to come to rest rather than chasing a pan.
     const moving =
       cam.x !== this.camWas.x || cam.y !== this.camWas.y || cam.zoom !== this.camWas.zoom;
-    if (moving) this.movedAt = performance.now();
+    if (moving) this.movedAt = clock.now();
     // At rest only once it has stayed there a moment, not in the first frame
     // without movement. Input arrives at its own rate rather than once per
     // frame, and anything else that keeps the loop going, detail streaming in
@@ -1487,7 +1488,7 @@ export class Scene {
     // from the exact atlas and the pictures 1:1, and the one after from the
     // nominal ones: 159 switches in 160 frames of a wheel zoom, which is the
     // flicker.
-    this.cameraStill = !moving && performance.now() - this.movedAt >= REST_QUIET_MS;
+    this.cameraStill = !moving && clock.now() - this.movedAt >= REST_QUIET_MS;
     this.camWas.x = cam.x;
     this.camWas.y = cam.y;
     this.camWas.zoom = cam.zoom;

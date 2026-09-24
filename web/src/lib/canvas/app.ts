@@ -5,6 +5,7 @@
 // this file never touches the DOM outside its own canvas and label host.
 
 import { Camera } from '$lib/canvas/camera';
+import { clock } from '$lib/canvas/clock';
 import {
   computeLayout, layoutStats, passesUsed,
   type FileEntry, type FileNode, type Layout,
@@ -1046,7 +1047,9 @@ export class CanvasApp {
   }
 
   private frame = (now: number): void => {
-    this.cam.update(now);
+    // On the canvas's clock rather than the frame's timestamp, which is the
+    // wall's: a flight started during a video was timed on the video's.
+    this.cam.update(clock.now());
     const interval = now - this.lastFrame;
     const dt = Math.min(0.1, interval / 1000);
     this.frameMs = interval * 0.15 + this.frameMs * 0.85;

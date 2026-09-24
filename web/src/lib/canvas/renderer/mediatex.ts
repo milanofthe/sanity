@@ -36,6 +36,7 @@
 
 // With the extension: this module is imported by its unit tests, which run
 // in Node without a bundler to resolve it.
+import { clock } from '../clock.ts';
 import { decodeHere, ImageDecoder, isVector, rasteriseSvg, type Pixels } from './imagedecode.ts';
 
 // Every picture texture holds premultiplied colour. A mip chain and the
@@ -340,7 +341,7 @@ export class MediaTextures {
     this.spentThisFrame = 0;
     if (moving) this.movedAt = performance.now();
     // Fades that have run their course let go of what they were fading from.
-    const now = performance.now();
+    const now = clock.now();
     for (const slot of this.slots.values()) {
       if ((slot.prev || slot.fresh) && now - slot.since >= this.fadeMs) this.endFade(slot);
     }
@@ -358,7 +359,7 @@ export class MediaTextures {
   mix(d: Drawable): number {
     const slot = d as Slot;
     if (!slot.prev && !slot.fresh) return 1;
-    return Math.min(1, (performance.now() - slot.since) / this.fadeMs);
+    return Math.min(1, Math.max(0, (clock.now() - slot.since) / this.fadeMs));
   }
 
   private endFade(slot: Slot): void {
@@ -689,7 +690,7 @@ export class MediaTextures {
     }
     this.slots.set(path, {
       tex, w, h, bytes, seen: this.clock, translucent: isTranslucent,
-      exact, native, prev, prevBytes, since: performance.now(), fresh: !old,
+      exact, native, prev, prevBytes, since: clock.now(), fresh: !old,
     });
     this.held += bytes;
     this.trim();

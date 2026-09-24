@@ -1,6 +1,8 @@
 // World space is measured in CSS pixels at zoom 1. The camera maps world to
 // clip space; every LOD decision downstream is derived from `zoom` alone.
 
+import { clock } from './clock.ts';
+
 interface Flight {
   x0: number;
   y0: number;
@@ -170,7 +172,7 @@ export class Camera {
       // at the start and at the end.
       px: pan ? null : (x * target - this.x * z0) / dz,
       py: pan ? 0 : (y * target - this.y * z0) / dz,
-      start: performance.now(),
+      start: clock.now(),
       duration: seconds * 1000,
     };
   }
