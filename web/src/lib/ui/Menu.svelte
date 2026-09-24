@@ -12,6 +12,7 @@
 		open = false,
 		label,
 		width = 'var(--menu-w)',
+		full = false,
 		ontoggle,
 		onclose,
 		children
@@ -19,6 +20,9 @@
 		open?: boolean;
 		label: string;
 		width?: string;
+		/** The sheet spans the window under the toolbar, for a phone, where
+		 *  anything anchored under its trigger would run off the screen. */
+		full?: boolean;
 		ontoggle?: () => void;
 		onclose?: () => void;
 		children: Snippet;
@@ -43,7 +47,7 @@
 		<span class="caret" class:up={open}><Icon name="chevron-down" size={13} /></span>
 	</button>
 	{#if open}
-		<div class="sheet" style:width>
+		<div class="sheet" class:full style:width={full ? null : width}>
 			{@render children()}
 		</div>
 	{/if}
@@ -92,5 +96,14 @@
 		padding: var(--sp-2) 0;
 		max-height: 70vh;
 		overflow-y: auto;
+	}
+	.sheet.full {
+		position: fixed;
+		top: var(--toolbar-h);
+		left: 0;
+		right: 0;
+		max-height: calc(100vh - var(--toolbar-h) - var(--statusbar-h));
+		border-left: none;
+		border-right: none;
 	}
 </style>

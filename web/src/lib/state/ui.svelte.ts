@@ -4,6 +4,10 @@
 
 import { applyTheme, storedTheme, type ThemeId } from '$lib/theme';
 
+/** Widest a window is taken for a phone's: past it the four menus fit side
+ *  by side with the search field, at it they do not. */
+const NARROW_PX = 640;
+
 /** Where the optional view switches are kept between sessions. */
 const TINT_KEY = 'sanity.tintLanguages';
 const LABELS_KEY = 'sanity.dirLabels';
@@ -30,7 +34,14 @@ function storeFlag(key: string, on: boolean): void {
 class UiState {
 	theme = $state<ThemeId>(storedTheme());
 	/** Which toolbar menu is open, if any. One at a time. */
-	openMenu = $state<'project' | 'files' | 'view' | 'theme' | null>(null);
+	openMenu = $state<'project' | 'files' | 'view' | 'theme' | 'all' | null>(null);
+	/**
+	 * The window is a phone's width: the toolbar folds its four menus into
+	 * one and the sheets span the screen. Followed from a media query rather
+	 * than set in CSS, because a component's styles may only use the tokens
+	 * and a media query cannot.
+	 */
+	narrow = $state(false);
 	/**
 	 * Colour the outermost zoom by language family.
 	 *
@@ -81,6 +92,18 @@ class UiState {
 	 * and the canvas cuts over a moment after everything else has faded.
 	 * A cut where the browser has no transitions, or motion is reduced.
 	 */
+	/** Follow the window's width for `narrow`. Called once, by the app. */
+	watchWidth(): void {
+		const q = matchMedia(`(max-width: ${NARROW_PX}px)`);
+		const follow = () => {
+			this.narrow = q.matches;
+			// A menu of the other layout is not in this one to close.
+			this.openMenu = null;
+		};
+		follow();
+		q.addEventListener('change', follow);
+	}
+
 	setTheme(id: ThemeId) {
 		const change = () => {
 			this.theme = id;

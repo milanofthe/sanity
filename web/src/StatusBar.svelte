@@ -4,6 +4,7 @@
 	// on screen at what detail is part of that.
 	import type { CanvasStats } from '$lib/canvas/app';
 	import { project } from '$lib/state/project.svelte';
+	import { ui } from '$lib/state/ui.svelte';
 
 	let {
 		stats,
@@ -64,7 +65,7 @@
 	);
 </script>
 
-<footer>
+<footer class:narrow={ui.narrow}>
 	{#if error}
 		<span class="group err" title={error}>{error}</span>
 	{:else if notice}
@@ -80,7 +81,7 @@
 				<span class="dim">{n(project.stubbedLines)} stubbed</span>
 			{/if}
 		</span>
-		<span class="group">
+		<span class="group tech">
 			lod <b>{stats.lod}</b>
 			<span class="dot">·</span>
 			{stats.pxPerLine.toFixed(2)} px/line
@@ -118,7 +119,7 @@
 		{#if stats.indexing > 0}
 			<span class="group accent">indexing {Math.round(stats.indexing * 100)}%</span>
 		{/if}
-		<span class="group dim">
+		<span class="group dim tech">
 			fill {Math.round(stats.fill * 100)}%
 			<span class="dot">·</span>
 			{n(stats.quads)} quads
@@ -133,6 +134,11 @@
 </footer>
 
 <style>
+	/* On a phone's width, what the renderer is doing gives way to what the
+	   project is: the counts and what is under the finger. */
+	.narrow .tech {
+		display: none;
+	}
 	footer {
 		display: flex;
 		align-items: center;

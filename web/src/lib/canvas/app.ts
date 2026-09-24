@@ -88,6 +88,10 @@ export interface RepoSource {
 
 const UPLOAD_BUDGET_MS = 6;
 
+/** Two taps this close in time and place are a double tap. */
+const DOUBLE_TAP_MS = 300;
+const DOUBLE_TAP_PX = 24;
+
 /** A frame interval that counts as steady, and the longest the arrival of a
  *  new project is held for; see `CanvasApp.releaseAppear`. */
 const APPEAR_STEADY_MS = 34;
@@ -916,6 +920,15 @@ export class CanvasApp {
     return null;
   }
 
+  /** What a double click or a double tap does at a point: fits the panel
+   *  under it, or the whole project over the background. */
+  private fitAt(sx: number, sy: number): void {
+    if ((this.scene?.labelAt(sx, sy) ?? null) !== null) return;
+    const hit = this.fileAt(sx, sy);
+    if (hit) this.focusFile(hit.path);
+    else this.fit();
+  }
+
   private attachInput(): void {
     const c = this.canvas;
     const local = (e: PointerEvent): [number, number] => {
@@ -923,16 +936,46 @@ export class CanvasApp {
       return [e.clientX - r.left, e.clientY - r.top];
     };
 
+    // Every pointer that is down, where it was last: one pans, two pinch.
+    // Positions rather than `movementX`, which touch does not reliably
+    // report, and which a pinch needs anyway, since it is about where the
+    // fingers are relative to each other.
+    const down = new Map<number, [number, number]>();
+    /** Where the last tap was and when, for a double tap. A touch screen
+     *  sends no dblclick worth relying on. */
+    let lastTap = { t: 0, x: 0, y: 0 };
+
     c.addEventListener('pointerdown', (e) => {
-      this.dragging = true;
-      this.moved = false;
+      down.set(e.pointerId, local(e));
       c.setPointerCapture(e.pointerId);
+      if (down.size === 1) {
+        this.dragging = true;
+        this.moved = false;
+      } else {
+        // A second finger makes it a pinch, which is never a click.
+        this.moved = true;
+      }
     });
+    const lift = (e: PointerEvent) => {
+      down.delete(e.pointerId);
+      if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId);
+      if (down.size === 0) this.dragging = false;
+    };
+    c.addEventListener('pointercancel', lift);
     c.addEventListener('pointerup', (e) => {
-      const wasDrag = this.moved;
-      this.dragging = false;
-      c.releasePointerCapture(e.pointerId);
+      const wasDrag = this.moved || down.size > 1;
+      lift(e);
       if (wasDrag) return;
+      if (e.pointerType === 'touch') {
+        const [x, y] = local(e);
+        const now = performance.now();
+        const again = now - lastTap.t < DOUBLE_TAP_MS && Math.hypot(x - lastTap.x, y - lastTap.y) < DOUBLE_TAP_PX;
+        lastTap = again ? { t: 0, x: 0, y: 0 } : { t: now, x, y };
+        if (again) {
+          this.fitAt(x, y);
+          return;
+        }
+      }
       const dir = this.scene?.labelAt(...local(e)) ?? null;
       if (dir !== null) {
         this.focusDir(dir);
@@ -942,10 +985,29 @@ export class CanvasApp {
       if (hit) this.onOpenFile?.(hit.path);
     });
     c.addEventListener('pointermove', (e) => {
-      if (this.dragging) {
-        // A pointer that barely twitches is still a click, not a drag.
-        if (Math.abs(e.movementX) + Math.abs(e.movementY) > 2) this.moved = true;
-        this.cam.panBy(e.movementX, e.movementY);
+      const was = down.get(e.pointerId);
+      if (this.dragging && was) {
+        const now = local(e);
+        if (down.size >= 2) {
+          // The middle of the two fingers and how far apart they are, before
+          // this finger moved and after: the view scales about the middle by
+          // the change in distance, and moves with the middle.
+          const [a, b] = [...down.values()].slice(0, 2);
+          const other = a === was ? b : a;
+          const mid0 = [(was[0] + other[0]) / 2, (was[1] + other[1]) / 2];
+          const mid1 = [(now[0] + other[0]) / 2, (now[1] + other[1]) / 2];
+          const d0 = Math.hypot(was[0] - other[0], was[1] - other[1]);
+          const d1 = Math.hypot(now[0] - other[0], now[1] - other[1]);
+          this.cam.panBy(mid1[0] - mid0[0], mid1[1] - mid0[1]);
+          if (d0 > 0 && d1 > 0) this.cam.zoomAt(mid1[0], mid1[1], d1 / d0);
+        } else {
+          const dx = now[0] - was[0];
+          const dy = now[1] - was[1];
+          // A pointer that barely twitches is still a click, not a drag.
+          if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
+          this.cam.panBy(dx, dy);
+        }
+        down.set(e.pointerId, now);
         this.invalidate();
         return;
       }
@@ -985,14 +1047,8 @@ export class CanvasApp {
     // double click also fires two pointerups, so a header double click opens
     // the file and then fits it, which is the useful reading of both.
     c.addEventListener('dblclick', (e) => {
-      const [sx, sy] = [
-        e.clientX - c.getBoundingClientRect().left,
-        e.clientY - c.getBoundingClientRect().top,
-      ];
-      if ((this.scene?.labelAt(sx, sy) ?? null) !== null) return;
-      const hit = this.fileAt(sx, sy);
-      if (hit) this.focusFile(hit.path);
-      else this.fit();
+      const r = c.getBoundingClientRect();
+      this.fitAt(e.clientX - r.left, e.clientY - r.top);
     });
 
     c.addEventListener('contextmenu', (e) => {

@@ -10,5 +10,7 @@ bridgeErrors();
 
 // The theme has to be on <html> before the canvas resolves its palette.
 ui.apply();
+// Whether the window is a phone's width; see `ui.narrow`.
+ui.watchWidth();
 
 mount(App, { target: document.getElementById('app')! });

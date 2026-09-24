@@ -78,7 +78,7 @@
 	/** Thousands as k, so a hint stays a hint. */
 	const kilo = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
 	const shown = $derived(demos.find((d) => project.demo && d.id === project.root) ?? null);
-	const toggle = (id: 'project' | 'files' | 'view' | 'theme') => () =>
+	const toggle = (id: 'project' | 'files' | 'view' | 'theme' | 'all') => () =>
 		(ui.openMenu = ui.openMenu === id ? null : id);
 	const close = () => (ui.openMenu = null);
 </script>
@@ -88,12 +88,7 @@
 		<SanityMark height={15} />
 	</div>
 
-	<Menu
-		label="Project"
-		open={ui.openMenu === 'project'}
-		ontoggle={toggle('project')}
-		onclose={close}
-	>
+	{#snippet projectBody()}
 		{#if inTauri() || demos.length === 0}
 			<MenuItem
 				label={inTauri() ? 'Open folder…' : 'Generated repo'}
@@ -153,43 +148,71 @@
 				<div class="path">{project.root}</div>
 			</MenuSection>
 		{/if}
-	</Menu>
-
-	<Menu
-		label="Files"
-		width="var(--w-menu-l)"
-		open={ui.openMenu === 'files'}
-		ontoggle={toggle('files')}
-		onclose={close}
-	>
-		<FileTypePicker onignored={(on: boolean) => onignored?.(on)} />
-	</Menu>
-
-	<Menu
-		label="View"
-		width="var(--w-menu-m)"
-		open={ui.openMenu === 'view'}
-		ontoggle={toggle('view')}
-		onclose={close}
-	>
-		<ViewOptions />
-	</Menu>
-
-	<Menu
-		label="Theme"
-		width="auto"
-		open={ui.openMenu === 'theme'}
-		ontoggle={toggle('theme')}
-		onclose={close}
-	>
-		<div class="themes">
+	{/snippet}
+	{#snippet themeBody()}
+		<div class="themes" class:narrow={ui.narrow}>
 			{#each THEMES as t (t.id)}
 				<Choice label={t.label} checked={ui.theme === t.id} onclick={() => ui.setTheme(t.id)}>
 					<ThemePreview theme={t.id} />
 				</Choice>
 			{/each}
 		</div>
-	</Menu>
+	{/snippet}
+
+	{#if ui.narrow}
+		<!-- A phone's width: the four menus one under the other in one sheet
+		     as wide as the screen, since four triggers and a search field do
+		     not fit across it. -->
+		<Menu label="Menu" full open={ui.openMenu === 'all'} ontoggle={toggle('all')} onclose={close}>
+			{@render projectBody()}
+			<MenuSection title="Files">
+				<FileTypePicker onignored={(on: boolean) => onignored?.(on)} />
+			</MenuSection>
+			<ViewOptions />
+			<MenuSection title="Theme">
+				{@render themeBody()}
+			</MenuSection>
+		</Menu>
+	{:else}
+		<Menu
+			label="Project"
+			open={ui.openMenu === 'project'}
+			ontoggle={toggle('project')}
+			onclose={close}
+		>
+			{@render projectBody()}
+		</Menu>
+
+		<Menu
+			label="Files"
+			width="var(--w-menu-l)"
+			open={ui.openMenu === 'files'}
+			ontoggle={toggle('files')}
+			onclose={close}
+		>
+			<FileTypePicker onignored={(on: boolean) => onignored?.(on)} />
+		</Menu>
+
+		<Menu
+			label="View"
+			width="var(--w-menu-m)"
+			open={ui.openMenu === 'view'}
+			ontoggle={toggle('view')}
+			onclose={close}
+		>
+			<ViewOptions />
+		</Menu>
+
+		<Menu
+			label="Theme"
+			width="auto"
+			open={ui.openMenu === 'theme'}
+			ontoggle={toggle('theme')}
+			onclose={close}
+		>
+			{@render themeBody()}
+		</Menu>
+	{/if}
 
 	<span class="spacer"></span>
 
@@ -223,6 +246,8 @@
 
 	{#if busy}
 		<span class="badge busy" title="Scanning">scanning</span>
+	{:else if ui.narrow}
+		<!-- No room; the Project menu says what is showing. -->
 	{:else if project.demo}
 		<span class="badge" title="A snapshot of a public repository, read only">demo</span>
 	{:else if project.synthetic}
@@ -259,6 +284,11 @@
 		grid-template-columns: repeat(4, auto);
 		gap: var(--sp-1);
 		padding: var(--sp-1);
+	}
+	/* Two to a row on a phone, where four ran off the screen. */
+	.themes.narrow {
+		grid-template-columns: repeat(2, auto);
+		justify-content: center;
 	}
 	.path {
 		font-family: var(--font-mono);
