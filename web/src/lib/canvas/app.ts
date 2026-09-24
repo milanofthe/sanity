@@ -5,7 +5,7 @@
 // this file never touches the DOM outside its own canvas and label host.
 
 import { Camera } from '$lib/canvas/camera';
-import { clock } from '$lib/canvas/clock';
+import { advanceClock, clock, holdClock, releaseClock } from '$lib/canvas/clock';
 import {
   computeLayout, layoutStats, passesUsed,
   type FileEntry, type FileNode, type Layout,
@@ -141,6 +141,10 @@ export interface ImageRequest {
  * canvas past its limit does not throw, it loses its context.
  */
 const MAX_IMAGE_EDGE = 8192;
+
+/** Times a video frame is drawn again waiting for what it shows; see
+ *  `captureFrame`. */
+const CAPTURE_TRIES = 60;
 
 export class CanvasApp {
   readonly cam = new Camera();
@@ -293,6 +297,8 @@ export class CanvasApp {
   }
 
   private resize(): void {
+    // The canvas is the video's size until it is done.
+    if (this.capturing) return;
     this.invalidate();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = this.canvas.clientWidth;
@@ -811,6 +817,10 @@ export class CanvasApp {
   /** Redraw, starting the loop again if it had stopped. */
   invalidate(): void {
     this.dirty = true;
+    // A video draws its own frames, at the times they stand for. The loop
+    // would draw between them on the wall clock, which moves everything on
+    // by however long the frame before took to make.
+    if (this.capturing) return;
     if (!this.running) {
       this.running = true;
       this.raf = requestAnimationFrame(this.frame);
@@ -1243,6 +1253,100 @@ export class CanvasApp {
       this.running = false;
       this.invalidate();
     }
+  }
+
+  /** Rendering a video; see `beginCapture`. */
+  private capturing = false;
+  private captureKeep = { x: 0, y: 0, zoom: 1 };
+
+  /**
+   * Take the canvas over for a video.
+   *
+   * The same as an image export in how it sizes the frame, and different in
+   * time: the loop stops and the clock is held, so a frame is drawn when
+   * `captureFrame` asks for one and shows the moment it says, however long it
+   * took to make. Until `endCapture`, which puts everything back.
+   */
+  beginCapture(width: number, height: number): HTMLCanvasElement {
+    if (!this.scene || !this.layout) throw new Error('nothing to render');
+    this.captureKeep = { x: this.cam.x, y: this.cam.y, zoom: this.cam.zoom };
+    this.scene.holdAppear = false;
+    cancelAnimationFrame(this.raf);
+    this.running = false;
+    this.capturing = true;
+    holdClock();
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.cam.vw = width;
+    this.cam.vh = height;
+    this.cam.dpr = 1;
+    this.cam.stop();
+    this.cam.fit(...this.layout.bounds);
+    return this.canvas;
+  }
+
+  /**
+   * Draw the frame `dt` seconds after the last one.
+   *
+   * Drawn again at the same moment until what it shows has arrived: the
+   * panels a step laid out, their text, their overview detail at this size,
+   * their pictures. So a frame in a video is never one with a placeholder in
+   * it that the next frame fills, which would flicker at 60 frames a second.
+   * Bounded, so a picture that never decodes costs a moment, not the video.
+   */
+  async captureFrame(dt: number): Promise<void> {
+    if (!this.scene || !this.capturing) return;
+    advanceClock(dt * 1000);
+    this.cam.update(clock.now());
+    let step = dt;
+    for (let i = 0; i < CAPTURE_TRIES; i++) {
+      this.uploadBudget();
+      this.scene.advance(step);
+      this.scene.render(this.cam, step);
+      step = 0;
+      await this.lastSource?.ready?.();
+      await this.scene.media?.settled();
+      const ready = this.pending.length === 0 && !this.scene.rasterBusy()
+        && !this.scene.detailPending();
+      if (ready) return;
+      // Workers answer in their own tasks.
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+
+  /** Fit the whole project, flying there over `seconds` of the video's
+   *  time, or at once. */
+  captureFit(seconds: number): void {
+    if (!this.layout) return;
+    if (seconds <= 0) this.cam.fit(...this.layout.bounds);
+    else this.cam.flyToRect(...this.layout.bounds, seconds);
+  }
+
+  /** Play out what is moving, off the record: frames drawn at the video's
+   *  pace until nothing is, ten seconds of it at most. */
+  async captureSettle(): Promise<void> {
+    for (let i = 0; i < 600 && this.settling(); i++) await this.captureFrame(1 / 60);
+    await this.captureFrame(0);
+  }
+
+  /** Show `image` along the bottom of the frame, or nothing. */
+  setCaption(image: HTMLCanvasElement | OffscreenCanvas | null): void {
+    this.scene?.setCaption(image);
+  }
+
+  /** Give the canvas back to the window. */
+  endCapture(): void {
+    if (!this.capturing) return;
+    this.capturing = false;
+    this.scene?.setCaption(null);
+    releaseClock();
+    this.resize();
+    this.cam.stop();
+    this.cam.x = this.captureKeep.x;
+    this.cam.y = this.captureKeep.y;
+    this.cam.zoom = this.captureKeep.zoom;
+    this.running = false;
+    this.invalidate();
   }
 
   /** World-space line height, for anything outside that needs the scale. */

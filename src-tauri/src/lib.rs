@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 
 mod history;
+mod video;
 
 use sanity_core::find;
 use sanity_watch::{self as watch, is_under, reconcile, DirIndex, WatchSlot};
@@ -196,6 +197,8 @@ pub struct AppState {
     save_to: Mutex<Option<PathBuf>>,
     /// Payloads read out of the history; see `history::BlobCache`.
     history: history::BlobCache,
+    /// The video being exported, if one is; see `video.rs`.
+    video: video::VideoSlot,
 }
 
 /// 90th percentile of non-blank line widths.
@@ -1114,6 +1117,28 @@ fn save_png(request: tauri::ipc::Request<'_>, state: State<'_, AppState>) -> Res
     write_image(path, bytes)
 }
 
+/// Start writing a video to the path `stage_save` was given.
+#[tauri::command]
+fn video_open(state: State<'_, AppState>) -> Result<(), String> {
+    let path = state.save_to.lock().unwrap().take().ok_or("no file was chosen for the video")?;
+    state.video.open(path)
+}
+
+/// A piece of the video, as a raw body: its offset, then its bytes.
+#[tauri::command]
+fn video_write(request: tauri::ipc::Request<'_>, state: State<'_, AppState>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("video_write expects a raw body".into());
+    };
+    state.video.write(bytes)
+}
+
+/// Finish the video, or throw it away; where it went, if it was kept.
+#[tauri::command]
+fn video_close(keep: bool, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    state.video.close(keep)
+}
+
 /// The part of `save_png` that does not need a window: take the staged path,
 /// refuse the two ways this can be nothing, write the file.
 fn write_image(path: Option<PathBuf>, bytes: &[u8]) -> Result<String, String> {
@@ -1153,6 +1178,7 @@ pub fn run() {
                 watch: watch::WatchSlot::default(),
                 save_to: Mutex::new(None),
                 history: history::BlobCache::default(),
+                video: video::VideoSlot::default(),
             });
             Ok(())
         })
@@ -1172,6 +1198,9 @@ pub fn run() {
             repo_index,
             stage_save,
             save_png,
+            video_open,
+            video_write,
+            video_close,
             log_line,
             history::history_log,
             history::history_step

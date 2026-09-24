@@ -444,6 +444,69 @@ export class Scene {
   private labelRects: InstanceBuffer;
   private labelGlyphs = new Map<number, InstanceBuffer>();
   private labelCam = new Camera();
+
+  /**
+   * A line over the bottom of the frame, in screen space and over everything:
+   * the commit a video is showing. A picture rather than glyphs, since a
+   * commit's subject can hold anything and the atlas holds ASCII.
+   */
+  private caption: { tex: WebGLTexture; w: number; h: number } | null = null;
+
+  /** Show `image` as the caption, in device pixels, or none. */
+  setCaption(image: HTMLCanvasElement | OffscreenCanvas | null): void {
+    const { gl } = this;
+    if (!image) {
+      if (this.caption) gl.deleteTexture(this.caption.tex);
+      this.caption = null;
+      return;
+    }
+    const tex = this.caption?.tex ?? gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    // Premultiplied, as every picture texture is; see imageFS.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.caption = { tex, w: image.width, h: image.height };
+  }
+
+  private drawCaption(cam: Camera): void {
+    const c = this.caption;
+    if (!c) return;
+    const { gl } = this;
+    const lc = this.labelCam;
+    lc.vw = cam.vw;
+    lc.vh = cam.vh;
+    lc.dpr = cam.dpr;
+    lc.zoom = 1;
+    lc.x = cam.vw / 2;
+    lc.y = cam.vh / 2;
+    this.setView(lc);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.viewW = gl.drawingBufferWidth;
+    this.viewH = gl.drawingBufferHeight;
+    gl.viewport(0, 0, this.viewW, this.viewH);
+    gl.useProgram(this.progImage);
+    gl.uniformMatrix3fv(this.uImage.uView, false, this.view);
+    this.pixelUniforms(this.uImage);
+    gl.uniform1i(this.uImage.uTex, 0);
+    gl.uniform2f(this.uImage.uViewport, this.viewW, this.viewH);
+    // Texel on pixel, along the bottom edge.
+    gl.uniform1f(this.uImage.uExact, 1);
+    gl.uniform2f(this.uImage.uTexPx, c.w, c.h);
+    gl.uniform1f(this.uImage.uFade, 1);
+    gl.uniform4f(this.uImage.uUv, 0, 0, 1, 1);
+    const h = c.h / cam.dpr;
+    gl.uniform4f(this.uImage.uRect, 0, cam.vh - h, c.w / cam.dpr, h);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, c.tex);
+    quadAttrib(gl, this.progImage, this.quad);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
   /** Ink per label slot: see `writeLabelInk`. */
   private labelInk = new Float32Array(16 * 3);
   /** What the last frame placed, for what a click lands on. */
@@ -1089,6 +1152,12 @@ export class Scene {
   }
 
   /** Overviews still out on a worker. */
+  /** Detail this view asked for and has not got yet: overview levels still
+   *  to be written, or tiles still to be made. */
+  detailPending(): boolean {
+    return this.streamPending || this.tilesPending;
+  }
+
   rasterBusy(): boolean {
     return (this.pool?.busy ?? 0) > 0;
   }
@@ -1521,6 +1590,7 @@ export class Scene {
     }
     if (this.labels) this.drawLabels(cam);
     else this.placement = { labels: [], crumb: null };
+    this.drawCaption(cam);
 
     this.stats = {
       visibleFiles,
