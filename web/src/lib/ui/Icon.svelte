@@ -19,6 +19,7 @@
 		| 'folder'
 		| 'search'
 		| 'image'
+		| 'video'
 		| 'check';
 
 	const paths: Record<IconName, string> = {
@@ -34,6 +35,7 @@
 		search: 'M10.5 6.5a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM9.5 9.5 14 14',
 		// A frame with a horizon in it: an image file.
 		image: 'M2 3.5h12v9H2zM2 10.5 5.5 7l3 3 2-2 3.5 3.5',
+		video: 'M1.5 4h9v8h-9zM10.5 7 14.5 4.5v7L10.5 9',
 		check: 'M3 8.5 6.5 12 13 4.5'
 	};
 

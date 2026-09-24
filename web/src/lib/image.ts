@@ -35,13 +35,18 @@ export const IMAGE_HEIGHT = 2160;
  * being written.
  */
 export function imageName(region: 'view' | 'project'): string {
+  return exportName(region, 'png');
+}
+
+/** The project's name, what the file holds, the second, and `ext`. */
+export function exportName(what: string, ext: string): string {
   const root = project.root.split('/').filter(Boolean).pop() || 'sanity';
   const t = new Date();
   const p = (n: number) => `${n}`.padStart(2, '0');
   const stamp =
     `${t.getFullYear()}${p(t.getMonth() + 1)}${p(t.getDate())}` +
     `-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}`;
-  return `${root}-${region}-${stamp}.png`;
+  return `${root}-${what}-${stamp}.${ext}`;
 }
 
 /**

@@ -17,6 +17,8 @@ import type { TextSource } from '$lib/canvas/renderer/scene';
 import { project, type FileGroup } from '$lib/state/project.svelte';
 import { history, type Commit } from '$lib/state/history.svelte';
 import { ui } from '$lib/state/ui.svelte';
+import type { StreamTargetChunk } from 'mediabunny';
+import type { ReplaySource, VideoSink } from '$lib/video';
 import { unpack } from './payload.ts';
 import { THUMB_MAX, unpackThumbs } from './thumbs.ts';
 
@@ -504,7 +506,7 @@ async function catchUp(app: CanvasApp): Promise<void> {
   }
 }
 
-async function stepTo(app: CanvasApp, index: number): Promise<void> {
+async function stepTo(app: CanvasApp, index: number, fit = true): Promise<void> {
   if (!scan) return;
   const from = history.at >= 0 ? history.commits[history.at].sha : null;
   const to = index >= 0 ? history.commits[index].sha : null;
@@ -535,9 +537,69 @@ async function stepTo(app: CanvasApp, index: number): Promise<void> {
   // The whole project, which is what a step can have moved: a commit that
   // adds or removes files is laid out again, and its panels slide to their
   // new places.
-  if (ui.historyFollow) app.fit();
+  if (fit && ui.historyFollow) app.fit();
   uiLog(
     `history: ${to ? to.slice(0, 8) : 'working tree'}, ` +
       `${header.rows.length} changed, ${header.removed.length} removed`,
   );
+}
+
+// --- The history as a video ------------------------------------------------
+
+/**
+ * The history, played for a video: straight to each commit it is asked for,
+ * as the ticker goes, but without the ticker's own fit, since the video
+ * frames the project itself and on its own clock.
+ *
+ * The ticker is held while it runs, so a click or an arrow key cannot step
+ * the canvas somewhere between two frames; `release` lets go of it and sends
+ * the canvas back to where the ticker was.
+ */
+export function historyReplay(app: CanvasApp): ReplaySource & { release(): void } {
+  const was = history.target;
+  stepping = true;
+  const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
+  return {
+    async go(index) {
+      history.target = index;
+      await stepTo(app, index, false);
+    },
+    caption(index) {
+      const c = history.commits[index];
+      if (!c) return { meta: '', subject: 'working tree' };
+      return { meta: `${day(c.time)}  ${c.sha.slice(0, 7)}`, subject: c.subject };
+    },
+    release() {
+      stepping = false;
+      historyGo(app, was);
+    },
+  };
+}
+
+/**
+ * Ask where a video goes and open the file, or null when that was cancelled.
+ *
+ * The muxer's pieces go over as they come, each with the offset it belongs
+ * at, as a raw body like an image's bytes; see src-tauri/src/video.rs.
+ */
+export async function openVideoSink(name: string): Promise<VideoSink | null> {
+  const path = await save({
+    defaultPath: name,
+    filters: [{ name: 'MP4 video', extensions: ['mp4'] }],
+  });
+  if (!path) return null;
+  await invoke('stage_save', { path });
+  await invoke('video_open');
+  const writable = new WritableStream<StreamTargetChunk>({
+    async write(chunk) {
+      const piece = new Uint8Array(8 + chunk.data.byteLength);
+      new DataView(piece.buffer).setBigUint64(0, BigInt(chunk.position), true);
+      piece.set(chunk.data, 8);
+      await invoke('video_write', piece);
+    },
+  });
+  return {
+    writable,
+    close: (keep) => invoke<string | null>('video_close', { keep }),
+  };
 }

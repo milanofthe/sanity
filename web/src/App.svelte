@@ -7,6 +7,7 @@
 	import MenuSection from '$lib/ui/MenuSection.svelte';
 	import Canvas from './Canvas.svelte';
 	import StatusBar from './StatusBar.svelte';
+	import ExportVideo from './ExportVideo.svelte';
 	import type { CanvasApp, CanvasStats } from '$lib/canvas/app';
 	import { project } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
@@ -31,6 +32,8 @@
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let ctx = $state<{ x: number; y: number; path: string | null } | null>(null);
+	/** The video export's dialog, open or not. */
+	let videoOpen = $state(false);
 	/** The repositories this build has a dump of, empty in the desktop app. */
 	let demos = $state<DemoRepo[]>([]);
 	/** One line about something that just happened, such as where an image was
@@ -351,6 +354,9 @@
 
 	function onKeyDown(e: KeyboardEvent) {
 		if (e.target instanceof HTMLInputElement) return;
+		// The dialog has the keyboard, and while a video renders the canvas
+		// and the ticker are its.
+		if (videoOpen) return;
 		// Slash and the platform's find key both land in the query field, which
 		// is where every other tool on this machine puts them.
 		if (e.key === '/' || ((e.metaKey || e.ctrlKey) && e.key === 'f')) {
@@ -453,6 +459,19 @@
 			}}
 		/>
 	</MenuSection>
+	{#if history.commits.length > 1}
+		<MenuSection title="Video">
+			<MenuItem
+				label="Export history"
+				icon="video"
+				hint="MP4"
+				onclick={() => {
+					ctx = null;
+					videoOpen = true;
+				}}
+			/>
+		</MenuSection>
+	{/if}
 	<MenuSection title="Image">
 		<MenuItem
 			label="Save this view"
@@ -474,3 +493,10 @@
 		/>
 	</MenuSection>
 </ContextMenu>
+
+<ExportVideo
+	open={videoOpen}
+	{app}
+	onclose={() => (videoOpen = false)}
+	ondone={(to) => say(`wrote ${to}`)}
+/>
