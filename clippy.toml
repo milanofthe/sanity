@@ -1,0 +1,5 @@
+# Every child process goes through sanity_core::process, which starts it
+# without a console window on Windows; see that module.
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "use sanity_core::process::command or ::git, which open no console window on Windows" },
+]

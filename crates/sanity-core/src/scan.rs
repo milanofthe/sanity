@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use crate::process;
 
 use crate::lang::{extension_of, grammar_for_extension};
 use crate::tokenize::tokenize;
@@ -64,9 +64,7 @@ impl From<std::io::Error> for ScanError {
 /// git's own semantics, including nested ignore files, excludesfile and the
 /// user's global config.
 pub fn git_listed_files(root: &Path) -> Option<Vec<String>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let out = process::git(root)
         .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
         .output()
         .ok()?;
@@ -91,9 +89,7 @@ pub fn git_listed_files(root: &Path) -> Option<Vec<String>> {
 /// has stopped being a monitor. Returns what fits and how many there were, so
 /// the UI can say which it is showing.
 pub fn git_ignored_files(root: &Path, cap: usize) -> (Vec<String>, usize) {
-    let Ok(out) = Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let Ok(out) = process::git(root)
         .args(["ls-files", "-z", "--others", "--ignored", "--exclude-standard"])
         .output()
     else {
@@ -451,9 +447,7 @@ pub fn list_files_under(root: &Path, dir: &str) -> Vec<String> {
     let listed = if dir.is_empty() {
         list_files(root).unwrap_or_default()
     } else {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(root)
+        let out = process::git(root)
             .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
             .arg(dir)
             .output();
@@ -496,9 +490,7 @@ pub(crate) fn git_stdin(root: &Path, args: &[&str], paths: &[String], sep: u8) -
     if paths.is_empty() {
         return None;
     }
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let mut child = process::git(root)
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -701,7 +693,7 @@ mod tests {
         std::fs::write(dir.join("a/sub/two.rs"), "y\n").unwrap();
         std::fs::write(dir.join("keep.rs"), "z\n").unwrap();
         let git = |args: &[&str]| {
-            Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap();
+            process::git(&dir).args(args).output().unwrap();
         };
         git(&["init", "-q"]);
         git(&["add", "-A"]);

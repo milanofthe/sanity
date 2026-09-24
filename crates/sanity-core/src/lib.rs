@@ -10,6 +10,7 @@ pub mod lang;
 pub mod media;
 pub mod notebook;
 pub mod pdf;
+pub mod process;
 pub mod scan;
 pub mod simple;
 pub mod thumb;

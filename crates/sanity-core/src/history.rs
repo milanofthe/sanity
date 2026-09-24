@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use crate::process;
 
 /// One commit, as the ticker shows it.
 #[derive(Debug, Clone)]
@@ -47,7 +47,7 @@ pub struct Step {
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = Command::new("git").arg("-C").arg(root).args(args).output().ok()?;
+    let out = process::git(root).args(args).output().ok()?;
     out.status.success().then_some(out.stdout)
 }
 
@@ -164,9 +164,7 @@ pub fn blobs(root: &Path, ids: &[String]) -> HashMap<String, Vec<u8>> {
     if ids.is_empty() {
         return out;
     }
-    let Ok(mut child) = Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let Ok(mut child) = process::git(root)
         .args(["cat-file", "--batch"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -228,7 +226,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
-            let ok = Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap().status.success();
+            let ok = process::git(&dir).args(args).output().unwrap().status.success();
             assert!(ok, "git {args:?}");
         };
         let commit = |msg: &str| {
@@ -348,7 +346,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
-            let ok = Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap().status.success();
+            let ok = process::git(&dir).args(args).output().unwrap().status.success();
             assert!(ok, "git {args:?}");
         };
         run(&["init", "-q"]);

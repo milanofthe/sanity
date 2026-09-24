@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use sanity_core::process;
 use std::sync::Mutex;
 
 
@@ -920,7 +920,7 @@ async fn open_in_editor(path: String, state: State<'_, AppState>) -> Result<Stri
         let base = program.rsplit('/').next().unwrap_or(&program);
         if !TERMINAL_EDITORS.contains(&base) {
             let args: Vec<String> = parts.map(str::to_string).collect();
-            let spawned: Result<String, String> = Command::new(&program)
+            let spawned: Result<String, String> = process::command(&program)
                 .args(&args)
                 .arg(&canonical)
                 .spawn()
@@ -939,7 +939,7 @@ async fn open_in_editor(path: String, state: State<'_, AppState>) -> Result<Stri
 
 #[cfg(target_os = "macos")]
 fn platform_open(path: &Path) -> Result<String, String> {
-    Command::new("open")
+    process::command("open")
         .arg(path)
         .spawn()
         .map(|_| "open".to_string())
@@ -948,7 +948,7 @@ fn platform_open(path: &Path) -> Result<String, String> {
 
 #[cfg(target_os = "linux")]
 fn platform_open(path: &Path) -> Result<String, String> {
-    Command::new("xdg-open")
+    process::command("xdg-open")
         .arg(path)
         .spawn()
         .map(|_| "xdg-open".to_string())
@@ -957,7 +957,7 @@ fn platform_open(path: &Path) -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn platform_open(path: &Path) -> Result<String, String> {
-    Command::new("cmd")
+    process::command("cmd")
         .args(["/C", "start", ""])
         .arg(path)
         .spawn()
