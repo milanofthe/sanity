@@ -303,6 +303,140 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Every file and its contents at one end of a step: a commit's tree, or
+    /// the disk, which is what the canvas shows in the present.
+    fn truth(dir: &Path, side: &Side) -> std::collections::BTreeMap<String, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        match side {
+            Side::Commit(c) => {
+                let list = git(dir, &["ls-tree", "-r", "-z", "--name-only", c]).unwrap();
+                for p in list.split(|&b| b == 0).filter(|p| !p.is_empty()) {
+                    let p = String::from_utf8_lossy(p).into_owned();
+                    let body = file_at(dir, c, &p).unwrap();
+                    out.insert(p, body);
+                }
+            }
+            Side::Live => {
+                let mut todo = vec![dir.to_path_buf()];
+                while let Some(d) = todo.pop() {
+                    for e in std::fs::read_dir(&d).unwrap().flatten() {
+                        let path = e.path();
+                        if path.file_name().is_some_and(|n| n == ".git") {
+                            continue;
+                        }
+                        if path.is_dir() {
+                            todo.push(path);
+                        } else {
+                            let rel = path.strip_prefix(dir).unwrap().to_string_lossy().into_owned();
+                            out.insert(rel, std::fs::read(&path).unwrap());
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn jumping_through_the_history_lands_where_walking_does() {
+        // Holding an arrow key moves the ticker's target faster than steps
+        // play, and the canvas jumps straight to wherever it has got to: from
+        // the working tree to a commit, from any commit to any other, and back.
+        // Whatever the jumps, what the canvas holds afterwards has to be the
+        // commit, as it would be one step at a time.
+        let dir = std::env::temp_dir().join(format!("sanity-history-jumps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap().status.success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q"]);
+        // A fixed sequence of pseudo random edits: files added, changed,
+        // deleted and added again, some of them in a directory.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let names = ["a.rs", "b.rs", "c.py", "src/d.rs", "src/e.rs", "src/deep/f.md", "g.txt"];
+        for i in 0..14 {
+            for _ in 0..1 + next(3) {
+                let name = names[next(names.len() as u64) as usize];
+                let path = dir.join(name);
+                if path.exists() && next(3) == 0 {
+                    std::fs::remove_file(&path).unwrap();
+                } else {
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(&path, format!("// {name} in commit {i}\n{}\n", "x".repeat(next(40) as usize))).unwrap();
+                }
+            }
+            run(&["add", "-A"]);
+            run(&["-c", "user.email=x@y", "-c", "user.name=Ada", "commit", "-q", "--allow-empty", "-m", &format!("c{i}")]);
+        }
+        // The working tree differs from the last commit every way it can:
+        // an edit, a tracked file deleted, a file staged but not committed,
+        // and one git does not know about.
+        let tracked = truth(&dir, &Side::Commit("HEAD".into()));
+        let mut paths = tracked.keys();
+        std::fs::write(dir.join(paths.next().unwrap()), "edited, not committed\n").unwrap();
+        std::fs::remove_file(dir.join(paths.next().unwrap())).unwrap();
+        std::fs::write(dir.join("staged.rs"), "staged\n").unwrap();
+        run(&["add", "staged.rs"]);
+        std::fs::write(dir.join("untracked.rs"), "untracked\n").unwrap();
+
+        let log = commits(&dir, 0, 100);
+        assert_eq!(log.len(), 14);
+        let side = |i: i64| if i < 0 { Side::Live } else { Side::Commit(log[i as usize].sha.clone()) };
+
+        // What the canvas holds, from the working tree as scanned.
+        let mut held = truth(&dir, &Side::Live);
+        let mut at: i64 = -1;
+        let mut jumps = 0;
+        for round in 0..6 {
+            // Older in jumps of one to four, as far as the key is held, then
+            // newer again, the last round all the way back to the present.
+            let deepest = 2 + next(12) as i64;
+            let mut path = Vec::new();
+            let mut t = at;
+            while t < deepest {
+                t = (t + 1 + next(4) as i64).min(13);
+                path.push(t);
+            }
+            let back_to = if round == 5 { -1 } else { next(4) as i64 - 1 };
+            while t > back_to {
+                t = (t - 1 - next(4) as i64).max(back_to);
+                path.push(t);
+            }
+            for to in path {
+                let s = step(&dir, &side(at), &side(to)).unwrap();
+                for p in &s.removed {
+                    held.remove(p);
+                }
+                let ids: Vec<String> = s.changed.iter().filter_map(|(_, src)| match src {
+                    Source::Blob(id) => Some(id.clone()),
+                    Source::Disk => None,
+                }).collect();
+                let got = blobs(&dir, &ids);
+                for (p, src) in &s.changed {
+                    let body = match src {
+                        Source::Blob(id) => got[id].clone(),
+                        Source::Disk => std::fs::read(dir.join(p)).unwrap(),
+                    };
+                    held.insert(p.clone(), body);
+                }
+                at = to;
+                jumps += 1;
+                assert_eq!(held, truth(&dir, &side(to)), "after jumping to {to}, jump {jumps}");
+            }
+        }
+        assert_eq!(at, -1);
+        assert!(jumps > 20, "only {jumps} jumps");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn a_folder_without_git_has_no_history() {
         let dir = std::env::temp_dir().join(format!("sanity-nohistory-{}", std::process::id()));
