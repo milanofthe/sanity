@@ -19,6 +19,7 @@ import { history, type Commit } from '$lib/state/history.svelte';
 import { ui } from '$lib/state/ui.svelte';
 import type { StreamTargetChunk } from 'mediabunny';
 import type { ReplaySource, VideoSink } from '$lib/video';
+import { mediaKey, parseMediaKey } from '$lib/canvas/mediakey';
 import { unpack } from './payload.ts';
 import { THUMB_MAX, unpackThumbs } from './thumbs.ts';
 
@@ -35,6 +36,8 @@ interface ScanFile {
   clipCols?: number;
   /** Present when the file is a picture; see `sanity_core::media`. */
   media?: MediaSize;
+  /** Which version of a picture this is; see canvas/mediakey.ts. */
+  version?: string;
 }
 
 interface ScanResult {
@@ -217,7 +220,8 @@ export async function loadRepo(path: string): Promise<void> {
   project.setIgnoredCounts(scan.ignoredTotal, scan.ignoredShown);
 }
 
-/** The small version of each picture, by path; see sources/thumbs.ts. */
+/** The small version of each picture, by its key; see sources/thumbs.ts and
+ *  canvas/mediakey.ts. */
 let thumbs = new Map<string, ArrayBuffer>();
 
 /**
@@ -228,13 +232,26 @@ let thumbs = new Map<string, ArrayBuffer>();
  * be one reply of a hundred megabytes. `onBatch` wakes the render loop, which
  * parks as soon as the scene is still.
  */
-async function loadThumbs(paths: string[], onBatch: () => void): Promise<void> {
+async function loadThumbs(pictures: { path: string; version?: string }[], onBatch: () => void): Promise<void> {
   const BATCH = 48;
-  for (let i = 0; i < paths.length; i += BATCH) {
-    const slice = paths.slice(i, i + BATCH);
+  // Only what is not held: a step through the history lays the canvas out
+  // again, and asking for every picture's thumbnail on each step was asking
+  // for all of them again.
+  const todo = pictures.filter((p) => !thumbs.has(mediaKey(p.path, p.version)));
+  for (let i = 0; i < todo.length; i += BATCH) {
+    const slice = todo.slice(i, i + BATCH);
     try {
-      const reply = await invoke<ArrayBuffer>('thumbs', { paths: slice });
-      for (const [path, bytes] of unpackThumbs(reply)) thumbs.set(path, bytes);
+      const reply = await invoke<ArrayBuffer>('thumbs', {
+        paths: slice.map((p) => p.path),
+        versions: slice.map((p) => p.version ?? null),
+      });
+      // By path, which a batch holds once each: the reply leaves out the
+      // pictures it could not make a thumbnail of.
+      const got = unpackThumbs(reply);
+      for (const p of slice) {
+        const bytes = got.get(p.path);
+        if (bytes) thumbs.set(mediaKey(p.path, p.version), bytes);
+      }
       onBatch();
     } catch {
       return;
@@ -255,9 +272,11 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       maxCols: f.maxCols,
       clipCols: f.clipCols,
       // A document shows every page when the option is on; see `pageGrid`.
-      media: f.media && f.media.kind === 'document' && ui.expandDocuments
-        ? { ...f.media, expanded: true }
-        : f.media,
+      media: f.media && {
+        ...f.media,
+        ...(f.media.kind === 'document' && ui.expandDocuments ? { expanded: true } : {}),
+        ...(f.version ? { version: f.version } : {}),
+      },
       // A file git ignores is a placeholder whatever its type is set to: its
       // contents were never read, so there is nothing to draw in it.
       stub: f.ignored === true || project.modeForPath(f.path) === 'reduced',
@@ -267,7 +286,9 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
   text.onLoad = () => app.invalidate();
   // Pictures first at thumbnail size, in the background: the canvas opens on
   // the placeholders and fills in as the batches land.
-  const pictures = entries.filter((e) => e.media && e.media.kind === 'image').map((e) => e.path);
+  const pictures = entries
+    .filter((e) => e.media && e.media.kind === 'image')
+    .map((e) => ({ path: e.path, version: e.media?.version }));
   if (pictures.length > 0) void loadThumbs(pictures, () => app.invalidate());
   app.open(
     {
@@ -281,22 +302,22 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       // multi-megapixel decode in the window. Past it, the source, which is
       // read as it is for an image and rasterised by the platform for a
       // document, first page only. See `thumbs` and `pdf_page`.
+      // The version in the key says where the bytes are: the disk, or a
+      // blob when the canvas shows a commit. See canvas/mediakey.ts.
       imageBytes: (key: string, level: number) => {
-        // A page of an expanded document, keyed by the scene as `path#page=n`.
-        const page = /^(.*)#page=(\d+)$/.exec(key);
-        if (page) {
-          return invoke<ArrayBuffer>('pdf_page', { path: page[1], width: level, page: Number(page[2]) })
+        const { path, version = null, page } = parseMediaKey(key);
+        if (page !== undefined) {
+          return invoke<ArrayBuffer>('pdf_page', { path, width: level, page, version })
             .catch(() => null);
         }
-        const path = key;
         if (level <= THUMB_MAX) {
-          const held = thumbs.get(path);
+          const held = thumbs.get(key);
           if (held) return Promise.resolve(held);
         }
         return (
           path.toLowerCase().endsWith('.pdf')
-            ? invoke<ArrayBuffer>('pdf_page', { path, width: level })
-            : invoke<ArrayBuffer>('file_bytes', { path })
+            ? invoke<ArrayBuffer>('pdf_page', { path, width: level, version })
+            : invoke<ArrayBuffer>('file_bytes', { path, version })
         ).catch(() => null);
       },
     },
@@ -381,9 +402,17 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
           project.refreshGroups(scan.groups);
           return;
         }
-        const structural = await app.applyBatch(
+        let structural = await app.applyBatch(
           fresh, batch.removed, () => restructure(app), true,
         );
+        // A picture that changed is a new version, which is in the index
+        // rather than in the payload: without it the picture keeps its key
+        // and is drawn as it was. See canvas/mediakey.ts.
+        const pictures = new Set(scan?.files.filter((f) => f.media).map((f) => f.path));
+        if (!structural && batch.changed.some((p) => pictures.has(p))) {
+          await restructure(app);
+          structural = true;
+        }
 
         // From the scene rather than from a local tally: the scene has every
         // drawn file's state, and counting only the files this session has

@@ -135,6 +135,8 @@ export interface MediaSize {
   /** A document shown as all of its pages rather than its first; see
    *  `pageGrid`. */
   expanded?: boolean;
+  /** Which version of the file this is; see canvas/mediakey.ts. */
+  version?: string;
 }
 
 /** Space between two pages of an expanded document, as a share of a page's

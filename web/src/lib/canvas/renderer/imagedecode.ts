@@ -12,6 +12,8 @@
 // since a worker cannot draw one. It has no resolution of its own to be
 // scaled from, so it is crisp at any size.
 
+import { mediaPath } from '../mediakey.ts';
+
 export interface Pixels {
   w: number;
   h: number;
@@ -23,7 +25,8 @@ export interface Pixels {
 
 /** Whether a path is a picture drawn from a description rather than pixels. */
 export function isVector(path: string): boolean {
-  return path.toLowerCase().endsWith('.svg');
+  // A picture's key may carry its version and page after the path.
+  return mediaPath(path).toLowerCase().endsWith('.svg');
 }
 
 /** Two at once: a decode is a few tens of milliseconds, and the frame loop

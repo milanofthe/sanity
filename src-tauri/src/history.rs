@@ -123,7 +123,12 @@ fn contents(
                         if data.flags & FLAG_BINARY != 0 && info.media.is_none() {
                             None
                         } else {
-                            let row = file_info(path, &data, &info);
+                            let mut row = file_info(path, &data, &info);
+                            // A picture out of the history is the blob, not
+                            // the file on disk; see `FileInfo::version`.
+                            if row.media.is_some() {
+                                row.version = Some(format!("blob:{id}"));
+                            }
                             let payload = encode(&data);
                             if cache.1 + payload.len() > CACHE_BYTES {
                                 cache.0.clear();

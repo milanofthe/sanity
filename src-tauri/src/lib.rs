@@ -49,6 +49,14 @@ pub struct FileInfo {
     /// `sanity_core::media`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<MediaInfo>,
+    /// Which version of a picture this row is, for pictures only: the file's
+    /// modification time and size on disk, or `blob:<id>` for a row out of the
+    /// history. Part of the key the window holds a picture by, so a picture
+    /// that changed on disk is fetched again rather than drawn as it was, and
+    /// one shown at a commit is fetched from that commit rather than from
+    /// the disk, where it may be different or gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// What a picture is, for the layout. Flat rather than an enum so the
@@ -367,6 +375,7 @@ fn file_info(rel: &str, data: &FileData, info: &ScannedFile) -> FileInfo {
         max_cols: width_percentile(&data.line_cols, 0.9),
         clip_cols: info.max_cols,
         media: info.media.map(MediaInfo::from),
+        version: info.media.map(|_| format!("{}-{}", info.mtime, info.byte_len)),
     }
 }
 
@@ -391,6 +400,7 @@ fn ignored_info(rel: &str) -> FileInfo {
         max_cols: 0,
         clip_cols: 0,
         media: None,
+        version: None,
     }
 }
 
@@ -481,6 +491,7 @@ fn trim_thumb_cache(dir: &Path) {
 #[tauri::command]
 async fn thumbs(
     paths: Vec<String>,
+    versions: Option<Vec<Option<String>>>,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
@@ -502,20 +513,34 @@ async fn thumbs(
         })
         .collect();
 
+    // A picture shown at a commit is its blob; see `FileInfo::version`.
+    let blob_of = |i: usize| {
+        versions.as_ref().and_then(|v| version_blob(v.get(i)?.as_deref())).map(str::to_string)
+    };
+
     let cache = thumb_cache_dir(&app);
-    // What the cache already holds, and what is left to decode.
+    // What the cache already holds, and what is left to decode. A blob is
+    // keyed by its id, which names its contents, so its entry never goes
+    // stale.
     let mut held: Vec<Option<Vec<u8>>> = Vec::with_capacity(paths.len());
     let mut keys: Vec<Option<PathBuf>> = Vec::with_capacity(paths.len());
     let mut todo: Vec<PathBuf> = Vec::new();
-    for full in &inside {
-        let key = full
-            .as_ref()
-            .zip(cache.as_ref())
-            .and_then(|(f, dir)| thumb_key(f).map(|k| dir.join(k)));
+    let mut blobs_todo: Vec<String> = Vec::new();
+    for (i, full) in inside.iter().enumerate() {
+        let blob = blob_of(i);
+        let key = match &blob {
+            Some(id) => cache.as_ref().map(|dir| dir.join(format!("blob-{id}.png"))),
+            None => full
+                .as_ref()
+                .zip(cache.as_ref())
+                .and_then(|(f, dir)| thumb_key(f).map(|k| dir.join(k))),
+        };
         let hit = key.as_ref().and_then(|k| std::fs::read(k).ok());
         if hit.is_none() {
-            if let Some(f) = full {
-                todo.push(f.clone());
+            match (&blob, full) {
+                (Some(id), _) => blobs_todo.push(id.clone()),
+                (None, Some(f)) => todo.push(f.clone()),
+                (None, None) => {}
             }
         }
         keys.push(key);
@@ -524,18 +549,28 @@ async fn thumbs(
 
     let made = sanity_core::thumb::thumbnails(&todo, sanity_core::thumb::THUMB_MAX);
     let mut fresh = made.into_iter();
+    let blob_bytes = sanity_core::history::blobs(&root, &blobs_todo);
     let mut wrote = false;
     let mut out: Vec<u8> = Vec::new();
     out.extend_from_slice(&(paths.len() as u32).to_le_bytes());
     for (i, rel) in paths.iter().enumerate() {
         let mut data = held[i].take().unwrap_or_default();
-        if data.is_empty() && inside[i].is_some() {
-            if let Some(png) = fresh.next().flatten() {
-                if let Some(key) = &keys[i] {
-                    wrote |= write_atomic(key, &png);
-                }
-                data = png;
+        let made = if !data.is_empty() {
+            None
+        } else if let Some(id) = blob_of(i) {
+            blob_bytes
+                .get(&id)
+                .and_then(|b| sanity_core::thumb::thumbnail(b, sanity_core::thumb::THUMB_MAX))
+        } else if inside[i].is_some() {
+            fresh.next().flatten()
+        } else {
+            None
+        };
+        if let Some(png) = made {
+            if let Some(key) = &keys[i] {
+                wrote |= write_atomic(key, &png);
             }
+            data = png;
         }
         out.extend_from_slice(&(rel.len() as u32).to_le_bytes());
         out.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -550,6 +585,30 @@ async fn thumbs(
     Ok(Response::new(out))
 }
 
+/// The blob a picture's version names, if it names one; see
+/// `FileInfo::version`. Checked to be an object id, since it is handed to git.
+fn version_blob(version: Option<&str>) -> Option<&str> {
+    let id = version?.strip_prefix("blob:")?;
+    (id.len() >= 40 && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
+}
+
+/// A picture's bytes: the file inside the open folder, or, when its version
+/// names a blob, that blob out of the object store, which is how a picture
+/// shown at a commit is the picture as it was there.
+fn picture_bytes(root: &Path, rel: &str, version: Option<&str>) -> Result<Vec<u8>, String> {
+    if let Some(id) = version_blob(version) {
+        return sanity_core::history::blobs(root, &[id.to_string()])
+            .remove(id)
+            .ok_or_else(|| format!("{rel}: {id} is not in the repository"));
+    }
+    let canonical = root.join(rel).canonicalize().map_err(|e| e.to_string())?;
+    let root_canonical = root.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical.starts_with(&root_canonical) {
+        return Err("path outside the open folder".into());
+    }
+    std::fs::read(&canonical).map_err(|e| e.to_string())
+}
+
 /// The raw bytes of one file, for a picture the renderer is about to decode.
 ///
 /// Raw rather than JSON for the same reason the payloads are: a PNG is
@@ -557,7 +616,11 @@ async fn thumbs(
 /// checked against the open folder the same way `file_text` checks it, so
 /// this cannot be used to read the disk.
 #[tauri::command]
-async fn file_bytes(path: String, state: State<'_, AppState>) -> Result<Response, String> {
+async fn file_bytes(
+    path: String,
+    version: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
     let root = {
         let repo = state.repo.lock().map_err(|e| e.to_string())?;
         repo.root.clone()
@@ -565,14 +628,7 @@ async fn file_bytes(path: String, state: State<'_, AppState>) -> Result<Response
     if root.as_os_str().is_empty() {
         return Err("no folder open".into());
     }
-    let full = root.join(&path);
-    let canonical = full.canonicalize().map_err(|e| e.to_string())?;
-    let root_canonical = root.canonicalize().map_err(|e| e.to_string())?;
-    if !canonical.starts_with(&root_canonical) {
-        return Err("path outside the open folder".into());
-    }
-    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
-    Ok(Response::new(bytes))
+    Ok(Response::new(picture_bytes(&root, &path, version.as_deref())?))
 }
 
 /// A page of a PDF as PNG, `width` pixels across: the first by default, any
@@ -586,6 +642,7 @@ async fn pdf_page(
     path: String,
     width: u32,
     page: Option<u32>,
+    version: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
     let root = {
@@ -595,14 +652,8 @@ async fn pdf_page(
     if root.as_os_str().is_empty() {
         return Err("no folder open".into());
     }
-    let full = root.join(&path);
-    let canonical = full.canonicalize().map_err(|e| e.to_string())?;
-    let root_canonical = root.canonicalize().map_err(|e| e.to_string())?;
-    if !canonical.starts_with(&root_canonical) {
-        return Err("path outside the open folder".into());
-    }
     let t = std::time::Instant::now();
-    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
+    let bytes = picture_bytes(&root, &path, version.as_deref())?;
     let png = sanity_core::pdf::render_page(&bytes, page.unwrap_or(0) as usize, width)?;
     if watch_log() {
         eprintln!("pdf_page {path} page {} at {width} px: {:.1} ms", page.unwrap_or(0), t.elapsed().as_secs_f64() * 1000.0);
@@ -723,7 +774,13 @@ async fn refresh_files(
         let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
         for (rel, h) in fresh {
             if let Some(was) = repo.held.get_mut(&rel) {
-                if was.payload == h.payload {
+                // A picture's payload is its size and nothing of its pixels,
+                // so the same payload says nothing about whether it changed:
+                // a plot drawn again in other colours at the same size was
+                // taken for an identical rewrite, kept its version, and was
+                // drawn as it had been. Its time on disk moved, which is all
+                // there is to go on and enough.
+                if was.payload == h.payload && h.row.media.is_none() {
                     was.stamp = h.stamp;
                     same += 1;
                     continue;
@@ -1212,6 +1269,44 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_object_id_is_taken_for_a_blob() {
+        let id = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(version_blob(Some(&format!("blob:{id}"))), Some(id));
+        assert_eq!(version_blob(Some("1712345678-2048")), None);
+        assert_eq!(version_blob(Some("blob:--upload-pack=x")), None);
+        assert_eq!(version_blob(Some("blob:HEAD")), None);
+        assert_eq!(version_blob(None), None);
+    }
+
+    #[test]
+    fn a_picture_at_a_commit_is_read_from_the_commit() {
+        let dir = std::env::temp_dir().join(format!("sanity-picture-at-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            assert!(sanity_core::process::git(&dir).args(args).output().unwrap().status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("a.png"), b"as it was").unwrap();
+        git(&["add", "-A"]);
+        git(&["-c", "user.email=x@y", "-c", "user.name=Ada", "commit", "-qm", "one"]);
+        let id = String::from_utf8(
+            sanity_core::process::git(&dir).args(["rev-parse", "HEAD:a.png"]).output().unwrap().stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        // Changed on disk since, and then gone.
+        std::fs::write(dir.join("a.png"), b"as it is").unwrap();
+        assert_eq!(picture_bytes(&dir, "a.png", None).unwrap(), b"as it is");
+        std::fs::remove_file(dir.join("a.png")).unwrap();
+        let version = format!("blob:{id}");
+        assert_eq!(picture_bytes(&dir, "a.png", Some(&version)).unwrap(), b"as it was");
+        assert!(picture_bytes(&dir, "a.png", None).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     // The cache key for a thumbnail. Worth a test because a key that does not
     // move when the file does would serve the old picture forever, and one

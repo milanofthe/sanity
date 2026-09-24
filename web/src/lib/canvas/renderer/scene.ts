@@ -10,6 +10,7 @@
 // stays in the tens of thousands no matter how large the repository is.
 
 import { Camera } from '$lib/canvas/camera';
+import { mediaKey } from '$lib/canvas/mediakey';
 import { clock } from '$lib/canvas/clock';
 import { metrics, overview, timing } from '$lib/metrics';
 import {
@@ -2093,12 +2094,12 @@ export class Scene {
     const x = n.x + metrics.panelPadX + (availW - w) / 2;
     const y = n.y + metrics.titleHeight + metrics.panelPadY + (availH - h) / 2;
 
-    this.pushPicture(n.path, n.path, m, x, y, w, h, mw, mh, zoom);
+    this.pushPicture(mediaKey(n.path, m.version), n.path, m, x, y, w, h, mw, mh, zoom);
   }
 
   /**
    * An expanded document: every page in a grid, each a picture of its own,
-   * keyed `path#page=n`, so the picture pipeline asks for a page only when it
+   * keyed by its page (see canvas/mediakey.ts), so the picture pipeline asks for a page only when it
    * is on screen and large enough, at the size it is shown, and lets go of it
    * the way it lets go of any picture.
    *
@@ -2128,7 +2129,7 @@ export class Scene {
         const page = r * cols + c;
         if (page >= m.pages) break;
         this.pushPicture(
-          `${n.path}#page=${page}`, n.path, m,
+          mediaKey(n.path, m.version, page), n.path, m,
           x0 + c * stepX, y0 + r * stepY, pw * s, ph * s, pw, ph, zoom,
         );
       }

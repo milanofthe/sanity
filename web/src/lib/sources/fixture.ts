@@ -18,6 +18,7 @@ import { ui } from "$lib/state/ui.svelte";
 import { project, type FileGroup } from "$lib/state/project.svelte";
 import { unpack } from "./payload.ts";
 import { THUMB_MAX } from "./thumbs.ts";
+import { parseMediaKey } from '$lib/canvas/mediakey';
 
 interface FixtureScan {
   root: string;
@@ -169,16 +170,14 @@ export function openFixture(app: CanvasApp, keepView = false): void {
     // backend, and it keeps the demo from pulling megabytes for panels a
     // hundred pixels wide. A document is there as its pages, rendered by the
     // dump with the renderer the app uses: `.png` after its own name for the
-    // first, `.p<n>.png` for the rest, asked for as `path#page=n`. See
-    // examples/dump.rs.
+    // first, `.p<n>.png` for the rest, asked for by page; see
+    // canvas/mediakey.ts and examples/dump.rs.
     imageBytes: async (key: string, level: number) => {
-      const page = /^(.*)#page=(\d+)$/.exec(key);
-      if (page) {
-        const n = Number(page[2]);
-        const url = `${base(loaded)}/media/${page[1]}${n === 0 ? '.png' : `.p${n}.png`}`;
+      const { path, page } = parseMediaKey(key);
+      if (page !== undefined) {
+        const url = `${base(loaded)}/media/${path}${page === 0 ? '.png' : `.p${page}.png`}`;
         return fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
       }
-      const path = key;
       const doc = documents.has(path);
       // Up to a thumbnail's size, the thumbnail, which is already here: one
       // file carried all of them when the repository opened.
