@@ -216,7 +216,8 @@ const REST_MIN_MS = 250;
 /** Time a frame at rest may spend making the tiles for its view. */
 const REST_TILE_BUDGET_MS = 4;
 
-/** How long the camera has to be still before the rest image is drawn. */
+/** How long the camera has to be still before the view counts as at rest:
+ *  the exact glyph atlas, pictures 1:1, and in the far view the rest image. */
 const REST_QUIET_MS = 150;
 
 /** Slots of the label inks, in place of the token kinds the glyph pass
@@ -1439,6 +1440,13 @@ export class Scene {
     // `settling` means a motion is in progress, and something waiting for the
     // canvas to come to rest must not wait for a fade.
     this.changing = changing;
+    // Stopped, but not drawn at rest yet: kept going until the view has been
+    // still for long enough, and then drawn once more, sharp, without anyone
+    // having to move the camera again.
+    if (!this.cameraStill) {
+      ticking = true;
+      if (performance.now() - this.movedAt >= REST_QUIET_MS) redraw = true;
+    }
     if (this.animating || this.streamPending || this.tilesPending || this.media?.fading()) {
       ticking = true;
       redraw = true;
@@ -1455,8 +1463,16 @@ export class Scene {
     // the view to come to rest rather than chasing a pan.
     const moving =
       cam.x !== this.camWas.x || cam.y !== this.camWas.y || cam.zoom !== this.camWas.zoom;
-    this.cameraStill = !moving;
     if (moving) this.movedAt = performance.now();
+    // At rest only once it has stayed there a moment, not in the first frame
+    // without movement. Input arrives at its own rate rather than once per
+    // frame, and anything else that keeps the loop going, detail streaming in
+    // or a picture fading, draws frames between two steps of a zoom. Each of
+    // those counted as rest, so every other frame of a gesture drew the text
+    // from the exact atlas and the pictures 1:1, and the one after from the
+    // nominal ones: 159 switches in 160 frames of a wheel zoom, which is the
+    // flicker.
+    this.cameraStill = !moving && performance.now() - this.movedAt >= REST_QUIET_MS;
     this.camWas.x = cam.x;
     this.camWas.y = cam.y;
     this.camWas.zoom = cam.zoom;
@@ -2532,15 +2548,10 @@ export class Scene {
       });
     };
 
-    // At rest only once it has stayed there a moment. A pan does not move
-    // the camera on every frame, since input arrives at its own rate, and a
-    // single frame without movement in the middle of one drew the rest image,
-    // a full live frame, 65 milliseconds at a hundred thousand files.
-    const quiet = this.cameraStill && performance.now() - this.movedAt >= REST_QUIET_MS;
-    // Still, but not for long enough: keep drawing, so the rest image is made
-    // once it has been without anyone having to move the camera again.
-    const settling = this.cameraStill && !quiet;
-    if (quiet) {
+    // At rest in the sense `render` sets: a single frame without movement in
+    // the middle of a pan drew the rest image, a full live frame, 65
+    // milliseconds at a hundred thousand files.
+    if (this.cameraStill) {
       const r = this.rest;
       // Drawn again once the detail it lacked has had time to arrive, as the
       // tiles are; see TILE_RETRY_MS.
@@ -2597,7 +2608,7 @@ export class Scene {
 
     const work = this.tileWork(level, range, TILE_BUDGET_MS, cam.dpr);
     const missing = work.missing;
-    this.tilesPending = work.pending || settling;
+    this.tilesPending = work.pending;
 
     // Nothing at all covers the view: this frame live, as before tiles.
     if (missing > 0 && !this.rest && this.tiles.size <= work.done) {
