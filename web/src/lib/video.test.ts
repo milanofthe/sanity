@@ -16,6 +16,13 @@ test('a long history is played in the time asked for, several commits a step', (
   assert.equal(p.frames, p.introFrames + p.targets.length * p.stepFrames + p.outroFrames);
 });
 
+test('a video is never longer than asked for', () => {
+  for (const [from, seconds] of [[239, 600], [999, 60], [37, 17], [5000, 123], [2, 10]]) {
+    const p = planReplay(from, 0, seconds, 60);
+    assert.ok(p.seconds <= seconds + 1e-9, `${from} commits in ${seconds} s came out ${p.seconds} s`);
+  }
+});
+
 test('a short history steps through every commit and does not stretch', () => {
   const p = planReplay(4, 0, 60, 60);
   assert.deepEqual(p.targets, [3, 2, 1, 0]);

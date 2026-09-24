@@ -69,7 +69,9 @@ export function planReplay(from: number, to: number, seconds: number, fps = VIDE
   const targets: number[] = [];
   for (let k = 1; k <= steps; k++) targets.push(from - Math.round((k * commits) / steps));
   const introFrames = Math.round(INTRO_S * fps);
-  const stepFrames = Math.max(1, Math.round(stepS * fps));
+  // Down, so a video is never longer than was asked for: rounded to the
+  // nearest, 239 steps of a ten minute video came out a second over.
+  const stepFrames = Math.max(1, Math.floor(stepS * fps));
   const outroFrames = Math.round(OUTRO_S * fps);
   const frames = introFrames + steps * stepFrames + outroFrames;
   return { start: from, targets, introFrames, stepFrames, outroFrames, frames, seconds: frames / fps };
