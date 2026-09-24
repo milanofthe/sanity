@@ -11,12 +11,14 @@
 // as it is written (see `VideoSink`), so a minute of 4K never sits in memory.
 
 import {
+  BufferTarget,
   CanvasSource,
   Mp4OutputFormat,
   Output,
   QUALITY_HIGH,
   StreamTarget,
   type StreamTargetChunk,
+  type VideoCodec,
 } from 'mediabunny';
 import type { CanvasApp } from '$lib/canvas/app';
 
@@ -29,6 +31,71 @@ export const VIDEO_SIZES = {
 export type VideoSize = keyof typeof VIDEO_SIZES;
 
 export const VIDEO_FPS = 60;
+
+/**
+ * Codecs a video is written in, the first that works on this machine.
+ *
+ * H.264 first, since everything plays it. It is also the one that can be
+ * missing: WebView2 on Windows encodes it only with the system's hardware
+ * encoder, which some machines do not have, and the export failed there. VP9
+ * and AV1 are encoded in software by every Chromium and go in the same MP4,
+ * which browsers, VLC and the Windows player all open.
+ */
+export const VIDEO_CODECS = [
+  { codec: 'avc', name: 'H.264' },
+  { codec: 'vp9', name: 'VP9' },
+  { codec: 'av1', name: 'AV1' },
+] as const satisfies readonly { codec: VideoCodec; name: string }[];
+export type VideoCodecChoice = (typeof VIDEO_CODECS)[number];
+
+const found = new Map<string, Promise<VideoCodecChoice | null>>();
+
+/**
+ * The codec a video of this size can be written in here, or null.
+ *
+ * Found by encoding two frames, not by asking: an encoder can take a
+ * configuration it then fails on at the first frame, which is what asking
+ * alone cannot tell apart from one that works. Once per size.
+ */
+export function videoCodec(size: VideoSize): Promise<VideoCodecChoice | null> {
+  let p = found.get(size);
+  if (!p) {
+    p = (async () => {
+      const [w, h] = VIDEO_SIZES[size];
+      for (const c of VIDEO_CODECS) {
+        if (await encodes(c.codec, w, h)) return c;
+      }
+      return null;
+    })();
+    found.set(size, p);
+  }
+  return p;
+}
+
+async function encodes(codec: VideoCodec, width: number, height: number): Promise<boolean> {
+  if (typeof VideoEncoder === 'undefined') return false;
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const g = canvas.getContext('2d');
+    if (!g) return false;
+    const target = new BufferTarget();
+    const output = new Output({ format: new Mp4OutputFormat(), target });
+    const source = new CanvasSource(canvas, { codec, quality: QUALITY_HIGH });
+    output.addVideoTrack(source, { frameRate: VIDEO_FPS });
+    await output.start();
+    for (let i = 0; i < 2; i++) {
+      g.fillStyle = i ? '#222' : '#ddd';
+      g.fillRect(0, 0, width, height);
+      await source.add(i / VIDEO_FPS, 1 / VIDEO_FPS);
+    }
+    await output.finalize();
+    return (target.buffer?.byteLength ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
 
 /** The first commit, held before anything changes, and the last, held after,
  *  so a video neither starts nor ends in the middle of a movement. */
@@ -96,6 +163,8 @@ export interface VideoSink {
 
 export interface ReplayOptions {
   size: VideoSize;
+  /** What to encode with; see `videoCodec`. */
+  codec?: VideoCodec;
   fps?: number;
   onProgress?: (done: number, total: number) => void;
   signal?: AbortSignal;
@@ -124,7 +193,7 @@ export async function renderReplay(
       target: new StreamTarget(sink.writable, { chunked: true, chunkSize: 4 << 20 }),
     });
     const video = new CanvasSource(canvas, {
-      codec: 'avc',
+      codec: opts.codec ?? 'avc',
       quality: QUALITY_HIGH,
       keyFrameInterval: 2,
     });

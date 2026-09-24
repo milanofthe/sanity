@@ -12,7 +12,14 @@
 	import Dialog from '$lib/ui/Dialog.svelte';
 	import NumberField from '$lib/ui/NumberField.svelte';
 	import Segmented from '$lib/ui/Segmented.svelte';
-	import { planReplay, renderReplay, VIDEO_FPS, type VideoSize } from '$lib/video';
+	import {
+		planReplay,
+		renderReplay,
+		videoCodec,
+		VIDEO_FPS,
+		type VideoCodecChoice,
+		type VideoSize
+	} from '$lib/video';
 
 	let {
 		open = false,
@@ -31,6 +38,18 @@
 	let size = $state<VideoSize>('1080p');
 	/** From the oldest loaded commit, or from the one the ticker shows. */
 	let range = $state<'all' | 'ticker'>('all');
+
+	/** What this machine can write a video of this size in: undefined while
+	 *  that is being found out, null when it cannot write one at all. */
+	let codec = $state<VideoCodecChoice | null | undefined>(undefined);
+	$effect(() => {
+		if (!open) return;
+		const asked = size;
+		codec = undefined;
+		void videoCodec(asked).then((c) => {
+			if (asked === size) codec = c;
+		});
+	});
 
 	let running = $state(false);
 	let done = $state(0);
@@ -56,6 +75,7 @@
 		try {
 			const where = await renderReplay(app, plan, source, sink, {
 				size,
+				codec: codec?.codec,
 				onProgress: (d, t) => {
 					done = d;
 					total = t;
@@ -124,8 +144,12 @@
 		/>
 	</div>
 	<p class="summary">
-		{commits} commits in {plan.targets.length} steps, {minutes(plan.seconds)} at {VIDEO_FPS} frames a second.
+		{commits} commits in {plan.targets.length} steps, {minutes(plan.seconds)} at {VIDEO_FPS} frames a second{#if codec},
+			{codec.name}{/if}.
 	</p>
+	{#if codec === null}
+		<p class="error">This machine has no video encoder for {size}. Try 1080p, or update the graphics driver.</p>
+	{/if}
 	{#if running}
 		<div class="progress" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done}>
 			<div class="bar" style:width={`${total ? (100 * done) / total : 0}%`}></div>
@@ -139,7 +163,7 @@
 			<button onclick={() => ctl?.abort()}>Cancel</button>
 		{:else}
 			<button onclick={() => onclose?.()}>Close</button>
-			<button class="primary" disabled={!app || commits < 2} onclick={start}>Export</button>
+			<button class="primary" disabled={!app || commits < 2 || !codec} onclick={start}>Export</button>
 		{/if}
 	{/snippet}
 </Dialog>

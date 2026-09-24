@@ -13,6 +13,8 @@
 //   after       the canvas and the camera back as they were, and the clock
 //               running on without going back in time
 //   cancel      nothing kept, and the canvas back all the same
+//   codecs      H.264 found by trying, and VP9, the fallback where there is
+//               no H.264 encoder, writing a video as well
 import { base, launch, settled } from './browser.mjs';
 
 const browser = await launch();
@@ -90,12 +92,21 @@ const r = await page.evaluate(async () => {
     size: '1080p', fps, onProgress: (done) => { if (done === 10) ctl.abort(); }, signal: ctl.signal,
   });
   const afterCancel = { w: app.canvas.width, h: app.canvas.height };
+
+  // The codec found by trying, and the fallback the export takes where
+  // H.264 cannot be encoded, which is some Windows machines.
+  const found = await V.videoCodec('1080p');
+  const sink3 = V.memorySink();
+  await V.renderReplay(app, V.planReplay(2, 0, 3, fps), source, sink3, { size: '1080p', fps, codec: 'vp9' });
+  const vp9 = new mb.Input({ formats: mb.ALL_FORMATS, source: new mb.BufferSource(sink3.bytes()) });
+  const vp9Track = await vp9.getPrimaryVideoTrack();
+  const fallback = { codec: await vp9Track.getCodecParameterString(), packets: (await vp9Track.computePacketStats()).packetCount };
   await new Promise((q) => requestAnimationFrame(() => requestAnimationFrame(q)));
 
   return {
     where, took, plan: { frames: plan.frames, seconds: plan.seconds, start: plan.start, targets: plan.targets },
     shown: shownOnce, packets: stats.packetCount, duration, codec, width: track.displayWidth, height: track.displayHeight,
-    middle, bottom, before, after, cancelled, kept: sink2.bytes(), afterCancel,
+    found: found?.codec ?? null, fallback, middle, bottom, before, after, cancelled, kept: sink2.bytes(), afterCancel,
     // The app's own clock module, not a second copy of it.
     clockAhead: await (async () => {
       const u = performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('canvas/clock.ts'));
@@ -119,6 +130,8 @@ expect(r.after.x === r.before.x && r.after.y === r.before.y && r.after.zoom === 
 // than go back in time: never behind the wall, never ahead by more than was
 // rendered.
 expect(r.clockAhead >= -1 && r.clockAhead <= 2 * r.plan.seconds * 1000, `the clock runs on, ${(r.clockAhead / 1000).toFixed(1)} s ahead of the wall`);
+expect(r.found === 'avc', `trying finds H.264 here (${r.found})`);
+expect(r.fallback.codec.startsWith('vp09') && r.fallback.packets > 0, `and VP9 writes a video too (${r.fallback.codec}, ${r.fallback.packets} frames)`);
 expect(r.cancelled === null && r.kept === null, 'a cancelled video keeps nothing');
 expect(r.afterCancel.w === r.before.w && r.afterCancel.h === r.before.h, 'and gives the canvas back');
 
