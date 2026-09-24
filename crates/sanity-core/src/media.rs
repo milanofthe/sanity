@@ -187,39 +187,133 @@ fn ico(b: &[u8]) -> Option<Media> {
     Some(Media::Image { w: side(b[6]), h: side(b[7]) })
 }
 
-/// SVG is text, so its size is whatever the document claims: a width and
-/// height if they are in pixels, otherwise the viewBox, which is the case for
-/// most icons.
+/// SVG is text, so its size is whatever its root element claims: a width and
+/// a height in absolute units, or the viewBox, which is the case for most
+/// icons, or one of the two and the viewBox's proportion for the other.
+///
+/// Only the root `<svg>` tag's own attributes, by their whole names. Looking
+/// for the first `width=` anywhere in the head of the file, which is what this
+/// did first, found `stroke-width="1.6"` in an icon set and a child `<rect
+/// width="51" height="447">` in a 3:1 logo, and each panel came out in the
+/// proportion of whatever it had found, with the drawing stretched into it.
 fn svg(b: &[u8]) -> Option<Media> {
-    let head = String::from_utf8_lossy(&b[..b.len().min(2048)]);
-    let number = |after: &str| -> Option<f32> {
-        let at = head.find(after)? + after.len();
-        let rest = head[at..].trim_start();
-        let rest = rest.strip_prefix(['"', '\''].as_ref()).unwrap_or(rest);
-        let end = rest.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(rest.len());
-        rest[..end].parse().ok()
+    let head = String::from_utf8_lossy(&b[..b.len().min(8192)]);
+    let attrs = root_attributes(&head, "svg")?;
+    let get = |name: &str| attrs.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
+    let width = get("width").and_then(svg_length);
+    let height = get("height").and_then(svg_length);
+    let view: Option<(f32, f32)> = get("viewBox").and_then(|v| {
+        let n: Vec<f32> = v.split([' ', ',', '\t', '\n', '\r']).filter_map(|s| s.trim().parse().ok()).collect();
+        (n.len() == 4 && n[2] > 0.0 && n[3] > 0.0).then(|| (n[2], n[3]))
+    });
+    let (w, h) = match (width, height, view) {
+        (Some(w), Some(h), _) => (w, h),
+        (Some(w), None, Some((vw, vh))) => (w, w * vh / vw),
+        (None, Some(h), Some((vw, vh))) => (h * vw / vh, h),
+        (_, _, Some(v)) => v,
+        _ => return None,
     };
-    if let (Some(w), Some(h)) = (number("width="), number("height=")) {
-        if w > 0.0 && h > 0.0 {
-            return Some(Media::Image { w: w as u32, h: h as u32 });
+    (w > 0.0 && h > 0.0).then(|| Media::Image { w: (w.round() as u32).max(1), h: (h.round() as u32).max(1) })
+}
+
+/// A length in an SVG attribute, in CSS pixels, when it is an absolute one.
+/// A percentage, or a size relative to a font, is a size only in a page that
+/// holds the drawing, which this is not.
+fn svg_length(v: &str) -> Option<f32> {
+    let v = v.trim();
+    let split = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E'))
+        .unwrap_or(v.len());
+    // `e` belongs to the number only when a digit follows; `em` is a unit.
+    let split = if v[..split].ends_with(['e', 'E']) { split - 1 } else { split };
+    let n: f32 = v[..split].parse().ok()?;
+    let per = match v[split..].trim() {
+        "" | "px" => 1.0,
+        "pt" => 4.0 / 3.0,
+        "pc" => 16.0,
+        "mm" => 96.0 / 25.4,
+        "cm" => 96.0 / 2.54,
+        "in" => 96.0,
+        _ => return None,
+    };
+    (n > 0.0).then_some(n * per)
+}
+
+/// The attributes of the first `<name ...>` tag in `text`, as written: past
+/// the XML declaration, comments and a doctype, since those are not tags of
+/// that name. Quotes are respected, so a `>` inside a value does not end it.
+fn root_attributes(text: &str, name: &str) -> Option<Vec<(String, String)>> {
+    let open = format!("<{name}");
+    let mut from = 0;
+    let start = loop {
+        let at = from + text[from..].find(&open)?;
+        // Inside a comment it is not a tag: go on after the comment.
+        if let Some(c) = text[from..at].rfind("<!--").map(|c| from + c) {
+            if !text[c..at].contains("-->") {
+                from = c + text[c..].find("-->")? + 3;
+                continue;
+            }
         }
+        let next = text[at + open.len()..].chars().next()?;
+        if next.is_whitespace() || next == '>' || next == '/' {
+            break at + open.len();
+        }
+        from = at + open.len();
+    };
+    let body = &text[start..];
+    let mut out = Vec::new();
+    let mut chars = body.char_indices().peekable();
+    loop {
+        while matches!(chars.peek(), Some((_, c)) if c.is_whitespace()) {
+            chars.next();
+        }
+        let (at, c) = chars.next()?;
+        if c == '>' || c == '/' {
+            return Some(out);
+        }
+        let mut end = at + c.len_utf8();
+        while let Some(&(i, c)) = chars.peek() {
+            if c == '=' || c.is_whitespace() || c == '>' || c == '/' {
+                break;
+            }
+            end = i + c.len_utf8();
+            chars.next();
+        }
+        let key = body[at..end].to_string();
+        while matches!(chars.peek(), Some((_, c)) if c.is_whitespace()) {
+            chars.next();
+        }
+        if !matches!(chars.peek(), Some((_, '='))) {
+            out.push((key, String::new()));
+            continue;
+        }
+        chars.next();
+        while matches!(chars.peek(), Some((_, c)) if c.is_whitespace()) {
+            chars.next();
+        }
+        let (q_at, q) = chars.next()?;
+        let value = if q == '"' || q == '\'' {
+            let from = q_at + 1;
+            let mut to = body.len();
+            for (i, c) in chars.by_ref() {
+                if c == q {
+                    to = i;
+                    break;
+                }
+            }
+            body[from..to].to_string()
+        } else {
+            let mut to = q_at + q.len_utf8();
+            while let Some(&(i, c)) = chars.peek() {
+                if c.is_whitespace() || c == '>' {
+                    break;
+                }
+                to = i + c.len_utf8();
+                chars.next();
+            }
+            body[q_at..to].to_string()
+        };
+        out.push((key, value));
     }
-    let at = head.find("viewBox=")? + "viewBox=".len();
-    let rest = head[at..].trim_start();
-    let rest = rest.strip_prefix(['"', '\''].as_ref()).unwrap_or(rest);
-    // Only the attribute's own value: without cutting at the closing quote
-    // the last number arrives as `16"` and does not parse, which left three
-    // numbers where four are needed.
-    let rest = &rest[..rest.find(['"', '\'']).unwrap_or(rest.len())];
-    let nums: Vec<f32> = rest
-        .split([' ', ','])
-        .filter_map(|s| s.trim().parse().ok())
-        .take(4)
-        .collect();
-    if nums.len() == 4 && nums[2] > 0.0 && nums[3] > 0.0 {
-        return Some(Media::Image { w: nums[2] as u32, h: nums[3] as u32 });
-    }
-    None
 }
 
 /// A PDF's page count and page size, read out of the file as it is written.
@@ -457,14 +551,34 @@ mod tests {
     }
 
     #[test]
-    fn an_svg_falls_back_to_its_viewbox() {
-        let with_size = br#"<svg width="64" height="32" xmlns="http://www.w3.org/2000/svg">"#;
-        assert_eq!(probe("i.svg", with_size), Some(Media::Image { w: 64, h: 32 }));
-        let only_box = br#"<svg viewBox="0 0 24 16" xmlns="http://www.w3.org/2000/svg">"#;
-        assert_eq!(probe("i.svg", only_box), Some(Media::Image { w: 24, h: 16 }));
-        // Units we cannot resolve are not guessed at.
-        let in_mm = br#"<svg width="210mm" height="297mm">"#;
-        assert_eq!(probe("i.svg", in_mm), Some(Media::Image { w: 210, h: 297 }));
+    fn an_svg_is_the_size_its_root_says() {
+        let svg = |text: &str| probe("i.svg", text.as_bytes());
+        let image = |w, h| Some(Media::Image { w, h });
+        assert_eq!(svg(r#"<svg width="64" height="32" xmlns="http://www.w3.org/2000/svg">"#), image(64, 32));
+        assert_eq!(svg(r#"<svg viewBox="0 0 24 16" xmlns="http://www.w3.org/2000/svg">"#), image(24, 16));
+        // Absolute units in pixels, and the proportion kept.
+        assert_eq!(svg(r#"<svg width="210mm" height="297mm">"#), image(794, 1123));
+        assert_eq!(svg(r#"<svg width="460.8pt" height="345.6pt" viewBox="0 0 460.8 345.6">"#), image(614, 461));
+        // A relative size is no size: the viewBox.
+        assert_eq!(svg(r#"<svg width="100%" height="100%" viewBox="0 0 300 100">"#), image(300, 100));
+        // One side given, the other from the viewBox's proportion.
+        assert_eq!(svg(r#"<svg width="48" viewBox="0 0 96 64">"#), image(48, 32));
+        // Not the stroke's width, and not a child's: both of these were
+        // read as the drawing's size.
+        assert_eq!(
+            svg(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 64" fill="none" stroke-width="1.6"><rect width="52" height="40"/></svg>"#),
+            image(96, 64),
+        );
+        assert_eq!(
+            svg(r#"<svg viewBox="0 0 1354 451"><g><rect x="3232" y="966" width="51.0002" height="447"/></g></svg>"#),
+            image(1354, 451),
+        );
+        // Past a declaration and a comment, and a `>` inside a value.
+        assert_eq!(
+            svg("<?xml version=\"1.0\"?>\n<!-- <svg width=\"1\" height=\"1\"> -->\n<svg data-x=\"a>b\" width='40' height='20'>"),
+            image(40, 20),
+        );
+        assert_eq!(svg("<svgx width=\"4\" height=\"4\">"), None);
     }
 
     #[test]
