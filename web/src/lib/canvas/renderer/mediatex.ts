@@ -47,10 +47,25 @@ import { decodeHere, ImageDecoder, isVector, rasteriseSvg, type Pixels } from '.
 // and darker than they are. Premultiplied, a clear texel adds nothing, which
 // is what it is, and the image shader divides it back out.
 
-/** Bytes held for image content, over all levels. 64 MB is about four full
- *  screen renders at 2048 wide, which is more than a canvas ever shows at
- *  once, and a fraction of what the code textures take. */
+/** Bytes held for image content, over all levels, at the least. 64 MB is
+ *  about four full screen renders at 2048 wide, which is more than a small
+ *  canvas ever shows at once, and a fraction of what the code textures take. */
 const BUDGET_BYTES = 64 * 1024 * 1024;
+
+/**
+ * And past that, bytes per device pixel of the canvas: the budget follows the
+ * screen, as the overview detail's does.
+ *
+ * At rest every picture on screen is made for exactly the pixels it covers,
+ * so together they are at most one screen of them: four bytes each and a
+ * third again for the mip chain, 5.4 a pixel. A picture fading in holds the
+ * one it replaces until the fade is done, which doubles that for a moment,
+ * and what was just panned past is worth keeping. A fixed 64 MB was less than
+ * one screen of 5K: sixteen pictures in view came to 96 MB, the ones on
+ * screen were thrown out to make room for themselves, asked for again at
+ * once, and the pictures flickered for as long as the view held still.
+ */
+const BUDGET_BYTES_PER_PIXEL = 16;
 
 /** Narrowest and widest level. The floor is what an image is worth at the
  *  overview zoom; the ceiling is one step past a 4K export of a single
@@ -302,7 +317,8 @@ export class MediaTextures {
    *  parks when nothing moves, and an image that loaded into a parked canvas
    *  would appear on the next pan. */
   private onLoaded: () => void;
-  private budget: number;
+  /** The least the budget is; see `budget`. */
+  private floor: number;
 
   // Written out rather than declared as constructor parameters, because
   // parameter properties are not syntax Node can strip, and this module has
@@ -318,7 +334,7 @@ export class MediaTextures {
     this.gl = gl;
     this.fetchBytes = fetchBytes;
     this.onLoaded = onLoaded;
-    this.budget = budget;
+    this.floor = budget;
     this.resampler = resampler;
     this.fadeMs = fadeMs;
     this.maxSource = Math.min(MAX_SOURCE, (gl.getParameter(gl.MAX_TEXTURE_SIZE) as number) || 4096);
@@ -419,9 +435,15 @@ export class MediaTextures {
    * in the same frame. So the cap comes down instead: forty seven visible is
    * 512 each, five visible is 2048, and the total stays where it was put.
    */
+  /** Bytes pictures may hold now, from the size of the drawing buffer. */
+  private budget(): number {
+    const px = (this.gl.drawingBufferWidth || 0) * (this.gl.drawingBufferHeight || 0);
+    return Math.max(this.floor, BUDGET_BYTES_PER_PIXEL * px);
+  }
+
   private cap(aspect: number): number {
     const sharing = Math.max(this.askedBefore, this.askedNow, 1);
-    const share = this.budget / sharing;
+    const share = this.budget() / sharing;
     // Four bytes a pixel and a third again for the mip chain, at this
     // picture's proportion: a level is a width, and a 2:1 render costs half
     // what a square one does at the same width. Assuming square overshot the
@@ -455,7 +477,7 @@ export class MediaTextures {
       // enough on its own, which meant zooming out of a directory re-read
       // every picture in it to hold less of something nobody was looking at.
       const tooLarge =
-        this.held > this.budget * 0.8 && slot.w > level * 4 && slot.w > MIN_LEVEL;
+        this.held > this.budget() * 0.8 && slot.w > level * 4 && slot.w > MIN_LEVEL;
       if (!tooLarge && (slot.w >= level || slot.w >= MAX_LEVEL)) return slot;
     }
     // Zooming from the overview into one picture asks for eight times the
@@ -844,22 +866,23 @@ export class MediaTextures {
 
   /** Throw out what has not been looked at until the budget holds. */
   private trim(): void {
-    if (this.held <= this.budget) return;
+    const budget = this.budget();
+    if (this.held <= budget) return;
     const order = [...this.slots.entries()].sort((a, b) => a[1].seen - b[1].seen);
     // First pass: everything not asked for this frame. Evicting what is on
     // screen right now would have it decoded again immediately, which is a
     // loop rather than an eviction.
     for (const [path, slot] of order) {
-      if (this.held <= this.budget) break;
+      if (this.held <= budget) break;
       if (slot.seen >= this.clock) continue;
       this.drop(path, slot);
     }
     // Second pass, oldest first, including what is on screen. Only past the
     // budget by half, so it is a floor under a pathological frame rather than
     // something the normal case ever reaches.
-    if (this.held <= this.budget * 1.5) return;
+    if (this.held <= budget * 1.5) return;
     for (const [path, slot] of order) {
-      if (this.held <= this.budget) break;
+      if (this.held <= budget) break;
       if (!this.slots.has(path)) continue;
       this.drop(path, slot);
     }
