@@ -32,10 +32,10 @@ sanity /path/to/repo
 
 Or open a folder from the Project menu.
 
-- `f` fits the whole project, a double click fits a panel.
+- Space or `f` fits the whole project, a double click fits a panel.
 - `/` jumps to search, over file names and contents. Enter goes to the next
   hit, Escape clears.
-- `[` and `]` step through the git history.
+- The left and right arrow keys, or `[` and `]`, step through the git history.
 - Clicking a panel header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
   `$EDITOR` or the system default.
 - Right click exports the view or the whole project as a 4K PNG.
@@ -63,8 +63,8 @@ flash. Moving or renaming a directory is picked up as its files moving.
 
 ## History
 
-In a git repository a ticker appears next to the search field. Its arrows, or
-`[` and `]`, step through the commits, newest first. Each step is played like
+In a git repository a ticker appears next to the search field. Its arrows, the
+arrow keys, or `[` and `]`, step through the commits, newest first. Each step is played like
 a save: the lines the commit removed flash red, the ones it added flash green,
 files it deleted fade out and files it created fade in. Stepping back plays
 the same commit in reverse. Clicking the commit id returns to the present.

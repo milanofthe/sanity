@@ -187,8 +187,8 @@
 			label={ticked ? ticked.sha.slice(0, 7) : 'now'}
 			detail={ticked?.subject ?? ''}
 			title={ticked
-				? `${ticked.subject}\n${ticked.author}, ${when(ticked.time)}\n[ and ] step, click the id for now`
-				: `The folder as it is. [ steps back through ${history.commits.length} commits`}
+				? `${ticked.subject}\n${ticked.author}, ${when(ticked.time)}\nthe arrow keys step, click the id for now`
+				: `The folder as it is. The left arrow steps back through ${history.commits.length} commits`}
 			older={history.target < history.commits.length - 1}
 			newer={history.target >= 0}
 			present={history.target < 0}

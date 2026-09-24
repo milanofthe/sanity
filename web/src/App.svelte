@@ -358,10 +358,23 @@
 			toolbar?.focusSearch();
 			return;
 		}
-		if (e.key === 'f') app?.fit();
-		// Older and newer through the history, as the ticker's arrows do.
-		if (app && history.commits.length > 0 && (e.key === '[' || e.key === ']')) {
-			historyGo(app, history.target + (e.key === '[' ? 1 : -1));
+		// With a modifier held these belong to the system: Cmd and an arrow
+		// is the start or end of a line, Alt and an arrow a word.
+		if (e.metaKey || e.ctrlKey || e.altKey) return;
+		if (e.key === 'f' || e.key === ' ') {
+			// Space on a focused button would press it again: the toolbar
+			// button last clicked keeps the focus, and fitting is what space
+			// is for here.
+			e.preventDefault();
+			app?.fit();
+		}
+		// Older and newer through the history, as the ticker's arrows do, and
+		// in the same places: older on the left.
+		const older = e.key === '[' || e.key === 'ArrowLeft';
+		const newer = e.key === ']' || e.key === 'ArrowRight';
+		if (app && history.commits.length > 0 && (older || newer)) {
+			e.preventDefault();
+			historyGo(app, history.target + (older ? 1 : -1));
 		}
 		if (e.key === 'Escape') {
 			ui.openMenu = null;
