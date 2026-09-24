@@ -224,6 +224,10 @@
 		ui.theme;
 		app?.refreshTheme();
 	});
+	$effect(() => {
+		const a = app;
+		ui.repaint = a ? () => a.repaintTheme() : null;
+	});
 
 	// The language tint, which the renderer keeps across a reopen.
 	$effect(() => {

@@ -87,3 +87,20 @@ body {
 *::-webkit-scrollbar-corner {
 	background: var(--bg);
 }
+
+/* The theme changing: the window as it was fades into the window as it is,
+   canvas included; see ui.setTheme. Twice a control's pace, because the whole
+   window changing at that pace reads as a cut. */
+::view-transition-old(root),
+::view-transition-new(root) {
+	animation-duration: calc(2 * var(--dur-2));
+	animation-timing-function: ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	::view-transition-group(*),
+	::view-transition-old(*),
+	::view-transition-new(*) {
+		animation: none;
+	}
+}

@@ -855,6 +855,14 @@ export class CanvasApp {
     this.scene?.setPalette(this.pal);
   }
 
+  /** The same, and draw it now rather than on the next frame: for a theme
+   *  change the browser is about to take a picture of; see `ui.setTheme`. */
+  repaintTheme(): void {
+    this.refreshTheme();
+    if (this.capturing || !this.scene) return;
+    this.frame(performance.now());
+  }
+
   /**
    * Mark a file as changed on disk; drives the recency glow.
    *

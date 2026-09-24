@@ -65,9 +65,34 @@ class UiState {
 	 */
 	expandDocuments = $state(storedFlag(EXPAND_KEY));
 
+	/**
+	 * Draws the canvas in the colours the document has now, at once; set by
+	 * the canvas when it exists. See `setTheme`.
+	 */
+	repaint: (() => void) | null = null;
+
+	/**
+	 * Switch themes as a crossfade of the whole window, canvas included.
+	 *
+	 * The browser keeps a picture of the window as it was, the theme changes
+	 * underneath it, and the two are faded into each other. The canvas has to
+	 * be drawn in the new colours inside that change, not on the next frame,
+	 * or the picture taken of the new window still has the old canvas in it
+	 * and the canvas cuts over a moment after everything else has faded.
+	 * A cut where the browser has no transitions, or motion is reduced.
+	 */
 	setTheme(id: ThemeId) {
-		this.theme = id;
-		applyTheme(id);
+		const change = () => {
+			this.theme = id;
+			applyTheme(id);
+			this.repaint?.();
+		};
+		const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+		if (still || typeof document.startViewTransition !== 'function') {
+			change();
+			return;
+		}
+		document.startViewTransition(change);
 	}
 
 	setTintLanguages(on: boolean) {
