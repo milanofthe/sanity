@@ -69,6 +69,10 @@ a save: the lines the commit removed flash red, the ones it added flash green,
 files it deleted fade out and files it created fade in. Stepping back plays
 the same commit in reverse. Clicking the commit id returns to the present.
 
+Right click, Export history, renders the replay to an MP4: from the oldest
+commit to the newest in the length you set, several commits a step when there
+are more than fit, with each commit's date, id and subject along the bottom.
+
 Each commit is laid out for the files it has, so there are no empty places
 for files that come later or went earlier. When a step adds or removes files,
 the panels slide to their new places, and by default the view fits the whole
