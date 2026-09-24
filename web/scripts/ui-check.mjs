@@ -72,8 +72,8 @@ if (!ok) {
 await settled(page);
 
 // Every menu open in turn, so their contents are in the page when it is read.
-for (const menu of ['Project', 'View', 'Theme']) {
-  await page.getByRole('button', { name: menu }).click();
+for (const menu of ['Project', 'Files', 'View', 'Theme']) {
+  await page.getByRole('button', { name: menu, exact: true }).click();
   await page.waitForTimeout(250);
 }
 const type = await page.evaluate(() => {

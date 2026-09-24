@@ -30,7 +30,7 @@ function storeFlag(key: string, on: boolean): void {
 class UiState {
 	theme = $state<ThemeId>(storedTheme());
 	/** Which toolbar menu is open, if any. One at a time. */
-	openMenu = $state<'project' | 'view' | 'theme' | null>(null);
+	openMenu = $state<'project' | 'files' | 'view' | 'theme' | null>(null);
 	/**
 	 * Colour the outermost zoom by language family.
 	 *

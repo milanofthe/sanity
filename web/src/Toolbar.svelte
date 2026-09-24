@@ -14,6 +14,7 @@
 	import Ticker from '$lib/ui/Ticker.svelte';
 	import { history } from '$lib/state/history.svelte';
 	import FileTypePicker from './FileTypePicker.svelte';
+	import ViewOptions from './ViewOptions.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { project } from '$lib/state/project.svelte';
 	import { THEMES } from '$lib/theme';
@@ -39,7 +40,7 @@
 		onopen?: () => void;
 		onreload?: (path: string) => void;
 		ondemo?: (id: string) => void;
-		/** The ignored-files switch in the View menu, which costs a rescan. */
+		/** The ignored-files switch in the Files menu, which costs a rescan. */
 		onignored?: (on: boolean) => void;
 		/** Repositories baked into the build, empty in the desktop app. */
 		demos?: DemoRepo[];
@@ -77,7 +78,7 @@
 	/** Thousands as k, so a hint stays a hint. */
 	const kilo = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
 	const shown = $derived(demos.find((d) => project.demo && d.id === project.root) ?? null);
-	const toggle = (id: 'project' | 'view' | 'theme') => () =>
+	const toggle = (id: 'project' | 'files' | 'view' | 'theme') => () =>
 		(ui.openMenu = ui.openMenu === id ? null : id);
 	const close = () => (ui.openMenu = null);
 </script>
@@ -155,13 +156,23 @@
 	</Menu>
 
 	<Menu
+		label="Files"
+		width="var(--w-menu-l)"
+		open={ui.openMenu === 'files'}
+		ontoggle={toggle('files')}
+		onclose={close}
+	>
+		<FileTypePicker onignored={(on: boolean) => onignored?.(on)} />
+	</Menu>
+
+	<Menu
 		label="View"
-		width="440px"
+		width="var(--w-menu-m)"
 		open={ui.openMenu === 'view'}
 		ontoggle={toggle('view')}
 		onclose={close}
 	>
-		<FileTypePicker onignored={(on: boolean) => onignored?.(on)} />
+		<ViewOptions />
 	</Menu>
 
 	<Menu

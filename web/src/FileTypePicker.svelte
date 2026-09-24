@@ -1,5 +1,6 @@
 <script lang="ts">
-	// The View menu: one row per file type, three states each.
+	// The Files menu: one row per file type, three states each, and whether
+	// the files git ignores are in the layout at all.
 	//
 	// The three states exist because a repository is not evenly interesting.
 	// Measured on this collection, one docs project carries 2.38 million lines
@@ -16,7 +17,6 @@
 	import { familyOf } from '$lib/canvas/language';
 	import { project, VIEW_MODES, type ViewMode } from '$lib/state/project.svelte';
 	import { ui } from '$lib/state/ui.svelte';
-	import { history } from '$lib/state/history.svelte';
 
 	const n = (v: number) => v.toLocaleString('en-US');
 
@@ -102,30 +102,8 @@
 			</span>
 		</div>
 
-		<div class="options">
-			<Switch
-				checked={ui.tintLanguages}
-				label="Tint by language at the outermost zoom"
-				onchange={() => ui.setTintLanguages(!ui.tintLanguages)}
-			/>
-			<Switch
-				checked={ui.dirLabels}
-				label="Name directories over the canvas"
-				onchange={() => ui.setDirLabels(!ui.dirLabels)}
-			/>
-			<Switch
-				checked={ui.expandDocuments}
-				label="Expand documents to all their pages"
-				onchange={() => ui.setExpandDocuments(!ui.expandDocuments)}
-			/>
-			{#if history.commits.length > 0}
-				<Switch
-					checked={ui.historyFollow}
-					label="Fit the whole project on each step through the history"
-					onchange={() => ui.setHistoryFollow(!ui.historyFollow)}
-				/>
-			{/if}
-			{#if project.ignoredTotal > 0 || project.includeIgnored}
+		{#if project.ignoredTotal > 0 || project.includeIgnored}
+			<div class="options">
 				<Switch
 					checked={project.includeIgnored}
 					disabled={project.demo || project.synthetic}
@@ -140,8 +118,8 @@
 							: ''}
 					</span>
 				{/if}
-			{/if}
-		</div>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -242,8 +220,10 @@
 	.col-name {
 		position: relative;
 	}
-	/* The share of the repository, as a fill behind the type name. */
-	.col-name::before {
+	/* The share of the repository, as a fill behind the type name. In the
+	   rows only: the heading has no share, and the bar's floor drew a stub of
+	   it over the T of "Type". */
+	.row .col-name::before {
 		content: '';
 		position: absolute;
 		inset: var(--sp-0) auto var(--sp-0) calc(-1 * var(--sp-1));
@@ -262,7 +242,7 @@
 	   you have to read through is a bar in the way. Off, the bar is a neutral
 	   fill again: a colour that means nothing on the canvas should not be
 	   sitting in the menu claiming to. */
-	.tinted .col-name::before {
+	.row.tinted .col-name::before {
 		background: var(--family);
 		opacity: 0.4;
 	}

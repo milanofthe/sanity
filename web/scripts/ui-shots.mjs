@@ -32,7 +32,7 @@ await page.evaluate(() => window.__sanity.zoomTo(0.1));
 await page.waitForTimeout(400);
 
 // Each menu, open.
-for (const label of ['Project', 'View', 'Theme']) {
+for (const label of ['Project', 'Files', 'View', 'Theme']) {
   await page.getByRole('button', { name: new RegExp(`^${label}`) }).click();
   await page.waitForTimeout(250);
   await page.screenshot({ path: `${outDir}/menu-${label.toLowerCase()}.png` });

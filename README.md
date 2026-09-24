@@ -39,11 +39,11 @@ Or open a folder from the Project menu.
 - Clicking a panel header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
   `$EDITOR` or the system default.
 - Right click exports the view or the whole project as a 4K PNG.
-- The View menu sets which file types are shown, whether files ignored by git
-  are listed, whether files are coloured by language, whether directories are
-  named over the canvas, whether documents show all their pages, and whether
-  each step through the history fits the whole project. The Theme menu has eight
-  themes.
+- The Files menu sets which file types are shown and whether files ignored by
+  git are listed. The View menu sets whether files are coloured by language,
+  whether directories are named over the canvas, whether documents show all
+  their pages, and whether each step through the history fits the whole
+  project. The Theme menu has eight themes.
 
 ## Watching changes
 
@@ -88,7 +88,7 @@ returning to the present shows the folder as it is.
   Verilog-A and SPICE.
 - Jupyter notebooks as their cells rather than as JSON.
 - Images, SVGs and PDFs as panels in their own proportions. A PDF shows its
-  first page, or all of its pages with Expand documents in the View menu,
+  first page, or all of its pages with Show every page in the View menu,
   rendered the same way on every platform.
 - Files ignored by git are left out, or listed as placeholders if you switch
   them on.

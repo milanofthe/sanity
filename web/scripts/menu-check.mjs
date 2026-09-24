@@ -18,7 +18,7 @@ await settled(page);
 await page.waitForTimeout(800);
 
 let failures = 0;
-for (const menu of ['Project', 'View', 'Theme']) {
+for (const menu of ['Project', 'Files', 'View', 'Theme']) {
   await page.getByRole('button', { name: new RegExp(`^${menu}`) }).click();
   await page.waitForTimeout(250);
   const r = await page.evaluate(() => {
