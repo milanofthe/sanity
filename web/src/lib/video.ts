@@ -142,15 +142,16 @@ export async function renderReplay(
 
     // The first commit, arrived at before the video starts: getting there
     // from the present is a jump across the whole range, not part of it.
+    const band = captionHeight(height);
     await source.go(plan.start);
     app.setCaption(caption(source.caption(plan.start), width, height));
-    app.captureFit(0);
+    app.captureFit(0, band);
     await app.captureSettle();
     await shoot(plan.introFrames);
     for (const target of plan.targets) {
       await source.go(target);
       app.setCaption(caption(source.caption(target), width, height));
-      app.captureFit(CAMERA_S);
+      app.captureFit(CAMERA_S, band);
       await shoot(plan.stepFrames);
     }
     await shoot(plan.outroFrames);
@@ -200,6 +201,9 @@ export function memorySink(): VideoSink & { bytes(): Uint8Array | null } {
   };
 }
 
+const captionFont = (height: number) => Math.round(height / 48);
+const captionHeight = (height: number) => Math.round(captionFont(height) * 2.2);
+
 /**
  * The commit line: a band along the bottom of the frame in the theme's
  * colours and fonts, the date, the short id and the subject.
@@ -214,8 +218,8 @@ export function caption(
 ): HTMLCanvasElement {
   const css = getComputedStyle(document.documentElement);
   const v = (name: string) => css.getPropertyValue(name).trim();
-  const px = Math.round(height / 48);
-  const band = Math.round(px * 2.2);
+  const px = captionFont(height);
+  const band = captionHeight(height);
   const c = document.createElement('canvas');
   c.width = width;
   c.height = band;

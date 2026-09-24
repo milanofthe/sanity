@@ -1314,12 +1314,25 @@ export class CanvasApp {
     }
   }
 
-  /** Fit the whole project, flying there over `seconds` of the video's
+  /** Fit the whole project into the frame above the bottom `inset` pixels,
+   *  where the commit line is, flying there over `seconds` of the video's
    *  time, or at once. */
-  captureFit(seconds: number): void {
+  captureFit(seconds: number, inset = 0): void {
     if (!this.layout) return;
-    if (seconds <= 0) this.cam.fit(...this.layout.bounds);
-    else this.cam.flyToRect(...this.layout.bounds, seconds);
+    const vh = this.cam.vh;
+    this.cam.vh = vh - inset;
+    const f = this.cam.fitFor(...this.layout.bounds);
+    this.cam.vh = vh;
+    // Centred in what is left: half the inset further down in the world.
+    const y = f.y + inset / 2 / f.zoom;
+    if (seconds <= 0) {
+      this.cam.stop();
+      this.cam.x = f.x;
+      this.cam.y = y;
+      this.cam.zoom = f.zoom;
+    } else {
+      this.cam.flyTo(f.x, y, f.zoom, seconds);
+    }
   }
 
   /** Play out what is moving, off the record: frames drawn at the video's
