@@ -5,6 +5,15 @@ const HEAD = `#version 300 es
 precision highp float;
 `;
 
+/** World to device pixels for the passes that round to the pixel grid; see
+ *  `Camera.writePixels` for why the camera's whole pixels are kept apart and
+ *  added only after rounding. */
+const PIXELS = `
+uniform vec2 uPxScale;
+uniform vec4 uPxOrigin;  // whole pixels in xy, the rest in zw
+vec2 pxRest(vec2 world) { return world * uPxScale + uPxOrigin.zw; }
+`;
+
 /** Filled rectangles with a pixel-width border: directory boxes, panel
  *  backgrounds, change gutters, heat glows. */
 export const rectVS = `${HEAD}
@@ -12,15 +21,13 @@ in vec2 aCorner;
 in vec4 aRect;    // world x, y, w, h
 in vec4 aFill;    // rgba
 in vec4 aBorder;  // rgb, and border width in device pixels in .a
-uniform mat3 uView;
 uniform vec2 uViewport;  // framebuffer size in device pixels
+${PIXELS}
 out vec2 vLocalPx;
 out vec2 vSizePx;
 out vec4 vFill;
 out vec4 vBorder;
 
-// Clip space to device pixels and back.
-vec2 toPx(vec2 clip) { return (clip * 0.5 + 0.5) * uViewport; }
 vec2 toClip(vec2 px) { return (px / uViewport) * 2.0 - 1.0; }
 
 void main() {
@@ -32,10 +39,8 @@ void main() {
   // one pixel wherever it is, so it steps rather than shimmers, and it also
   // keeps the fill's edges from bleeding a half-transparent seam between two
   // rectangles that share an edge.
-  vec2 p0 = toPx((uView * vec3(aRect.xy, 1.0)).xy);
-  vec2 p1 = toPx((uView * vec3(aRect.xy + aRect.zw, 1.0)).xy);
-  vec2 q0 = floor(p0 + 0.5);
-  vec2 q1 = floor(p1 + 0.5);
+  vec2 q0 = floor(pxRest(aRect.xy) + 0.5) + uPxOrigin.xy;
+  vec2 q1 = floor(pxRest(aRect.xy + aRect.zw) + 0.5) + uPxOrigin.xy;
   // A rectangle rounded to nothing would vanish; keep at least one pixel.
   vec2 dir = sign(q1 - q0 + 0.0001);
   q1 = q0 + dir * max(abs(q1 - q0), vec2(1.0));
@@ -89,12 +94,12 @@ uniform vec2 uTexPx;
 // The part of the texture drawn, as u0, v0, u1, v1: all of it for a picture,
 // flipped and inside the gutter for a tile.
 uniform vec4 uUv;
+${PIXELS}
 out vec2 vUv;
 void main() {
   vUv = mix(uUv.xy, uUv.zw, aCorner);
   if (uExact > 0.5) {
-    vec2 o = (uView * vec3(uRect.xy, 1.0)).xy;
-    vec2 originPx = floor((o * 0.5 + 0.5) * uViewport + 0.5);
+    vec2 originPx = floor(pxRest(uRect.xy) + 0.5) + uPxOrigin.xy;
     // World y grows downwards and clip y upwards, as for glyphs.
     vec2 px = originPx + vec2(aCorner.x, -aCorner.y) * uTexPx;
     gl_Position = vec4((px / uViewport) * 2.0 - 1.0, 0.0, 1.0);
@@ -231,7 +236,6 @@ export const glyphVS = `${HEAD}
 in vec2 aCorner;
 in vec4 aPosGlyph;  // world x, y, glyph index, token kind
 in vec2 aSizeFade;  // em size in world units, alpha
-uniform mat3 uView;
 uniform vec3 uKind[16];
 uniform vec2 uCell;      // cell size in atlas uv
 uniform vec2 uBoxPx;      // the atlas cell, in device pixels
@@ -242,6 +246,7 @@ uniform float uGridRows;
 uniform float uPhases;
 // Drawing buffer size in device pixels, for putting a glyph on the pixel grid.
 uniform vec2 uViewport;
+${PIXELS}
 out vec2 vUv;
 out vec4 vColor;
 void main() {
@@ -264,20 +269,19 @@ void main() {
   // the spacing between letters stays even. Vertically every line of a
   // column shares its fraction, so plain rounding keeps them even already.
   vec2 boxPx = max(vec2(1.0), floor(uBoxPx * (aSizeFade.x / uEmWorld) + 0.5));
-  vec2 originClip = (uView * vec3(aPosGlyph.xy, 1.0)).xy;
-  vec2 exactPx = (originClip * 0.5 + 0.5) * uViewport;
+  vec2 exactPx = pxRest(aPosGlyph.xy);
   float baseX = floor(exactPx.x);
   float phase = floor((exactPx.x - baseX) * uPhases + 0.5);
   if (phase >= uPhases) {
     baseX += 1.0;
     phase = 0.0;
   }
-  vec2 originPx = vec2(baseX, floor(exactPx.y + 0.5));
+  vec2 originPx = vec2(baseX, floor(exactPx.y + 0.5)) + uPxOrigin.xy;
   float idx = aPosGlyph.z + phase * uGridCols * uGridRows;
   vec2 cell = vec2(mod(idx, uGridCols), floor(idx / uGridCols));
   vUv = (cell + aCorner) * uCell;
-  // Y flips between the two: world y grows downwards and uView turns that
-  // into clip space, where it grows upwards. Adding the box in pixels without
+  // Y flips between the two: world y grows downwards and uPxScale turns that
+  // into device pixels, where it grows upwards. Adding the box in pixels without
   // that flip draws every glyph upside down.
   vec2 px = originPx + vec2(aCorner.x, -aCorner.y) * boxPx;
   gl_Position = vec4((px / uViewport) * 2.0 - 1.0, 0.0, 1.0);

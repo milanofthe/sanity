@@ -456,6 +456,20 @@ export class Scene {
   atlas: GlyphAtlas;
 
   private view = new Float32Array(9);
+  /** The same camera for the passes that round to the pixel grid; see
+   *  `Camera.writePixels`. */
+  private pixels = new Float32Array(6);
+
+  private setView(cam: Camera): void {
+    cam.writeMatrix(this.view);
+    cam.writePixels(this.pixels);
+  }
+
+  private pixelUniforms(u: Record<string, WebGLUniformLocation | null>): void {
+    const p = this.pixels;
+    this.gl.uniform2f(u.uPxScale, p[0], p[1]);
+    this.gl.uniform4f(u.uPxOrigin, p[2], p[3], p[4], p[5]);
+  }
   private kindFlat: Float32Array;
   /**
    * Token colours for the span bars, between the overview's damped palette and
@@ -720,17 +734,18 @@ export class Scene {
     this.progImage = createProgram(gl, imageVS, imageFS, 'image');
     this.progSpan = createProgram(gl, spanVS, spanFS, 'span');
     this.progGlyph = createProgram(gl, glyphVS, glyphFS, 'glyph');
-    this.uRect = uniforms(gl, this.progRect, ['uView', 'uViewport']);
+    this.uRect = uniforms(gl, this.progRect, ['uPxScale', 'uPxOrigin', 'uViewport']);
     this.uOverview = uniforms(gl, this.progOverview, [
       'uView', 'uTex', 'uTexRows', 'uSharp', 'uLangTint', 'uFamily[0]',
     ]);
     this.uImage = uniforms(gl, this.progImage, [
-      'uView', 'uTex', 'uRect', 'uFade', 'uViewport', 'uExact', 'uTexPx', 'uUv',
+      'uView', 'uPxScale', 'uPxOrigin', 'uTex', 'uRect', 'uFade', 'uViewport', 'uExact', 'uTexPx',
+      'uUv',
     ]);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
-      'uView', 'uKind[0]', 'uAtlas', 'uCell', 'uGridCols', 'uGridRows', 'uPhases',
-      'uViewport', 'uBoxPx', 'uEmWorld',
+      'uPxScale', 'uPxOrigin', 'uKind[0]', 'uAtlas', 'uCell', 'uGridCols', 'uGridRows',
+      'uPhases', 'uViewport', 'uBoxPx', 'uEmWorld',
     ]);
 
     this.tiles = new TileCache(gl);
@@ -1358,7 +1373,7 @@ export class Scene {
     if (b.count === 0) return;
     const { gl } = this;
     gl.useProgram(this.progRect);
-    gl.uniformMatrix3fv(this.uRect.uView, false, this.view);
+    this.pixelUniforms(this.uRect);
     gl.uniform2f(this.uRect.uViewport, this.viewW, this.viewH);
     b.upload();
     quadAttrib(gl, this.progRect, this.quad);
@@ -1546,7 +1561,7 @@ export class Scene {
     const spanFade = w.spans;
     const glyphFade = w.glyphs;
 
-    cam.writeMatrix(this.view);
+    this.setView(cam);
     const [vx0, vy0, vx1, vy1] = cam.visibleRect(64);
     this.viewRect = [vx0, vy0, vx1, vy1];
 
@@ -2082,11 +2097,10 @@ export class Scene {
     let pxW = 0;
     let pxH = 0;
     if (still && cam) {
-      const s = cam.zoom * cam.dpr;
-      const ox = (cam.vw / 2 - cam.x * cam.zoom) * cam.dpr;
-      const oy = (cam.vh / 2 - cam.y * cam.zoom) * cam.dpr;
-      pxW = Math.round(ox + (x + w) * s) - Math.round(ox + x * s);
-      pxH = Math.round(oy + (y + h) * s) - Math.round(oy + y * s);
+      // The numbers the shader rounds; see `Camera.writePixels`.
+      const [sx, sy, , , rx, ry] = this.pixels;
+      pxW = Math.round(rx + (x + w) * sx) - Math.round(rx + x * sx);
+      pxH = Math.round(ry + y * sy) - Math.round(ry + (y + h) * sy);
     }
     const held =
       (w * zoom < MEDIA_MIN_PX
@@ -2129,6 +2143,7 @@ export class Scene {
     if (this.imageDraws.length === 0) return;
     gl.useProgram(this.progImage);
     gl.uniformMatrix3fv(this.uImage.uView, false, this.view);
+    this.pixelUniforms(this.uImage);
     gl.uniform1i(this.uImage.uTex, 0);
     gl.activeTexture(gl.TEXTURE0);
     quadAttrib(gl, this.progImage, this.quad);
@@ -2576,9 +2591,10 @@ export class Scene {
       this.viewW = gl.drawingBufferWidth;
       this.viewH = gl.drawingBufferHeight;
       gl.viewport(0, 0, this.viewW, this.viewH);
-      cam.writeMatrix(this.view);
+      this.setView(cam);
       gl.useProgram(this.progImage);
       gl.uniformMatrix3fv(this.uImage.uView, false, this.view);
+      this.pixelUniforms(this.uImage);
       gl.uniform1i(this.uImage.uTex, 0);
       gl.uniform2f(this.uImage.uViewport, this.viewW, this.viewH);
       gl.uniform1f(this.uImage.uExact, 1);
@@ -2625,9 +2641,10 @@ export class Scene {
     const [br, bg, bb] = rgb(this.pal.surface.bg);
     gl.clearColor(br, bg, bb, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    cam.writeMatrix(this.view);
+    this.setView(cam);
     gl.useProgram(this.progImage);
     gl.uniformMatrix3fv(this.uImage.uView, false, this.view);
+    this.pixelUniforms(this.uImage);
     gl.uniform1i(this.uImage.uTex, 0);
     gl.uniform2f(this.uImage.uViewport, this.viewW, this.viewH);
     gl.uniform1f(this.uImage.uExact, 0);
@@ -3152,7 +3169,7 @@ export class Scene {
     const level = this.atlas.pick(em * dpr, exact);
 
     gl.useProgram(this.progGlyph);
-    gl.uniformMatrix3fv(this.uGlyph.uView, false, this.view);
+    this.pixelUniforms(this.uGlyph);
     gl.uniform3fv(this.uGlyph['uKind[0]'], this.kindFlat);
     gl.uniform1i(this.uGlyph.uAtlas, 0);
     gl.uniform2f(
@@ -3270,7 +3287,7 @@ export class Scene {
     lc.zoom = 1;
     lc.x = hw;
     lc.y = hh;
-    lc.writeMatrix(this.view);
+    this.setView(lc);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.viewW = gl.drawingBufferWidth;
     this.viewH = gl.drawingBufferHeight;
@@ -3320,7 +3337,7 @@ export class Scene {
     const level = this.atlas.label(px);
     const one = GlyphAtlas.oneToOne(px);
     gl.useProgram(this.progGlyph);
-    gl.uniformMatrix3fv(this.uGlyph.uView, false, this.view);
+    this.pixelUniforms(this.uGlyph);
     gl.uniform3fv(this.uGlyph['uKind[0]'], this.labelInk);
     gl.uniform1i(this.uGlyph.uAtlas, 0);
     gl.uniform2f(this.uGlyph.uCell, level.cellW / level.texW, level.cellH / level.texH);

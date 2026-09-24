@@ -67,3 +67,47 @@ test('a flight at the same zoom is a pan', () => {
   assert.equal(cam.zoom, 0.05);
   assert.equal(cam.x, 3000);
 });
+
+test('a pan by whole pixels leaves what the grid rounds untouched', () => {
+  // The shaders round `world * scale + rest` and add the whole pixels after,
+  // so a drag, which moves by whole pixels, has to change only those. If the
+  // rest moved, float error would decide which side of a half pixel a row of
+  // text lands on, differently every frame.
+  const cam = camera();
+  cam.dpr = 2;
+  cam.zoom = 9 / 14;
+  cam.x = 18424.3;
+  cam.y = 8281.5 + 0.5 / cam.zoom;
+  const px = new Float32Array(6);
+  cam.writePixels(px);
+  const first = [...px];
+  for (let i = 1; i <= 500; i++) {
+    cam.panBy(3, -2);
+    cam.writePixels(px);
+    assert.equal(px[4], first[4], `rest x moved after ${i} steps`);
+    assert.equal(px[5], first[5], `rest y moved after ${i} steps`);
+    assert.equal(px[2] - first[2], 6 * i);
+    assert.equal(px[3] - first[3], 4 * i);
+  }
+  assert.ok(first[4] >= 0 && first[4] < 1 && first[5] >= 0 && first[5] < 1);
+});
+
+test('the split puts a point where the clip space matrix does', () => {
+  const cam = camera();
+  cam.dpr = 2;
+  cam.zoom = 0.37;
+  cam.x = -512.25;
+  cam.y = 77.1;
+  const m = new Float32Array(9);
+  const px = new Float32Array(6);
+  cam.writeMatrix(m);
+  cam.writePixels(px);
+  for (const [wx, wy] of [[0, 0], [-900, 400], [1234.5, -17.25]]) {
+    const cx = m[0] * wx + m[6];
+    const cy = m[4] * wy + m[7];
+    const viaClip = [(cx * 0.5 + 0.5) * cam.vw * cam.dpr, (cy * 0.5 + 0.5) * cam.vh * cam.dpr];
+    const viaSplit = [wx * px[0] + px[4] + px[2], wy * px[1] + px[5] + px[3]];
+    assert.ok(Math.abs(viaClip[0] - viaSplit[0]) < 1e-2, `x ${viaClip[0]} vs ${viaSplit[0]}`);
+    assert.ok(Math.abs(viaClip[1] - viaSplit[1]) < 1e-2, `y ${viaClip[1]} vs ${viaSplit[1]}`);
+  }
+});

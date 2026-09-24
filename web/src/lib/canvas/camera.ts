@@ -88,6 +88,33 @@ export class Camera {
     out[8] = 1;
   }
 
+  /**
+   * World to device pixels, for the passes that put things on the pixel
+   * grid, as [scale x, scale y, whole x, whole y, rest x, rest y]: a world
+   * point lands at `world * scale + rest + whole`, y up as the drawing buffer
+   * has it.
+   *
+   * Split because rounding to the grid happens in float32. Through the clip
+   * space matrix the camera's position went into every rounding, so each step
+   * of a pan changed the float error, and whatever sat on a half pixel landed
+   * on one side of it in one frame and on the other in the next: whole rows
+   * of text and every horizontal edge hopping a pixel and back while the view
+   * was dragged. Rounded before the whole pixels are added, a pan by whole
+   * pixels rounds the same numbers every frame. The rest is kept to 1/1024 of
+   * a pixel, so the error `panBy` accumulates in `x` does not reach it.
+   */
+  writePixels(out: Float32Array): void {
+    const s = this.zoom * this.dpr;
+    const ox = Math.round((this.vw / 2 - this.x * this.zoom) * this.dpr * 1024) / 1024;
+    const oy = Math.round((this.vh / 2 + this.y * this.zoom) * this.dpr * 1024) / 1024;
+    out[0] = s;
+    out[1] = -s;
+    out[2] = Math.floor(ox);
+    out[3] = Math.floor(oy);
+    out[4] = ox - Math.floor(ox);
+    out[5] = oy - Math.floor(oy);
+  }
+
   /** Zoom and centre that would fit the rect, without applying it. */
   fitFor(
     x0: number, y0: number, x1: number, y1: number, padFrac = 0.04,
