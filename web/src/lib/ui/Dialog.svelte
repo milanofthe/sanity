@@ -47,6 +47,7 @@
 
 <style>
 	.backdrop {
+		animation: backdrop-in var(--dur-2) ease-out;
 		position: fixed;
 		inset: 0;
 		z-index: var(--z-backdrop);
@@ -56,6 +57,7 @@
 		background: color-mix(in srgb, var(--bg) 60%, transparent);
 	}
 	.sheet {
+		animation: sheet-in var(--dur-2) ease-out;
 		z-index: var(--z-sheet);
 		width: var(--w-menu-l);
 		background: var(--bg-panel);

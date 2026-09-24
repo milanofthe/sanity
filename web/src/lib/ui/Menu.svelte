@@ -80,6 +80,7 @@
 		opacity: 1;
 	}
 	.sheet {
+		animation: sheet-in var(--dur-2) ease-out;
 		position: absolute;
 		top: 100%;
 		left: 0;

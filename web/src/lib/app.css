@@ -88,6 +88,29 @@ body {
 	background: var(--bg);
 }
 
+/* A sheet appearing: a menu, the context menu, a dialog. Faded in and slid
+   the width of the smallest gap down into place, at a control's pace, so it
+   reads as coming out of what opened it rather than being there all at once.
+   It goes without motion: a menu closing is dismissed, and anything that
+   lingers after the click is in the way. One animation for all of them, so
+   they cannot drift apart. */
+@keyframes sheet-in {
+	from {
+		opacity: 0;
+		transform: translateY(calc(-1 * var(--sp-1)));
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@keyframes backdrop-in {
+	from {
+		opacity: 0;
+	}
+}
+
 /* The theme changing: the window as it was fades into the window as it is,
    canvas included; see ui.setTheme. Twice a control's pace, because the whole
    window changing at that pace reads as a cut. */
@@ -98,6 +121,11 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation: none !important;
+	}
 	::view-transition-group(*),
 	::view-transition-old(*),
 	::view-transition-new(*) {

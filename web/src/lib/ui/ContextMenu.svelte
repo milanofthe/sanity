@@ -59,6 +59,7 @@
 
 <style>
 	.ctx {
+		animation: sheet-in var(--dur-2) ease-out;
 		position: fixed;
 		z-index: var(--z-tooltip);
 		min-width: var(--w-menu-s);
