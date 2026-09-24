@@ -10,6 +10,7 @@
 	import { history } from '$lib/state/history.svelte';
 	import { historyReplay, openVideoSink } from '$lib/sources/tauri';
 	import Dialog from '$lib/ui/Dialog.svelte';
+	import NumberField from '$lib/ui/NumberField.svelte';
 	import Segmented from '$lib/ui/Segmented.svelte';
 	import { planReplay, renderReplay, VIDEO_FPS, type VideoSize } from '$lib/video';
 
@@ -39,12 +40,8 @@
 
 	const oldest = $derived(history.commits.length - 1);
 	const from = $derived(range === 'ticker' && history.at > 0 ? history.at : oldest);
-	const plan = $derived(planReplay(from, 0, clampSeconds(seconds)));
+	const plan = $derived(planReplay(from, 0, seconds));
 	const commits = $derived(from + 1);
-
-	function clampSeconds(s: number): number {
-		return Math.min(600, Math.max(5, Number.isFinite(s) ? s : 60));
-	}
 
 	async function start() {
 		if (!app || running) return;
@@ -90,13 +87,14 @@
 	<div class="row">
 		<span class="label">Length</span>
 		<span class="field">
-			<input
-				type="number"
-				min="5"
-				max="600"
-				step="5"
-				bind:value={seconds}
+			<NumberField
+				value={seconds}
+				min={5}
+				max={600}
+				step={5}
+				label="Length in seconds"
 				disabled={running}
+				onchange={(v) => (seconds = v)}
 			/>
 			<span class="unit">seconds</span>
 		</span>
@@ -164,21 +162,6 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--sp-2);
-	}
-	input {
-		width: calc(4 * var(--h-field));
-		height: var(--h-field);
-		padding: 0 var(--sp-2);
-		font-family: var(--font-ui);
-		font-size: var(--fs-s);
-		color: var(--text);
-		background: var(--bg-inset);
-		border: var(--sep-w) solid var(--border);
-		border-radius: var(--radius);
-	}
-	input:focus-visible {
-		outline: var(--sep-w) solid var(--accent);
-		outline-offset: calc(-1 * var(--sep-w));
 	}
 	.unit,
 	.summary {
