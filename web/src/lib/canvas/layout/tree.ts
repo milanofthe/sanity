@@ -1147,11 +1147,28 @@ export function computeLayout(
   entries: FileEntry[],
   viewport?: { w: number; h: number },
   before?: Layout,
+  filling = false,
 ): Layout {
+  if (before && filling) {
+    // A folder filling in, laid out again as its files arrive: the carried
+    // layout unless it has panels that cannot be drawn. Weighed against a
+    // fresh one on fill and bloat, it lost halfway through opening sane,
+    // since the estimates it started from had shaped it, and every panel
+    // jumped at once; and the fresh one doubled what each relayout cost.
+    const carried = layoutFrom(entries, viewport, before, true);
+    if (drawable(layoutStats(carried))) return carried;
+  }
   const fresh = layoutFrom(entries, viewport, null);
   if (!before) return fresh;
   const carried = layoutFrom(entries, viewport, before);
   return asGood(layoutStats(carried), layoutStats(fresh)) ? carried : fresh;
+}
+
+/** Nothing on the canvas that cannot be drawn, overlaps or stands outside
+ *  where it belongs. */
+function drawable(s: LayoutStats): boolean {
+  return s.unusable === 0 && s.overflowing === 0 && s.hiddenStubs === 0
+    && s.overlaps === 0 && s.escapes === 0 && s.offGrid === 0;
 }
 
 function asGood(carried: LayoutStats, fresh: LayoutStats): boolean {
@@ -1170,6 +1187,7 @@ function layoutFrom(
   entries: FileEntry[],
   viewport: { w: number; h: number } | undefined,
   before: Layout | null,
+  filling = false,
 ): Layout {
   const root = buildTree(entries);
   collapseChains(root);
@@ -1179,7 +1197,7 @@ function layoutFrom(
   const allDirs: DirNode[] = [];
   const allBlocks: StubBlock[] = [];
   collect(root, allFiles, allDirs, allBlocks);
-  if (before) carryOver(before, allFiles, allDirs, allBlocks);
+  if (before) carryOver(before, allFiles, allDirs, allBlocks, filling);
   fitPasses(root, allFiles, allBlocks, rootAspect(viewport));
 
   const files: FileNode[] = [];
@@ -1216,10 +1234,13 @@ function layoutFrom(
  * nothing to correct but what changed, and the five lines move nothing.
  */
 function carryOver(
-  before: Layout, files: FileNode[], dirs: DirNode[], blocks: StubBlock[],
+  before: Layout, files: FileNode[], dirs: DirNode[], blocks: StubBlock[], filling = false,
 ): void {
   const plans = new Map(before.dirs.map((d) => [d.path, d.plan]));
-  for (const d of dirs) d.planBefore = plans.get(d.path) ?? null;
+  for (const d of dirs) {
+    const plan = plans.get(d.path) ?? null;
+    d.planBefore = plan && filling ? { ...plan, loose: true } : plan;
+  }
   const was = new Map<string, { area: number; baseArea: number; offered?: boolean }>();
   const beforeBlocks: StubBlock[] = [];
   collect(before.root, [], [], beforeBlocks);

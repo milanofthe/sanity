@@ -244,9 +244,7 @@
 		onclear={() => onsearch?.('')}
 	/>
 
-	{#if busy}
-		<span class="badge busy" title="Scanning">scanning</span>
-	{:else if ui.narrow}
+	{#if ui.narrow}
 		<!-- No room; the Project menu says what is showing. -->
 	{:else if project.demo}
 		<span class="badge" title="A snapshot of a public repository, read only">demo</span>
@@ -300,10 +298,6 @@
 	.path a {
 		display: block;
 		color: var(--accent);
-	}
-	.badge.busy {
-		color: var(--warn);
-		border-color: var(--warn);
 	}
 	.badge {
 		align-self: center;

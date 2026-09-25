@@ -60,12 +60,40 @@
 		const id = setInterval(() => (now = performance.now()), 1000);
 		return () => clearInterval(id);
 	});
+	/**
+	 * Opening a folder, as one bar: the files being read, which is most of
+	 * it, then the panels being filled from what was read. Two numbers from
+	 * two places, but one wait to the person looking at it.
+	 */
+	let loading = $derived.by(() => {
+		const r = project.reading;
+		if (r && r.total > 0) {
+			return { share: r.read / r.total, label: `reading ${n(r.read)} of ${n(r.total)} files` };
+		}
+		if (stats && stats.indexing > 0) {
+			return { share: stats.indexing, label: `preparing ${Math.round(stats.indexing * 100)}%` };
+		}
+		return null;
+	});
 	let justChanged = $derived(
 		project.lastChangeAt > 0 && now - project.lastChangeAt < RECENT_MS
 	);
 </script>
 
 <footer class:narrow={ui.narrow}>
+	{#if loading}
+		<!-- How far opening the folder is, along the top edge of the bar:
+		     reading the files, then putting them into their panels. -->
+		<span
+			class="progress"
+			role="progressbar"
+			aria-label={loading.label}
+			aria-valuemin={0}
+			aria-valuemax={1}
+			aria-valuenow={loading.share}
+			style:width={`${(loading.share * 100).toFixed(1)}%`}
+		></span>
+	{/if}
 	{#if error}
 		<span class="group err" title={error}>{error}</span>
 	{:else if notice}
@@ -116,8 +144,8 @@
 				<span class="dim">{hoverDir}</span>{hoverName}
 			</span>
 		{/if}
-		{#if stats.indexing > 0}
-			<span class="group accent">indexing {Math.round(stats.indexing * 100)}%</span>
+		{#if loading}
+			<span class="group">{loading.label}</span>
 		{/if}
 		<span class="group dim tech">
 			fill {Math.round(stats.fill * 100)}%
@@ -134,12 +162,21 @@
 </footer>
 
 <style>
+	.progress {
+		position: absolute;
+		top: 0;
+		left: 0;
+		height: var(--sp-0);
+		background: var(--accent);
+		transition: width var(--dur-2) ease-out;
+	}
 	/* On a phone's width, what the renderer is doing gives way to what the
 	   project is: the counts and what is under the finger. */
 	.narrow .tech {
 		display: none;
 	}
 	footer {
+		position: relative;
 		display: flex;
 		align-items: center;
 		/* Clips rather than pushes: the numbers are secondary, and letting them

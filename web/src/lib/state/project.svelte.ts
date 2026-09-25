@@ -97,6 +97,11 @@ class ProjectState {
 		this.ignoredShown = shown;
 	}
 
+	/** How far reading the open folder is, while it is being read: files
+	 *  read of all of them. The layout is up before this starts, from
+	 *  estimates, and the panels fill in as it goes; see `fillRepo`. */
+	reading = $state<{ read: number; total: number } | null>(null);
+
 	/** True while a file watcher is running on the open folder. Shown in the
 	 *  status bar, because the difference between a live view and a snapshot is
 	 *  not something you can see by looking at the canvas. */

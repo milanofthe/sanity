@@ -356,6 +356,19 @@ const CARRY_ASPECT_SLACK = 1.5;
 const CARRY_ASPECT_FINE = 3;
 
 /**
+ * The same, while a folder fills in; see `Plan.loose`. The layout it starts
+ * from was cut for estimates of its files, so as the real sizes arrive a row
+ * is a worse shape than a fresh one because the estimate was off rather than
+ * because it drifted, and laying it fresh jumps part of a directory as the
+ * folder opens: a third of the canvas in a test where every estimate was a
+ * fifth off. Only a row far worse is laid fresh then, and the relayouts after
+ * repair the rest where it is. On sane, rapidmesh, fastsim and pathsim the
+ * opening moved no more either way, since their estimates are close, and the
+ * first relayout after it moved nothing, or at most 0.4 percent of the canvas.
+ */
+const CARRY_ASPECT_LOOSE: [number, number] = [3, 6];
+
+/**
  * The row a squarified layout lays at item `i` in `free`: as many items as
  * improve its worst aspect ratio, along the shorter side.
  */
@@ -400,7 +413,7 @@ function growRow<T extends Sized>(
 }
 
 export function subdivide<T extends Sized>(
-  items: T[], rect: IntRect, given: Row[],
+  items: T[], rect: IntRect, given: Row[], loose = false,
 ): { rects: IntRect[]; rows: Row[] } {
   const out: IntRect[] = new Array(items.length);
   const rows: Row[] = [];
@@ -459,7 +472,8 @@ export function subdivide<T extends Sized>(
         total += a;
       }
       const shape = count > 0 ? worstAspect(areas, total, along) : Infinity;
-      const fine = Math.max(CARRY_ASPECT_FINE, greedy.worst * CARRY_ASPECT_SLACK);
+      const [slack, least] = loose ? CARRY_ASPECT_LOOSE : [CARRY_ASPECT_SLACK, CARRY_ASPECT_FINE];
+      const fine = Math.max(least, greedy.worst * slack);
       if (count > 0 && run <= along && shape <= fine) {
         fixed = { count, horizontal: g.horizontal };
       } else {
@@ -586,6 +600,9 @@ function gridFallback(count: number, rect: IntRect, out: IntRect[], offset: numb
 export interface Plan {
   keys: string[];
   rows: Row[];
+  /** Carried while a folder fills in, from estimates of its files: the rows
+   *  are kept through wider changes of shape; see CARRY_ASPECT_LOOSE. */
+  loose?: boolean;
 }
 
 /**
@@ -628,7 +645,7 @@ export function layoutTreemap<T extends Sized>(
       if (count > 0) given.push({ count, horizontal: r.horizontal });
     }
   }
-  const { rects, rows } = subdivide(order.map((o) => o.it), rect, given);
+  const { rects, rows } = subdivide(order.map((o) => o.it), rect, given, plan?.loose);
   order.forEach((o, k) => assign(o.it, rects[k]));
   return { keys: key ? order.map((o) => key(o.it)) : [], rows };
 }

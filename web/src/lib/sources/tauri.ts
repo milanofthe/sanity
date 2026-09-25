@@ -3,7 +3,7 @@
 // The scan result comes back as JSON because it is small and structured. The
 // payloads come back as one raw byte blob with a JSON index in front of it,
 // because the default IPC would base64 several megabytes of typed arrays and
-// copy them twice. See `repo_payloads` in src-tauri/src/lib.rs.
+// copy them twice. See `scan_next` in src-tauri/src/scanjob.rs.
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -38,6 +38,9 @@ interface ScanFile {
   media?: MediaSize;
   /** Which version of a picture this is; see canvas/mediakey.ts. */
   version?: string;
+  /** Line widths sampled from a file not read yet; see `sampleCols` in
+   *  src-tauri/src/lib.rs and `lineColsFrom`. */
+  sampleCols?: number[];
 }
 
 interface ScanResult {
@@ -46,7 +49,7 @@ interface ScanResult {
   groups: Omit<FileGroup, 'mode'>[];
   binary: number;
   /** How many files git ignores in the folder, and how many of those this
-   *  scan took; see `scan_repo`. */
+   *  scan took; see `scan_start`. */
   ignoredTotal: number;
   ignoredShown: number;
   elapsedMs: number;
@@ -206,18 +209,112 @@ export async function pickFolder(): Promise<string | null> {
   return typeof picked === 'string' ? picked : null;
 }
 
-/** Scan a folder and hand the result to the picker. */
+/** Counts the fills, so one for a folder that has since been replaced stops. */
+let filling = 0;
+
+/**
+ * Open a folder, first stage: every file listed and estimated from its size
+ * and first few kilobytes, which is milliseconds, so the whole project can be
+ * laid out at once. `fillRepo` is the second stage. See src-tauri/src/scanjob.rs.
+ */
 export async function loadRepo(path: string): Promise<void> {
-  scan = await invoke<ScanResult>('scan_repo', {
+  filling++;
+  scan = await invoke<ScanResult>('scan_start', {
     path,
     includeIgnored: project.includeIgnored,
   });
-  const blob = await invoke<ArrayBuffer>('repo_payloads');
-  payloads = unpack(blob);
+  payloads = new Map();
   decoded = new Map();
   thumbs = new Map();
+  project.reading = { read: 0, total: scan.files.filter((f) => !f.ignored).length };
   project.load(scan.root, scan.groups, false);
   project.setIgnoredCounts(scan.ignoredTotal, scan.ignoredShown);
+}
+
+/** How often the window collects what has been read. */
+const COLLECT_MS = 50;
+/** Least time between two relayouts while files arrive, and at least this
+ *  many times what the last one took, so a large project spends most of its
+ *  time reading rather than laying out what it has read so far. */
+const RELAYOUT_MS = 400;
+const RELAYOUT_SHARE = 6;
+
+/** A reply of `scan_next`: rows, dropped paths, progress and payloads. */
+function readScanBatch(reply: ArrayBuffer): {
+  rows: ScanFile[]; dropped: string[]; read: number; total: number; done: boolean;
+  parts: [string, ArrayBuffer][];
+} {
+  const headerLen = new DataView(reply).getUint32(0, true);
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(reply, 4, headerLen))) as {
+    rows: ScanFile[]; dropped: string[]; read: number; total: number; done: boolean;
+  };
+  return { ...header, parts: [...unpack(reply.slice(4 + headerLen))] };
+}
+
+/** Whether a row differs from another in anything the layout sizes by. */
+const resized = (a: ScanFile | undefined, b: ScanFile): boolean =>
+  !a || a.lineCount !== b.lineCount || a.maxCols !== b.maxCols || a.clipCols !== b.clipCols
+  || JSON.stringify(a.media ?? null) !== JSON.stringify(b.media ?? null);
+
+/**
+ * Open a folder, second stage: collect the files as they are read and fill
+ * their panels in. A file whose real size differs from its estimate is laid
+ * out again, carried over from the layout on screen, gathered rather than
+ * once per file. Resolves true once every file is in, false when another
+ * folder was opened meanwhile.
+ */
+export async function fillRepo(app: CanvasApp): Promise<boolean> {
+  const mine = ++filling;
+  const t0 = performance.now();
+  let layouts = 0;
+  let batches = 0;
+  let lastLayout = -Infinity;
+  let cost = 0;
+  let relayout = false;
+  for (;;) {
+    const batch = readScanBatch(await invoke<ArrayBuffer>('scan_next'));
+    if (mine !== filling || !scan) return false;
+    const rows = new Map(scan.files.map((f) => [f.path, f]));
+    for (const row of batch.rows) {
+      if (resized(rows.get(row.path), row)) relayout = true;
+      rows.set(row.path, row);
+    }
+    for (const path of batch.dropped) {
+      rows.delete(path);
+      relayout = true;
+    }
+    if (batch.rows.length > 0 || batch.dropped.length > 0) scan = { ...scan, files: [...rows.values()] };
+    const arrived: string[] = [];
+    for (const [path, buf] of batch.parts) {
+      payloads.set(path, buf);
+      arrived.push(path);
+    }
+    project.reading = batch.done ? null : { read: batch.read, total: batch.total };
+    const now = performance.now();
+    if (relayout && (batch.done || now - lastLayout > Math.max(RELAYOUT_MS, RELAYOUT_SHARE * cost))) {
+      openLoaded(app, true, !batch.done);
+      app.followFit();
+      layouts++;
+      cost = performance.now() - now;
+      lastLayout = now;
+      relayout = false;
+    }
+    if (arrived.length > 0) app.fillIn(arrived);
+    batches++;
+    if (batch.done) {
+      uiLog(
+        `read ${batch.total} files in ${(performance.now() - t0).toFixed(0)} ms after the layout, ` +
+          `${batches} batches, laid out again ${layouts} times`,
+      );
+      break;
+    }
+    await new Promise((r) => setTimeout(r, COLLECT_MS));
+  }
+  // The index as it now stands, for the picker's counts, which were
+  // estimates until now.
+  scan = await invoke<ScanResult>('repo_index');
+  project.refreshGroups(scan.groups);
+  return mine === filling;
 }
 
 /** The small version of each picture, by its key; see sources/thumbs.ts and
@@ -259,8 +356,22 @@ async function loadThumbs(pictures: { path: string; version?: string }[], onBatc
   }
 }
 
+/**
+ * Line widths for a file estimated but not read: its sample, repeated over
+ * as many lines as it is estimated to have. The layout sizes a panel by the
+ * rows its lines take once long ones wrap, and every line at the typical
+ * width wraps none: a netlist whose lines run from a few characters to four
+ * thousand came out two and a half times its size that way.
+ */
+function lineColsFrom(sample: number[], lineCount: number): Uint16Array {
+  const out = new Uint16Array(Math.max(1, lineCount));
+  if (sample.length === 0) return out.fill(1);
+  for (let i = 0; i < out.length; i++) out[i] = sample[i % sample.length];
+  return out;
+}
+
 /** Build the scene from the loaded scan and the current view modes. */
-export function openLoaded(app: CanvasApp, keepView = false): void {
+export function openLoaded(app: CanvasApp, keepView = false, filling = false): void {
   if (!scan) return;
   // In the history, the files as they are at the commit shown: laid out for
   // that commit alone, so nothing leaves an empty place behind.
@@ -269,6 +380,9 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
     .map((f) => ({
       path: f.path,
       lineCount: f.lineCount,
+      // A file not read yet is laid out from its sample, so its long lines
+      // wrap as the real ones will; see `lineColsFrom`.
+      ...(f.sampleCols ? { lineCols: lineColsFrom(f.sampleCols, f.lineCount) } : {}),
       maxCols: f.maxCols,
       clipCols: f.clipCols,
       // A document shows every page when the option is on; see `pageGrid`.
@@ -322,6 +436,7 @@ export function openLoaded(app: CanvasApp, keepView = false): void {
       },
     },
     keepView,
+    filling,
   );
 }
 

@@ -82,3 +82,26 @@ test('expanding a document changes its shape and not its area', () => {
   // A single page has nothing to expand into.
   assert.deepEqual(mediaShape({ ...doc, pages: 1, expanded: true }), mediaShape({ ...doc, pages: 1 }));
 });
+
+test('a folder filling in follows its files from the layout of its estimates', () => {
+  // Estimated sizes off by up to a fifth either way, as they are for a file
+  // whose head is not like the rest of it; then the real ones arrive.
+  const real = files(120);
+  const estimated = real.map((f, i) => ({ ...f, lineCount: Math.max(1, Math.round(f.lineCount * (0.8 + (i % 5) * 0.1))) }));
+  const first = computeLayout(estimated, view);
+  const filled = computeLayout(real, view, first, true);
+  assert.equal(filled.continued, true);
+  const centre = (l: Layout, f: { x: number; y: number; w: number; h: number }) => {
+    const [x0, y0, x1, y1] = l.bounds;
+    return [(f.x + f.w / 2 - x0) / (x1 - x0), (f.y + f.h / 2 - y0) / (y1 - y0)];
+  };
+  const before = new Map(first.files.map((f) => [f.path, centre(first, f)]));
+  let far = 0;
+  for (const f of filled.files) {
+    const p = before.get(f.path)!;
+    const q = centre(filled, f);
+    far = Math.max(far, Math.hypot(q[0] - p[0], q[1] - p[1]));
+  }
+  // Nothing jumps: the panels slide to their real sizes where they are.
+  assert.ok(far < 0.1, `a panel moved ${(far * 100).toFixed(1)} percent of the canvas`);
+});

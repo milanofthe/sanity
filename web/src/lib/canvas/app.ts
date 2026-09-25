@@ -88,6 +88,9 @@ export interface RepoSource {
 
 const UPLOAD_BUDGET_MS = 6;
 
+/** How long following the layout's proportions takes, per relayout. */
+const FOLLOW_FIT_S = 0.3;
+
 /** Two taps this close in time and place are a double tap. */
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_PX = 24;
@@ -162,6 +165,8 @@ export class CanvasApp {
 
   private pending: string[] = [];
   private decoded = new Map<string, FileData>();
+  /** The bytes each of `decoded` was decoded from; see `open`. */
+  private decodedFrom = new Map<string, ArrayBuffer>();
   /**
    * Layout node per path, built once per layout.
    *
@@ -317,23 +322,34 @@ export class CanvasApp {
 
   /** Replace the whole scene. Layout runs synchronously, texture upload is
    *  spread across frames so opening a large repo does not lock the window. */
-  open(source: RepoSource, keepView = false): void {
+  open(source: RepoSource, keepView = false, filling = false): void {
     // Reusing the scene is the difference between a relayout being free and
     // costing what a first load costs; see Scene.relayout. Only possible when
     // the view is being kept, which is also the only time it matters.
     const reuse = keepView && this.scene !== null;
     this.invalidate();
     this.lastSource = source;
-    if (!reuse) this.scene = null;
+    if (!reuse) {
+      this.scene = null;
+      this.handled = false;
+    }
     this.hovered = null;
-    this.decoded.clear();
 
     // Decode first: the layout needs each file's line widths to work out how
     // many screen rows it takes once its long lines wrap, and wrapping is what
-    // decides a panel's height.
+    // decides a panel's height. What was decoded from the same bytes before
+    // is kept: a folder filling in is laid out again as its files arrive,
+    // and decoding all of them each time was most of what that cost.
+    const was = this.decoded;
+    const wasFrom = this.decodedFrom;
+    this.decoded = new Map();
+    this.decodedFrom = new Map();
     for (const e of source.entries) {
       const buf = source.payload(e.path);
-      if (buf) this.decoded.set(e.path, decodeFile(buf));
+      if (!buf) continue;
+      const same = wasFrom.get(e.path) === buf ? was.get(e.path) : undefined;
+      this.decoded.set(e.path, same ?? decodeFile(buf));
+      this.decodedFrom.set(e.path, buf);
     }
 
     const t0 = performance.now();
@@ -344,6 +360,7 @@ export class CanvasApp {
       source.entries.map((e) => ({ ...e, lineCols: e.lineCols ?? this.decoded.get(e.path)?.lineCols })),
       { w: this.cam.vw, h: this.cam.vh },
       reuse ? this.layout ?? undefined : undefined,
+      filling,
     );
     this.nodeByPath = new Map(this.layout.files.map((f) => [f.path, f]));
     const st = layoutStats(this.layout);
@@ -818,6 +835,36 @@ export class CanvasApp {
     return lines.join('\n');
   }
 
+  /**
+   * Put files that have arrived on the canvas, into the places the layout
+   * kept for them: the second stage of opening a folder, where the layout
+   * was made from estimates. Each panel settles in once its contents are
+   * written, not before; written the way a relayout writes them, not the way
+   * a save does, so they do not flash.
+   */
+  fillIn(paths: string[]): void {
+    const source = this.lastSource;
+    if (!source || !this.scene) return;
+    for (const path of paths) {
+      const buf = source.payload(path);
+      if (!buf || !this.nodeByPath.has(path)) continue;
+      this.decoded.set(path, decodeFile(buf));
+      this.pending.push(path);
+    }
+    this.invalidate();
+  }
+
+  /** Whether the view was moved by hand since the project was opened: a
+   *  folder filling in keeps the whole of it fitted until it was. */
+  private handled = false;
+
+  /** Fit the whole project again, unless the view has been moved by hand
+   *  since it opened: while a folder fills in, the layout's proportions
+   *  follow the files as they are read. */
+  followFit(): void {
+    if (!this.handled) this.fit(FOLLOW_FIT_S);
+  }
+
   /** Redraw, starting the loop again if it had stopped. */
   invalidate(): void {
     this.dirty = true;
@@ -924,6 +971,7 @@ export class CanvasApp {
    *  under it, or the whole project over the background. */
   private fitAt(sx: number, sy: number): void {
     if ((this.scene?.labelAt(sx, sy) ?? null) !== null) return;
+    this.handled = true;
     const hit = this.fileAt(sx, sy);
     if (hit) this.focusFile(hit.path);
     else this.fit();
@@ -988,6 +1036,7 @@ export class CanvasApp {
       const was = down.get(e.pointerId);
       if (this.dragging && was) {
         const now = local(e);
+        this.handled = true;
         if (down.size >= 2) {
           // The middle of the two fingers and how far apart they are, before
           // this finger moved and after: the view scales about the middle by
@@ -1067,6 +1116,7 @@ export class CanvasApp {
       (e) => {
         e.preventDefault();
         const r = c.getBoundingClientRect();
+        this.handled = true;
         this.cam.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022));
         this.invalidate();
       },

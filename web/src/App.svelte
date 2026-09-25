@@ -20,7 +20,7 @@
 		demoName, loadDemoIndex, rememberDemo, type DemoRepo,
 	} from '$lib/sources/demo';
 	import {
-		historyGo, inTauri, loadHistory, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
+		fillRepo, historyGo, inTauri, loadHistory, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
 		startup, stopWatching, watchRepo,
 	} from '$lib/sources/tauri';
 	import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -145,6 +145,9 @@
 		} finally {
 			busy = false;
 		}
+		// The watch goes on across the rescan: the backend starts it again once
+		// every file is read.
+		if (app) void fillRepo(app).catch((e) => (error = e instanceof Error ? e.message : String(e)));
 	}
 
 	async function openFolder(path?: string) {
@@ -166,23 +169,34 @@
 			unwatch = null;
 			await stopWatching();
 
+			// First the layout, from estimates, then the contents as they are
+			// read: the project is on screen at once and fills in, rather than
+			// appearing after all of it has been read. See `fillRepo`.
 			await loadRepo(target);
 			await loadHistory();
 			// A fresh project is fitted; everything after this keeps the view.
 			lastModeKey = project.groups.map((g) => `${g.id}:${g.mode}`).join(',');
 			rebuild(false);
 			app.fit();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+			busy = false;
+			return;
+		}
+		busy = false;
+		const canvas = app;
+		try {
+			if (!(await fillRepo(canvas))) return;
 			// Watching is what makes this a monitor rather than a snapshot, so
-			// it starts with the folder. A folder that cannot be watched is
-			// still viewable, which is why this does not fail the open.
-			unwatch = await watchRepo(app).catch((e) => {
+			// it starts as soon as the folder is in. A folder that cannot be
+			// watched is still viewable, which is why this does not fail the
+			// open.
+			unwatch = await watchRepo(canvas).catch((e) => {
 				console.warn('watch failed', e);
 				return null;
 			});
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
-		} finally {
-			busy = false;
 		}
 	}
 
