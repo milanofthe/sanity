@@ -78,6 +78,23 @@ jobs:
             **Windows** (`.exe` installer, or the `.msi`): the build is not
             signed, so SmartScreen shows "Windows protected your PC". More
             info, then Run anyway.
+      # The app itself, for the npm packages the job below makes. The .app
+      # is tarred because an artifact does not keep file modes, and without
+      # its mode the app is not executable.
+      - name: Keep the app for npm
+        shell: bash
+        run: |
+          mkdir -p npm-out
+          if [ "${{ matrix.name }}" = macOS ]; then
+            tar czf npm-out/sanity-app.tgz -C target/${{ matrix.target }}/release/bundle/macos sanity.app
+          else
+            cp target/${{ matrix.target }}/release/sanity.exe npm-out/
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.name }}
+          path: npm-out/*
+          if-no-files-found: error
       - name: Keep the bundles when nothing is being released
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
@@ -88,3 +105,46 @@ jobs:
             target/${{ matrix.target }}/release/bundle/nsis/*.exe
             target/${{ matrix.target }}/release/bundle/msi/*.msi
           if-no-files-found: warn
+
+  # The same app on npm, as @milanofthe/sanity and one package per platform;
+  # see scripts/npm-packages.mjs. Published from a tag when the repository
+  # has an NPM_TOKEN, and only packed on a dispatch run, which is how this
+  # job is checked without a version being spent on it.
+  npm:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # For the provenance statement npm shows next to the package.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: npm-in
+          merge-multiple: true
+      - name: Assemble the packages
+        run: |
+          tar xzf npm-in/sanity-app.tgz -C npm-in
+          node scripts/npm-packages.mjs --out dist/npm --mac npm-in/sanity.app --win npm-in/sanity.exe
+      - name: Publish
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN is not set, so nothing was published to npm"
+            exit 0
+          fi
+          # The platform packages first: the main one depends on them.
+          for p in sanity-darwin-universal sanity-win32-x64 sanity; do
+            (cd "dist/npm/$p" && npm publish --access public --provenance)
+          done
+      - name: Pack, when nothing is being released
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: for p in dist/npm/*/; do (cd "$p" && npm pack --dry-run); done

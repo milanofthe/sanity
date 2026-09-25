@@ -19,15 +19,25 @@ Try it in the browser with a few public repositories, no install:
 
 ## Install
 
-[Releases](https://github.com/milanofthe/sanity/releases) have a `.dmg` for
-macOS (Intel and Apple Silicon) and an installer for Windows. The builds are
-not signed yet. On macOS, right click the app and choose Open the first time.
-On Windows, click More info, then Run anyway.
+With npm, on macOS (Intel and Apple Silicon) and Windows x64:
+
+```sh
+npm install -g @milanofthe/sanity
+sanity
+```
+
+Or without installing, `npx @milanofthe/sanity` in the folder to look at.
+
+[Releases](https://github.com/milanofthe/sanity/releases) also have a `.dmg`
+for macOS and an installer for Windows. The builds are not signed yet. On
+macOS, right click the app and choose Open the first time. On Windows, click
+More info, then Run anyway.
 
 ## Usage
 
 ```sh
-sanity /path/to/repo
+sanity                 # the folder you are in
+sanity /path/to/repo   # or another one
 ```
 
 Or open a folder from the Project menu.

@@ -17,3 +17,6 @@ web/public/demo/
 .demo-src/
 # Local agent settings and session state.
 .claude/
+
+# npm packages, assembled by scripts/npm-packages.mjs
+/dist/
