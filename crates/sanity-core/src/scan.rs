@@ -413,18 +413,19 @@ pub fn read_each(
     paths: &[String],
     done: impl Fn(usize, Option<(FileData, ScannedFile)>) + Sync,
 ) {
+    let size = |i: usize| std::fs::metadata(root.join(&paths[i])).map(|m| m.len()).unwrap_or(0);
+    each_across_cores(paths.len(), size, |i| done(i, read_file(root, &paths[i])));
+}
+
+/// Run `job` for every index below `n` across the cores, each thread taking
+/// the next index from one queue when it is free, heaviest first by `weight`.
+fn each_across_cores(n: usize, weight: impl Fn(usize) -> u64, job: impl Fn(usize) + Sync) {
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(16);
-    if threads <= 1 || paths.len() < 8 {
-        for (i, rel) in paths.iter().enumerate() {
-            done(i, read_file(root, rel));
-        }
+    if threads <= 1 || n < 8 {
+        (0..n).for_each(job);
         return;
     }
-    let mut order: Vec<(u64, usize)> = paths
-        .iter()
-        .enumerate()
-        .map(|(i, rel)| (std::fs::metadata(root.join(rel)).map(|m| m.len()).unwrap_or(0), i))
-        .collect();
+    let mut order: Vec<(u64, usize)> = (0..n).map(|i| (weight(i), i)).collect();
     order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
@@ -432,10 +433,85 @@ pub fn read_each(
             scope.spawn(|| loop {
                 let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(&(_, i)) = order.get(k) else { break };
-                done(i, read_file(root, &paths[i]));
+                job(i);
             });
         }
     });
+}
+
+/// How much of a file an estimate reads.
+const ESTIMATE_BYTES: usize = 8 * 1024;
+
+/// What a file is likely to be, from its first few kilobytes: for laying a
+/// project out before it has been read, so the window shows the project at
+/// once and fills it in as the files are read. See `estimate`.
+#[derive(Debug, Clone)]
+pub struct Estimate {
+    pub byte_len: u64,
+    pub mtime: u128,
+    /// Neither text nor a picture: it will not get a panel.
+    pub binary: bool,
+    pub media: Option<crate::media::Media>,
+    /// Exact when the whole file fitted in what was read, scaled from the
+    /// lines that did otherwise.
+    pub line_count: u32,
+    /// Widths of the lines that were read, a sample of the whole file's.
+    pub line_cols: Vec<u16>,
+}
+
+/// Estimate a file from its head. A stat and a read of a few kilobytes,
+/// no tokenising: a thousand files take a few milliseconds across the cores,
+/// against the hundreds reading them takes.
+pub fn estimate(root: &Path, rel: &str) -> Option<Estimate> {
+    let full = root.join(rel);
+    let meta = std::fs::metadata(&full).ok()?;
+    let byte_len = meta.len();
+    let mtime = mtime_of(&full);
+    let head = read_head(&full, ESTIMATE_BYTES)?;
+    let media = crate::media::probe(rel, &head);
+    if media.is_some() {
+        return Some(Estimate { byte_len, mtime, binary: false, media, line_count: 0, line_cols: Vec::new() });
+    }
+    if byte_len > MAX_READ_BYTES || looks_binary(&head) {
+        return Some(Estimate { byte_len, mtime, binary: true, media: None, line_count: 0, line_cols: Vec::new() });
+    }
+    let whole = head.len() as u64 >= byte_len;
+    // A line cut off at the end of what was read is not counted, unless it
+    // is the end of the file.
+    let text = String::from_utf8_lossy(&head);
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    // No line ends in what was read: one line longer than all of it, which
+    // is what minified output and a mesh written as one JSON line are. Scaled
+    // like the rest, that one partial line came out as two million lines.
+    let one_long = !whole && lines.len() == 1;
+    if lines.last().is_some_and(|l| l.is_empty()) || (!whole && !one_long) {
+        lines.pop();
+    }
+    let line_cols: Vec<u16> = lines
+        .iter()
+        .map(|l| {
+            let mut w = 0usize;
+            for c in l.trim_end_matches('\r').chars() {
+                w = if c == '\t' { (w / 4 + 1) * 4 } else { w + 1 };
+            }
+            w.min(u16::MAX as usize) as u16
+        })
+        .collect();
+    let line_count = if whole || one_long {
+        line_cols.len() as u32
+    } else {
+        let read: usize = lines.iter().map(|l| l.len() + 1).sum();
+        ((byte_len as f64) * (lines.len().max(1) as f64) / (read.max(1) as f64)).round() as u32
+    };
+    Some(Estimate { byte_len, mtime, binary: false, media: None, line_count: line_count.max(1), line_cols })
+}
+
+/// `estimate` for many files, across the cores, in the order asked for.
+pub fn estimate_all(root: &Path, paths: &[String]) -> Vec<Option<Estimate>> {
+    let out: Vec<std::sync::Mutex<Option<Estimate>>> =
+        (0..paths.len()).map(|_| std::sync::Mutex::new(None)).collect();
+    each_across_cores(paths.len(), |_| 0, |i| *out[i].lock().unwrap() = estimate(root, &paths[i]));
+    out.into_iter().map(|m| m.into_inner().unwrap()).collect()
 }
 
 /// List the files in `root` that should be laid out, in git's order.
@@ -569,6 +645,28 @@ pub fn ignored_paths(root: &Path, paths: &[String]) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_estimate_is_exact_for_a_small_file_and_close_for_a_large_one() {
+        let dir = std::env::temp_dir().join(format!("sanity-estimate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("small.rs"), "fn a() {}\n\tlet x = 1;\n").unwrap();
+        let big: String = (0..5000).map(|i| format!("line number {i:05} of the file\n")).collect();
+        std::fs::write(dir.join("big.txt"), &big).unwrap();
+        std::fs::write(dir.join("one.json"), format!("[{}]", "1,".repeat(20000))).unwrap();
+        std::fs::write(dir.join("blob.bin"), [0u8, 1, 2, 3]).unwrap();
+
+        let small = estimate(&dir, "small.rs").unwrap();
+        assert_eq!(small.line_count, 2);
+        assert_eq!(small.line_cols, vec![9, 14]);
+        let big = estimate(&dir, "big.txt").unwrap();
+        assert!((big.line_count as i64 - 5000).abs() <= 5, "{} lines", big.line_count);
+        // One line longer than what is read: one line, not thousands.
+        assert_eq!(estimate(&dir, "one.json").unwrap().line_count, 1);
+        assert!(estimate(&dir, "blob.bin").unwrap().binary);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     // The wiring, not the parser: a notebook on disk has to come back through
     // `read_file` measured as its cells. It used to be measured as JSON, which
