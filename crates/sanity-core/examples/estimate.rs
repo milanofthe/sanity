@@ -3,10 +3,11 @@
 //!
 //!   cargo run --release -p sanity-core --example estimate -- <path>...
 //!
-//! Measured: sane, 990 text files, 762 exact and nine in ten within 5
-//! percent, in 20 ms against 306 to read them; rapidmesh within 4 percent for
-//! nine in ten; pathsim's notebooks off the most, since what is shown of a
-//! notebook is its cells and not its JSON, which the reading corrects.
+//! Measured over sane, rapidmesh, pathsim and fastsim: nine files in ten
+//! within 3 percent, three in four exact, in 8 to 24 ms against 43 to 832 to
+//! read them. The worst are files whose lines differ wildly in length, such
+//! as a minified bundle whose first line is most of it; reading corrects
+//! them.
 
 use sanity_core::scan;
 use std::time::Instant;

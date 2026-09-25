@@ -150,6 +150,16 @@ pub const MAX_READ_BYTES: u64 = 16 * 1024 * 1024;
 /// keeps its page tree wherever it likes.
 const PROBE_BYTES: usize = 2 * 1024 * 1024;
 
+/// Up to `n` bytes of a file from `at` on.
+fn read_at(path: &Path, at: u64, n: usize) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    file.seek(SeekFrom::Start(at)).ok()?;
+    let mut buf = Vec::with_capacity(n);
+    file.take(n as u64).read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
 /// The first `n` bytes of a file, for something too large to hold.
 fn read_head(path: &Path, n: usize) -> Option<Vec<u8>> {
     use std::io::Read;
@@ -394,7 +404,7 @@ pub fn stamp_of(root: &Path, rel: &str) -> Option<(u128, u64)> {
 pub fn read_all(root: &Path, paths: &[String]) -> Vec<Option<(FileData, ScannedFile)>> {
     let out: Vec<std::sync::Mutex<Option<(FileData, ScannedFile)>>> =
         (0..paths.len()).map(|_| std::sync::Mutex::new(None)).collect();
-    read_each(root, paths, |i, read| *out[i].lock().unwrap() = read);
+    read_each(root, paths, || true, |i, read| *out[i].lock().unwrap() = read);
     out.into_iter().map(|m| m.into_inner().unwrap()).collect()
 }
 
@@ -411,10 +421,17 @@ pub fn read_all(root: &Path, paths: &[String]) -> Vec<Option<(FileData, ScannedF
 pub fn read_each(
     root: &Path,
     paths: &[String],
+    go_on: impl Fn() -> bool + Sync,
     done: impl Fn(usize, Option<(FileData, ScannedFile)>) + Sync,
 ) {
     let size = |i: usize| std::fs::metadata(root.join(&paths[i])).map(|m| m.len()).unwrap_or(0);
-    each_across_cores(paths.len(), size, |i| done(i, read_file(root, &paths[i])));
+    // Asked before each file, so a scan nobody is waiting for any more, of a
+    // folder that was closed while it ran, stops within a file per thread.
+    each_across_cores(paths.len(), size, |i| {
+        if go_on() {
+            done(i, read_file(root, &paths[i]));
+        }
+    });
 }
 
 /// Run `job` for every index below `n` across the cores, each thread taking
@@ -439,8 +456,11 @@ fn each_across_cores(n: usize, weight: impl Fn(usize) -> u64, job: impl Fn(usize
     });
 }
 
-/// How much of a file an estimate reads.
+/// How much of a file's head an estimate reads, and how many windows of how
+/// much it reads from the rest of a larger one.
 const ESTIMATE_BYTES: usize = 8 * 1024;
+const ESTIMATE_WINDOWS: usize = 6;
+const WINDOW_BYTES: usize = 2 * 1024;
 
 /// What a file is likely to be, from its first few kilobytes: for laying a
 /// project out before it has been read, so the window shows the project at
@@ -459,6 +479,16 @@ pub struct Estimate {
     pub line_cols: Vec<u16>,
 }
 
+/// A line's width in columns, tabs to the next stop of four, capped where
+/// reading caps a line; see `MAX_COLS`.
+fn width_of(line: &str) -> u16 {
+    let mut w = 0usize;
+    for c in line.trim_end_matches('\r').chars() {
+        w = if c == '\t' { (w / 4 + 1) * 4 } else { w + 1 };
+    }
+    w.min(MAX_COLS as usize) as u16
+}
+
 /// Estimate a file from its head. A stat and a read of a few kilobytes,
 /// no tokenising: a thousand files take a few milliseconds across the cores,
 /// against the hundreds reading them takes.
@@ -475,6 +505,18 @@ pub fn estimate(root: &Path, rel: &str) -> Option<Estimate> {
     if byte_len > MAX_READ_BYTES || looks_binary(&head) {
         return Some(Estimate { byte_len, mtime, binary: true, media: None, line_count: 0, line_cols: Vec::new() });
     }
+    // A notebook is shown as its cells, not as its JSON, which with outputs
+    // and pictures in it is thirty times as many lines: pathsim's came out
+    // at 6,831 where 223 are shown. Parsed whole instead, which is a few
+    // milliseconds for the few notebooks a project has; nothing is tokenised.
+    if crate::notebook::is_notebook(rel) && byte_len <= MAX_READ_BYTES {
+        let bytes = std::fs::read(&full).ok()?;
+        if let Some(nb) = crate::notebook::parse(&String::from_utf8_lossy(&bytes)) {
+            let line_cols: Vec<u16> = nb.source.lines().map(width_of).collect();
+            let line_count = line_cols.len().max(1) as u32;
+            return Some(Estimate { byte_len, mtime, binary: false, media: None, line_count, line_cols });
+        }
+    }
     let whole = head.len() as u64 >= byte_len;
     // A line cut off at the end of what was read is not counted, unless it
     // is the end of the file.
@@ -487,21 +529,36 @@ pub fn estimate(root: &Path, rel: &str) -> Option<Estimate> {
     if lines.last().is_some_and(|l| l.is_empty()) || (!whole && !one_long) {
         lines.pop();
     }
-    let line_cols: Vec<u16> = lines
-        .iter()
-        .map(|l| {
-            let mut w = 0usize;
-            for c in l.trim_end_matches('\r').chars() {
-                w = if c == '\t' { (w / 4 + 1) * 4 } else { w + 1 };
-            }
-            w.min(u16::MAX as usize) as u16
-        })
-        .collect();
-    let line_count = if whole || one_long {
+    let line_cols: Vec<u16> = lines.iter().map(|l| width_of(l)).collect();
+    let line_count = if whole {
         line_cols.len() as u32
     } else {
-        let read: usize = lines.iter().map(|l| l.len() + 1).sum();
-        ((byte_len as f64) * (lines.len().max(1) as f64) / (read.max(1) as f64)).round() as u32
+        // Bytes per line from the head and windows spread over the rest,
+        // rather than the head alone: a file's head is its imports and its
+        // header comment, which are not what the rest of it looks like. From
+        // the head alone nine files in ten were within 5 percent on sane, and
+        // its worst, a SPICE netlist whose head held two lines of four
+        // thousand characters among many short ones, was twice its size.
+        // A head without a line break is one line so far, and no break in it:
+        // the windows say whether there are more. With none anywhere it stays
+        // one line, rather than being scaled into many.
+        let (mut bytes, mut breaks) = if one_long {
+            (head.len() as f64, 0.0)
+        } else {
+            (lines.iter().map(|l| l.len() + 1).sum::<usize>() as f64, lines.len() as f64)
+        };
+        let rest = byte_len.saturating_sub(ESTIMATE_BYTES as u64);
+        for k in 1..=ESTIMATE_WINDOWS as u64 {
+            let at = ESTIMATE_BYTES as u64 + rest * k / (ESTIMATE_WINDOWS as u64 + 1);
+            if at + (WINDOW_BYTES as u64) > byte_len {
+                continue;
+            }
+            if let Some(window) = read_at(&full, at, WINDOW_BYTES) {
+                bytes += window.len() as f64;
+                breaks += window.iter().filter(|&&b| b == b'\n').count() as f64;
+            }
+        }
+        ((byte_len as f64) * breaks / bytes.max(1.0)).round().max(1.0) as u32
     };
     Some(Estimate { byte_len, mtime, binary: false, media: None, line_count: line_count.max(1), line_cols })
 }
