@@ -1698,6 +1698,14 @@ export class Scene {
       // animated position while its target is not yet in view, and the other
       // way round on the way out.
       this.tf = IDENTITY;
+      // A panel is shown with its contents or not at all: until its texture
+      // is written it is not drawn, and its arrival waits with it. It used to
+      // settle in as an empty frame and have its contents pop in after, a
+      // few frames or, while a large folder was being read, seconds later.
+      if (!f.ready) {
+        f.drawnAt = frame;
+        return;
+      }
       if (f.anim) {
         // A panel settling in waits, invisible, while the arrival is held;
         // see `holdAppear`. A relayout's slide does not.
