@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 
 mod history;
+mod scanjob;
 mod video;
 
 use sanity_core::find;
@@ -57,6 +58,12 @@ pub struct FileInfo {
     /// the disk, where it may be different or gone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Widths of the lines read to estimate a file that has not been read
+    /// yet, a sample of the whole file's; see `scan::estimate`. The layout
+    /// repeats them over the estimated lines to know how many wrap, which a
+    /// line count alone does not say. Absent once the file is read.
+    #[serde(rename = "sampleCols", skip_serializing_if = "Option::is_none")]
+    pub sample_cols: Option<Vec<u16>>,
 }
 
 /// What a picture is, for the layout. Flat rather than an enum so the
@@ -207,6 +214,9 @@ pub struct AppState {
     history: history::BlobCache,
     /// The video being exported, if one is; see `video.rs`.
     video: video::VideoSlot,
+    /// The folder being read, and what of it the window has not collected;
+    /// see `scanjob.rs`.
+    scan: scanjob::ScanJob,
 }
 
 /// 90th percentile of non-blank line widths.
@@ -232,104 +242,6 @@ fn extension_of(path: &str) -> String {
         .unwrap_or_else(|| "(none)".to_string())
 }
 
-/// Scan a folder: enumerate, read, classify, and encode every payload.
-#[tauri::command]
-async fn scan_repo(
-    path: String,
-    include_ignored: Option<bool>,
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<ScanResult, String> {
-    let started = std::time::Instant::now();
-    let root = PathBuf::from(&path);
-    if !root.is_dir() {
-        return Err(format!("not a directory: {path}"));
-    }
-
-    let listed = scan::list_files(&root).map_err(|e| e.to_string())?;
-    // What git ignores is a filter rather than a wall: counted always, taken
-    // when asked for. Counting is one `ls-files`, 136 milliseconds on the
-    // 83,014 files this repository ignores, against the hundreds the scan
-    // itself takes.
-    let (extra, ignored_total) = if include_ignored.unwrap_or(false) {
-        scan::git_ignored_files(&root, IGNORED_CAP)
-    } else {
-        (Vec::new(), scan::git_ignored_files(&root, 0).1)
-    };
-    let ignored_shown = extra.len() as u32;
-
-    let mut held: Vec<(String, Held)> = Vec::with_capacity(listed.len());
-    let mut binary = 0u32;
-
-    // Reading and tokenising is the largest cost in opening a project and the
-    // files are independent, so it happens across the cores. Measured on 218
-    // thousand lines: 1.07 seconds on one thread, 349 milliseconds on eight.
-    for (rel, read) in listed.iter().zip(scan::read_all(&root, &listed)) {
-        let Some((data_one, info)) = read else { continue };
-        // A picture carries no lines, so its payload is empty, but it is a
-        // file in the project and gets a panel. Everything else binary is
-        // still only counted.
-        if data_one.flags & FLAG_BINARY != 0 && info.media.is_none() {
-            binary += 1;
-            continue;
-        }
-        held.push((
-            rel.clone(),
-            Held {
-                row: file_info(rel, &data_one, &info),
-                payload: encode(&data_one),
-                stamp: (info.mtime, info.byte_len),
-            },
-        ));
-    }
-
-    // The ignored ones as placeholders: no payload, no text, no read. See
-    // `ignored_info`.
-    let placeholders: Vec<FileInfo> = extra.iter().map(|rel| ignored_info(rel)).collect();
-
-    let files: Vec<FileInfo> =
-        held.iter().map(|(_, h)| h.row.clone()).chain(placeholders.iter().cloned()).collect();
-    let groups = groups_from(&files);
-
-    let result = ScanResult {
-        root: root.to_string_lossy().into_owned(),
-        files,
-        groups,
-        binary,
-        ignored_total: ignored_total as u32,
-        ignored_shown,
-        elapsed_ms: started.elapsed().as_millis() as u32,
-    };
-
-    {
-        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
-        *repo = Repo::default();
-        repo.root = root.clone();
-        for (rel, h) in held {
-            repo.hold(rel, h);
-        }
-        repo.placeholders = placeholders;
-        repo.binary = binary;
-        repo.ignored_total = ignored_total as u32;
-        repo.ignored_shown = ignored_shown;
-    }
-
-    // Watching is what turns a snapshot into a monitor, so it starts with the
-    // scan rather than on a separate call. A folder that cannot be watched is
-    // still perfectly viewable, so a failure here is reported and not fatal.
-    match start_watch(&app, &root) {
-        Ok(w) => {
-            // Replacing the previous watch drops it, which releases the OS
-            // watch on the folder that is no longer open.
-            *state.watch.0.lock().map_err(|e| e.to_string())? = Some(w);
-        }
-        Err(e) => {
-            let _ = app.emit("sanity://watch-failed", e);
-        }
-    }
-
-    Ok(result)
-}
 
 /// The picker rows, derived from the file rows.
 ///
@@ -376,6 +288,7 @@ fn file_info(rel: &str, data: &FileData, info: &ScannedFile) -> FileInfo {
         clip_cols: info.max_cols,
         media: info.media.map(MediaInfo::from),
         version: info.media.map(|_| format!("{}-{}", info.mtime, info.byte_len)),
+        sample_cols: None,
     }
 }
 
@@ -401,6 +314,7 @@ fn ignored_info(rel: &str) -> FileInfo {
         clip_cols: 0,
         media: None,
         version: None,
+        sample_cols: None,
     }
 }
 
@@ -659,20 +573,6 @@ async fn pdf_page(
         eprintln!("pdf_page {path} page {} at {width} px: {:.1} ms", page.unwrap_or(0), t.elapsed().as_secs_f64() * 1000.0);
     }
     Ok(Response::new(png))
-}
-
-/// Every payload concatenated, with an index, as raw bytes.
-///
-/// Returned through `ipc::Response` rather than as JSON: the default IPC would
-/// base64 the whole thing and copy it twice, and a 200k line repository is
-/// several megabytes of typed arrays. The index is a small JSON header the
-/// frontend reads first; see `web/src/lib/sources/tauri.ts`.
-#[tauri::command]
-async fn repo_payloads(state: State<'_, AppState>) -> Result<Response, String> {
-    let repo = state.repo.lock().map_err(|e| e.to_string())?;
-    let all: Vec<(&str, &[u8])> =
-        repo.held.iter().map(|(p, h)| (p.as_str(), h.payload.as_slice())).collect();
-    Ok(Response::new(pack_payloads(&all)?))
 }
 
 /// Concatenate every payload behind a JSON index.
@@ -1236,12 +1136,13 @@ pub fn run() {
                 save_to: Mutex::new(None),
                 history: history::BlobCache::default(),
                 video: video::VideoSlot::default(),
+                scan: scanjob::ScanJob::default(),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            scan_repo,
-            repo_payloads,
+            scanjob::scan_start,
+            scanjob::scan_next,
             file_text,
             file_bytes,
             thumbs,

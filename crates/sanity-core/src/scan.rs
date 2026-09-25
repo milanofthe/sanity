@@ -404,7 +404,7 @@ pub fn stamp_of(root: &Path, rel: &str) -> Option<(u128, u64)> {
 pub fn read_all(root: &Path, paths: &[String]) -> Vec<Option<(FileData, ScannedFile)>> {
     let out: Vec<std::sync::Mutex<Option<(FileData, ScannedFile)>>> =
         (0..paths.len()).map(|_| std::sync::Mutex::new(None)).collect();
-    read_each(root, paths, || true, |i, read| *out[i].lock().unwrap() = read);
+    read_each(root, paths, 0, || true, |i, read| *out[i].lock().unwrap() = read);
     out.into_iter().map(|m| m.into_inner().unwrap()).collect()
 }
 
@@ -421,13 +421,14 @@ pub fn read_all(root: &Path, paths: &[String]) -> Vec<Option<(FileData, ScannedF
 pub fn read_each(
     root: &Path,
     paths: &[String],
+    spare: usize,
     go_on: impl Fn() -> bool + Sync,
     done: impl Fn(usize, Option<(FileData, ScannedFile)>) + Sync,
 ) {
     let size = |i: usize| std::fs::metadata(root.join(&paths[i])).map(|m| m.len()).unwrap_or(0);
     // Asked before each file, so a scan nobody is waiting for any more, of a
     // folder that was closed while it ran, stops within a file per thread.
-    each_across_cores(paths.len(), size, |i| {
+    each_across_cores(paths.len(), spare, size, |i| {
         if go_on() {
             done(i, read_file(root, &paths[i]));
         }
@@ -436,8 +437,12 @@ pub fn read_each(
 
 /// Run `job` for every index below `n` across the cores, each thread taking
 /// the next index from one queue when it is free, heaviest first by `weight`.
-fn each_across_cores(n: usize, weight: impl Fn(usize) -> u64, job: impl Fn(usize) + Sync) {
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(16);
+///
+/// `spare` cores are left to whatever else is running: reading a folder while
+/// the window draws it, the window needs some, or the drawing stutters.
+fn each_across_cores(n: usize, spare: usize, weight: impl Fn(usize) -> u64, job: impl Fn(usize) + Sync) {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let threads = cores.saturating_sub(spare).clamp(1, 16);
     if threads <= 1 || n < 8 {
         (0..n).for_each(job);
         return;
@@ -529,7 +534,7 @@ pub fn estimate(root: &Path, rel: &str) -> Option<Estimate> {
     if lines.last().is_some_and(|l| l.is_empty()) || (!whole && !one_long) {
         lines.pop();
     }
-    let line_cols: Vec<u16> = lines.iter().map(|l| width_of(l)).collect();
+    let mut line_cols: Vec<u16> = lines.iter().map(|l| width_of(l)).collect();
     let line_count = if whole {
         line_cols.len() as u32
     } else {
@@ -556,6 +561,14 @@ pub fn estimate(root: &Path, rel: &str) -> Option<Estimate> {
             if let Some(window) = read_at(&full, at, WINDOW_BYTES) {
                 bytes += window.len() as f64;
                 breaks += window.iter().filter(|&&b| b == b'\n').count() as f64;
+                // The whole lines in it join the sample of widths, which from
+                // the head alone said what the head's lines are like.
+                let text = String::from_utf8_lossy(&window);
+                let mut parts: Vec<&str> = text.split('\n').collect();
+                if parts.len() > 2 {
+                    parts.pop();
+                    line_cols.extend(parts[1..].iter().map(|l| width_of(l)));
+                }
             }
         }
         ((byte_len as f64) * breaks / bytes.max(1.0)).round().max(1.0) as u32
@@ -567,7 +580,7 @@ pub fn estimate(root: &Path, rel: &str) -> Option<Estimate> {
 pub fn estimate_all(root: &Path, paths: &[String]) -> Vec<Option<Estimate>> {
     let out: Vec<std::sync::Mutex<Option<Estimate>>> =
         (0..paths.len()).map(|_| std::sync::Mutex::new(None)).collect();
-    each_across_cores(paths.len(), |_| 0, |i| *out[i].lock().unwrap() = estimate(root, &paths[i]));
+    each_across_cores(paths.len(), 0, |_| 0, |i| *out[i].lock().unwrap() = estimate(root, &paths[i]));
     out.into_iter().map(|m| m.into_inner().unwrap()).collect()
 }
 

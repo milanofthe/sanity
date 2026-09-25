@@ -62,7 +62,7 @@ pub async fn history_log(
 ///
 /// Laid out as a small JSON header, the rows of the files that changed and the
 /// paths that are gone, followed by the payloads in the format
-/// `repo_payloads` uses: `[u32 header length][header][payloads]`.
+/// `scan_next` uses: `[u32 header length][header][payloads]`.
 #[tauri::command]
 pub async fn history_step(
     from: Option<String>,
