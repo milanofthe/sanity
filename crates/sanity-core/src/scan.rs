@@ -390,28 +390,52 @@ pub fn stamp_of(root: &Path, rel: &str) -> Option<(u128, u64)> {
 ///
 /// Results come back in the order asked for, so the payload index and the
 /// layout stay deterministic; a repository that laid out differently run to
-/// run would be unusable.
+/// run would be unusable. See `read_each` for how the work is shared out.
 pub fn read_all(root: &Path, paths: &[String]) -> Vec<Option<(FileData, ScannedFile)>> {
+    let out: Vec<std::sync::Mutex<Option<(FileData, ScannedFile)>>> =
+        (0..paths.len()).map(|_| std::sync::Mutex::new(None)).collect();
+    read_each(root, paths, |i, read| *out[i].lock().unwrap() = read);
+    out.into_iter().map(|m| m.into_inner().unwrap()).collect()
+}
+
+/// Read and tokenise many files across the cores, handing each one to `done`
+/// with its index as soon as it is read, from whichever thread read it.
+///
+/// Each thread takes the next file from one queue when it is free, largest
+/// first. The files used to be cut into one contiguous slice per thread, and
+/// a project keeps its big files together: rapidmesh's mesh JSON, a dozen
+/// files of one to two megabytes at 100 to 300 milliseconds each, all landed
+/// on one or two threads, which took 2.6 seconds while the others had long
+/// finished. Largest first, so the long ones start early and the short ones
+/// fill in the gaps at the end.
+pub fn read_each(
+    root: &Path,
+    paths: &[String],
+    done: impl Fn(usize, Option<(FileData, ScannedFile)>) + Sync,
+) {
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(16);
     if threads <= 1 || paths.len() < 8 {
-        return paths.iter().map(|rel| read_file(root, rel)).collect();
+        for (i, rel) in paths.iter().enumerate() {
+            done(i, read_file(root, rel));
+        }
+        return;
     }
-
-    // One contiguous slice per thread, written in place, so nothing has to be
-    // merged or sorted afterwards.
-    let mut out: Vec<Option<(FileData, ScannedFile)>> = (0..paths.len()).map(|_| None).collect();
-    let chunk = paths.len().div_ceil(threads);
-
+    let mut order: Vec<(u64, usize)> = paths
+        .iter()
+        .enumerate()
+        .map(|(i, rel)| (std::fs::metadata(root.join(rel)).map(|m| m.len()).unwrap_or(0), i))
+        .collect();
+    order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
-        for (slot, work) in out.chunks_mut(chunk).zip(paths.chunks(chunk)) {
-            scope.spawn(move || {
-                for (dst, rel) in slot.iter_mut().zip(work) {
-                    *dst = read_file(root, rel);
-                }
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(&(_, i)) = order.get(k) else { break };
+                done(i, read_file(root, &paths[i]));
             });
         }
     });
-    out
 }
 
 /// List the files in `root` that should be laid out, in git's order.
