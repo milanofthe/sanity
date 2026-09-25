@@ -121,6 +121,15 @@ const measure = await page.evaluate(async (plan) => {
   const steps = [];
   let freshTaken = 0;
   let worstGap = 0;
+  let worstStretch = 0;
+  // Long side over short at the 95th percentile of the files, counted here
+  // rather than taken from the layout's stats, so an older layout can be
+  // measured the same way.
+  const stretchP95 = (l) => {
+    const v = l.files.filter((f) => !f.stub).map((f) => Math.max(f.w, f.h) / Math.max(1, Math.min(f.w, f.h)));
+    v.sort((x, y) => x - y);
+    return v[Math.floor((v.length - 1) * 0.95)];
+  };
   for (let step = 0; step < 60; step++) {
     const pick = entries.filter((e) => e.lineCols && !e.media && !e.stub);
     const e = pick[Math.floor(rand() * pick.length)];
@@ -130,13 +139,40 @@ const measure = await page.evaluate(async (plan) => {
     else entries = grow(entries, e.path, Math.round((rand() - 0.4) * 120));
     const next = computeLayout(entries, view, layout);
     if (!next.continued) freshTaken++;
-    const fill = (l) => window.__sanity.layoutStats(l).fill;
-    worstGap = Math.max(worstGap, fill(computeLayout(entries, view)) - fill(next));
+    const stats = (l) => window.__sanity.layoutStats(l);
+    const scratch = computeLayout(entries, view);
+    worstGap = Math.max(worstGap, stats(scratch).fill - stats(next).fill);
+    worstStretch = Math.max(worstStretch, stretchP95(next) / stretchP95(scratch));
     steps.push(moved(layout, next).share);
     layout = next;
   }
   steps.sort((a, b) => a - b);
+
+  // A walk that drifts, as a working session does: a few files growing a lot
+  // and new ones gathering in one directory, 150 changes, each carried over
+  // from the one before. Carried rows kept whatever their shape stretched
+  // pathsim's panels to 18 times a fresh layout's here.
+  let drift = baseEntries;
+  let driftLayout = baseLayout;
+  const text2 = () => drift.filter((e) => e.lineCols && !e.media && !e.stub);
+  const hot = text2().filter((_, i) => i % 17 === 3).slice(0, 6).map((e) => e.path);
+  const hotDir = hot[0].replace(/[^/]+$/, '');
+  for (let step = 0; step < 150; step++) {
+    const r = rand();
+    if (r < 0.15) drift = [...drift, added(`${hotDir}drift-${step}.ts`)];
+    else if (r < 0.7) {
+      const p = hot[Math.floor(rand() * hot.length)];
+      if (drift.some((e) => e.path === p)) drift = grow(drift, p, Math.round(rand() * 150));
+    } else {
+      const t = text2();
+      drift = grow(drift, t[Math.floor(rand() * t.length)].path, Math.round((rand() - 0.5) * 80));
+    }
+    driftLayout = computeLayout(drift, view, driftLayout);
+  }
+  const driftStretch = stretchP95(driftLayout) / stretchP95(computeLayout(drift, view));
+
   return {
+    driftStretch,
     panels: baseLayout.files.length,
     results,
     walk: {
@@ -145,6 +181,7 @@ const measure = await page.evaluate(async (plan) => {
       freshTaken,
       steps: steps.length,
       worstGap,
+      worstStretch,
     },
   };
 }, [
@@ -157,6 +194,9 @@ const measure = await page.evaluate(async (plan) => {
 ]);
 
 let failures = 0;
+/** Stretch at the 95th percentile a carried layout may reach against a fresh
+ *  one; the demos stay under 2 over 200 changes. */
+const STRETCH_LIMIT = 2.5;
 const pct = (v) => `${(v * 100).toFixed(1).padStart(5)}%`;
 console.log('share of panels that change place, median and worst of 8 files, and how far');
 console.log('the furthest one goes, as a share of the canvas:');
@@ -197,6 +237,16 @@ for (const [label, most, far] of [['+5 lines', 0.02, 0.02], ['a new file', 0.15,
   } else {
     console.log(`ok    ${label}, carried over, moves ${small ? `no panel further than ${pct(far)}` : `under ${pct(most)} of panels`}`);
   }
+}
+// And that carrying over does not drift into stretched panels: row by row, a
+// carried row that has become a much worse shape than a fresh one is laid
+// fresh; see CARRY_ASPECT_SLACK in treemap.ts.
+const stretch = Math.max(w.worstStretch, measure.driftStretch);
+if (!(stretch <= STRETCH_LIMIT)) {
+  console.log(`FAIL  carried over, the panels drifted to ${stretch.toFixed(2)} times a fresh layout's stretch`);
+  failures++;
+} else {
+  console.log(`ok    carried over, the panels stay within ${stretch.toFixed(2)} times a fresh layout's stretch`);
 }
 if (!small && w.median > 0.1) {
   console.log(`FAIL  a step of the walk moves a median ${pct(w.median)} of panels`);

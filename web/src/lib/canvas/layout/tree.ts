@@ -1113,6 +1113,17 @@ const CONTINUE_FILL_SLACK = 0.02;
 const CONTINUE_BLOAT_SLACK = 1.15;
 
 /**
+ * And how much more stretched its panels may be at the 95th percentile.
+ *
+ * A net rather than the mechanism: a carried row that has become a much worse
+ * shape than a fresh one is laid fresh where it is, in `subdivide`, which
+ * keeps the carried layout within about twice a fresh one's stretch (rslab,
+ * the worst of the demos, 8.5 against 4.3 over 200 changes). Without either,
+ * pathsim drifted to 18 against 2.8 and nothing noticed.
+ */
+const CONTINUE_STRETCH_SLACK = 3;
+
+/**
  * Lay the entries out.
  *
  * Given the layout on screen, the new one is cut the way that one was: each
@@ -1127,8 +1138,9 @@ const CONTINUE_BLOAT_SLACK = 1.15;
  * Carried over across many changes, a layout drifts from what a fresh one
  * would be, so every relayout is also computed fresh and the carried one is
  * only kept while it is about as good: no panel that cannot be drawn or does
- * not hold its lines where the fresh one has none, and about the same fill
- * and bloat. When it is not, the fresh one is taken and the panels slide to
+ * not hold its lines where the fresh one has none, and about the same fill,
+ * bloat and stretch. Shape is mostly kept in hand before that, row by row,
+ * where a carried row has drifted; see CARRY_ASPECT_SLACK in treemap.ts. When it is not, the fresh one is taken and the panels slide to
  * it, which is the reshuffle this avoids, once, when it buys something.
  */
 export function computeLayout(
@@ -1150,7 +1162,8 @@ function asGood(carried: LayoutStats, fresh: LayoutStats): boolean {
     && carried.escapes <= fresh.escapes
     && carried.offGrid <= fresh.offGrid
     && carried.fill >= fresh.fill - CONTINUE_FILL_SLACK
-    && carried.bloatP95 <= fresh.bloatP95 * CONTINUE_BLOAT_SLACK;
+    && carried.bloatP95 <= fresh.bloatP95 * CONTINUE_BLOAT_SLACK
+    && carried.stretchP95 <= fresh.stretchP95 * CONTINUE_STRETCH_SLACK;
 }
 
 function layoutFrom(
@@ -1255,6 +1268,11 @@ export interface LayoutStats {
   dirCount: number;
   /** Mean of each panel's own aspect ratio, as a check on shape. */
   meanAspect: number;
+  /**
+   * How stretched a panel is, long side over short, at the 95th percentile of
+   * the files. Where a carried layout drifts first; see CONTINUE_STRETCH_SLACK.
+   */
+  stretchP95: number;
   /** Mean characters per code column; a panel that fills a narrow slot gets
    *  fewer, and if this drops far below the natural width the treemap is
    *  handing out badly shaped slots. */
@@ -1330,9 +1348,11 @@ export function layoutStats(l: Layout): LayoutStats {
   let shortLines = 0;
   let textLines = 0;
   let jumps = 0;
+  const stretches: number[] = [];
   for (const f of l.files) {
     panelArea += f.w * f.h;
     aspectSum += f.w / Math.max(1, f.h);
+    if (!f.stub) stretches.push(Math.max(f.w, f.h) / Math.max(1, Math.min(f.w, f.h)));
     colsSum += f.geom.cols;
     if (!f.fits) misfits++;
     if (!f.usable && !f.stub) unusable++;
@@ -1428,6 +1448,9 @@ export function layoutStats(l: Layout): LayoutStats {
     offGrid,
     dirCount: l.dirs.length,
     meanAspect: aspectSum / Math.max(1, l.files.length),
+    stretchP95: stretches.length
+      ? stretches.sort((x, y) => x - y)[Math.floor((stretches.length - 1) * 0.95)]
+      : 1,
     meanCols: colsSum / Math.max(1, l.files.length),
     worstOverlap: worst,
   };

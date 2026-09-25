@@ -329,6 +329,76 @@ export function squarify<T extends Sized>(items: T[], rect: IntRect): IntRect[] 
  * lengths do not fit along the side it runs on, ends the given ones: from
  * there on the rows are chosen as usual.
  */
+/**
+ * How much worse a shape a carried row may have than the row a fresh layout
+ * would lay in its place before the rest of its rectangle is laid fresh.
+ *
+ * A carried layout keeps its rows so that a change moves nothing it does not
+ * have to; see computeLayout. Kept whatever their shape, the rows drifted:
+ * over 200 changes to pathsim the stretch of the panels went from a 95th
+ * percentile of 3 to one of 20, and a worst of 193, while a fresh layout
+ * stayed at 3 and 22, and nothing noticed until a panel became too narrow to
+ * draw and the whole canvas was laid again at once. Checked row by row, the
+ * repair is where the drift is: the rows before it, the directories beside
+ * it and the rest of the canvas stay where they were.
+ */
+const CARRY_ASPECT_SLACK = 1.5;
+
+/**
+ * A shape a carried row keeps whatever a fresh one would be. Relative alone,
+ * the check laid rows of 2.5 to 1 fresh because a fresh row came out at 1.6,
+ * which moved panels for a shape nobody would call stretched. Chosen with the
+ * slack by measuring stretch against panels moved over 200 changes on
+ * pathsim, rapidfem and rslab: 1.5 and 3 held the 95th percentile at 3.2,
+ * 4.2 and 8.5 against 17.9, 9.8 and 30.3 without it, and moved as many panels
+ * per step as before, 1.5, 0.8 and 5.5 percent.
+ */
+const CARRY_ASPECT_FINE = 3;
+
+/**
+ * The row a squarified layout lays at item `i` in `free`: as many items as
+ * improve its worst aspect ratio, along the shorter side.
+ */
+function growRow<T extends Sized>(
+  items: T[], i: number, scale: number, free: IntRect,
+): { horizontal: boolean; side: number; row: number[]; sum: number; j: number; worst: number } {
+  // The row runs along the shorter side, which keeps rectangles near square.
+  const horizontal = free.w <= free.h;
+  const side = horizontal ? free.w : free.h;
+  const row: number[] = [Math.max(0, items[i].area) * scale];
+  let sum = row[0];
+  let j = i + 1;
+  // Grow the row while doing so improves its worst aspect ratio, or while it
+  // is still too shallow for one of its members to be drawn. The second
+  // reason overrides the first: the aspect heuristic is about how the canvas
+  // looks, the depth bounds are about whether a panel exists.
+  // How much of `side` the row's members need at their minimum, which is the
+  // hard limit on how many can share a row. Without this the row grew on the
+  // aspect heuristic alone, the minimums no longer fitted, and `distribute`
+  // had to scale them all down: measured on 800 files of twelve lines, two
+  // panels came out too narrow to draw.
+  let minRun = Math.max(1, (horizontal ? items[i].minW : items[i].minH) ?? 1);
+  while (j < items.length) {
+    const add = Math.max(0, items[j].area) * scale;
+    const nextMin = Math.max(1, (horizontal ? items[j].minW : items[j].minH) ?? 1);
+    if (minRun + nextMin > side) break;
+    const bounds = depthRange(items, i, j, scale, horizontal);
+    const shallow = sum / side < bounds.min;
+    if (!shallow) {
+      if (worstAspect([...row, add], sum + add, side) > worstAspect(row, sum, side)) break;
+      // A deeper vertical row makes every member wider, so growing it can
+      // push one past the widest shape it is able to take.
+      const grown = depthRange(items, i, j + 1, scale, horizontal);
+      if (!horizontal && (sum + add) / side > grown.max) break;
+    }
+    row.push(add);
+    sum += add;
+    minRun += nextMin;
+    j++;
+  }
+  return { horizontal, side, row, sum, j, worst: worstAspect(row, sum, side) };
+}
+
 export function subdivide<T extends Sized>(
   items: T[], rect: IntRect, given: Row[],
 ): { rects: IntRect[]; rows: Row[] } {
@@ -368,61 +438,52 @@ export function subdivide<T extends Sized>(
   let next = 0;
 
   while (i < items.length) {
-    // A given row, while there is one and the rectangle can still hold it.
+    // The row a fresh layout lays here, which a given row is measured against.
+    const greedy = growRow(items, i, scale, free);
+
+    // A given row, while there is one, the rectangle can still hold it, and
+    // it is not much worse a shape than the fresh row would be. Past that the
+    // rest of this rectangle is laid fresh; see CARRY_ASPECT_SLACK.
     let fixed: Row | null = null;
     if (next < given.length) {
       const g = given[next++];
       const count = Math.min(g.count, items.length - i);
       const along = g.horizontal ? free.w : free.h;
       let run = 0;
+      const areas: number[] = [];
+      let total = 0;
       for (let k = i; k < i + count; k++) {
         run += Math.max(1, (g.horizontal ? items[k].minW : items[k].minH) ?? 1);
+        const a = Math.max(0, items[k].area) * scale;
+        areas.push(a);
+        total += a;
       }
-      if (count > 0 && run <= along) fixed = { count, horizontal: g.horizontal };
-      else next = given.length;
+      const shape = count > 0 ? worstAspect(areas, total, along) : Infinity;
+      const fine = Math.max(CARRY_ASPECT_FINE, greedy.worst * CARRY_ASPECT_SLACK);
+      if (count > 0 && run <= along && shape <= fine) {
+        fixed = { count, horizontal: g.horizontal };
+      } else {
+        next = given.length;
+      }
     }
 
-    // The row runs along the shorter side, which keeps rectangles near square.
-    const horizontal = fixed ? fixed.horizontal : free.w <= free.h;
-    const side = horizontal ? free.w : free.h;
-
-    const row: number[] = [Math.max(0, items[i].area) * scale];
-    let sum = row[0];
-    let j = i + 1;
-    // Grow the row while doing so improves its worst aspect ratio, or while it
-    // is still too shallow for one of its members to be drawn. The second
-    // reason overrides the first: the aspect heuristic is about how the canvas
-    // looks, the depth bounds are about whether a panel exists.
-    // How much of `side` the row's members need at their minimum, which is the
-    // hard limit on how many can share a row. Without this the row grew on the
-    // aspect heuristic alone, the minimums no longer fitted, and `distribute`
-    // had to scale them all down: measured on 800 files of twelve lines, two
-    // panels came out too narrow to draw.
-    let minRun = Math.max(1, (horizontal ? items[i].minW : items[i].minH) ?? 1);
+    let horizontal: boolean;
+    let side: number;
+    let row: number[];
+    let sum: number;
+    let j: number;
     if (fixed) {
-      for (; j < i + fixed.count; j++) {
+      horizontal = fixed.horizontal;
+      side = horizontal ? free.w : free.h;
+      row = [];
+      sum = 0;
+      for (j = i; j < i + fixed.count; j++) {
         const add = Math.max(0, items[j].area) * scale;
         row.push(add);
         sum += add;
       }
-    }
-    while (!fixed && j < items.length) {
-      const add = Math.max(0, items[j].area) * scale;
-      const nextMin = Math.max(1, (horizontal ? items[j].minW : items[j].minH) ?? 1);
-      if (minRun + nextMin > side) break;
-      const bounds = depthRange(items, i, j, scale, horizontal);
-      const shallow = sum / side < bounds.min;
-      if (!shallow) {
-        if (worstAspect([...row, add], sum + add, side) > worstAspect(row, sum, side)) break;
-        // A deeper vertical row makes every member wider, so growing it can
-        // push one past the widest shape it is able to take.
-        const grown = depthRange(items, i, j + 1, scale, horizontal);
-        if (!horizontal && (sum + add) / side > grown.max) break;
-      }
-      row.push(add);
-      sum += add;
-      minRun += nextMin;
-      j++;
+    } else {
+      ({ horizontal, side, row, sum, j } = greedy);
     }
 
     rows.push({ count: j - i, horizontal });
