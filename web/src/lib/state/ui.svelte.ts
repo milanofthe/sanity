@@ -3,6 +3,7 @@
 // read it.
 
 import { applyTheme, storedTheme, type ThemeId } from '$lib/theme';
+import { isWebKitGTK } from '$lib/platform';
 
 /** Widest a window is taken for a phone's: past it the four menus fit side
  *  by side with the search field, at it they do not. */
@@ -91,6 +92,13 @@ class UiState {
 	 * or the picture taken of the new window still has the old canvas in it
 	 * and the canvas cuts over a moment after everything else has faded.
 	 * A cut where the browser has no transitions, or motion is reduced.
+	 *
+	 * A cut on Linux too. WebKitGTK composites a view transition even when it
+	 * is running without accelerated compositing, as it does on NVIDIA where
+	 * the DMA-BUF renderer is turned off (see `prefer_software_compositing` in
+	 * src-tauri) and wherever GTK cannot get GL, and there it has nothing to
+	 * composite into and the window crashes. The theme is already stored by
+	 * then, so the next launch opens in the theme that crashed it.
 	 */
 	/** Follow the window's width for `narrow`. Called once, by the app. */
 	watchWidth(): void {
@@ -111,7 +119,7 @@ class UiState {
 			this.repaint?.();
 		};
 		const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-		if (still || typeof document.startViewTransition !== 'function') {
+		if (still || isWebKitGTK() || typeof document.startViewTransition !== 'function') {
 			change();
 			return;
 		}

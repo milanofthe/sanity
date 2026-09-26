@@ -21,6 +21,7 @@ import {
   type VideoCodec,
 } from 'mediabunny';
 import type { CanvasApp } from '$lib/canvas/app';
+import { isWebKitGTK } from './platform.ts';
 
 /** Frame sizes offered, 16:9. The project is fitted inside with the margin the
  *  fit always leaves, whatever its own shape. */
@@ -268,13 +269,6 @@ function upright(canvas: HTMLCanvasElement): { canvas: HTMLCanvasElement; copy()
       g.drawImage(canvas, 0, 0);
     },
   };
-}
-
-/** The Linux webview: WebKit on Linux, and not Chromium, which says
- *  AppleWebKit too. */
-function isWebKitGTK(): boolean {
-  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
-  return /Linux/.test(ua) && /AppleWebKit/.test(ua) && !/Chrom(e|ium)|Android/.test(ua);
 }
 
 /** How long the camera takes to fit a step's layout, in the video's time. */
