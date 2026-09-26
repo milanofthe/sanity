@@ -20,9 +20,18 @@ Try it in the browser with a few public repositories, no install:
 ## Install
 
 [Releases](https://github.com/milanofthe/sanity/releases) have a `.dmg` for
-macOS (Intel and Apple Silicon) and an installer for Windows. The builds are
-not signed yet. On macOS, right click the app and choose Open the first time.
-On Windows, click More info, then Run anyway.
+macOS (Intel and Apple Silicon), an installer for Windows and an `.AppImage`
+for Linux. The builds are not signed yet. On macOS, right click the app and
+choose Open the first time. On Windows, click More info, then Run anyway. On
+Linux, `chmod +x` the file and run it; if it refuses to start, the system has
+no `libfuse2` and `./sanity.AppImage --appimage-extract-and-run` runs it
+without one.
+
+If the window opens at the right size and stays blank on Linux, WebKitGTK
+could not allocate its buffer through your driver. Start it with
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` in the environment, which is what the app
+already does for itself on NVIDIA; virtual machines, software rendering and
+remote sessions hit the same thing and have to be told.
 
 ## Usage
 
@@ -72,6 +81,8 @@ the same commit in reverse. Clicking the commit id returns to the present.
 Right click, Export history, renders the replay to an MP4: from the oldest
 commit to the newest in the length you set, several commits a step when there
 are more than fit, with each commit's date, id and subject along the bottom.
+The video is H.264 where the machine can encode it and VP9 where it cannot,
+which includes the Linux AppImage; both play in browsers, VLC and mpv.
 
 Each commit is laid out for the files it has, so there are no empty places
 for files that come later or went earlier. When a step adds or removes files,
@@ -109,6 +120,25 @@ the rest dims, matching lines are banded, and Enter walks through the hits.
 npm ci && npm ci --prefix web
 npm run app            # development build
 npm run app:build      # release bundle
+```
+
+macOS and Windows need nothing beyond Rust and Node. Linux links against the
+system WebKitGTK, which has to be there to build at all — on Debian and Ubuntu
+that is `libwebkit2gtk-4.1-dev librsvg2-dev patchelf file`, and on Arch
+`webkit2gtk-4.1 librsvg patchelf`. Without them the build stops at a
+pkg-config error rather than anything about this project.
+
+The AppImage carries the few GStreamer plugins WebKitGTK encodes the history
+video with, and `scripts/appimage-gstreamer.sh` picks them; without it every
+plugin on the machine goes in. On Debian and Ubuntu they come from
+`gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad`,
+on Arch from `gst-plugins-base gst-plugins-good gst-plugins-bad`. On Arch,
+`NO_STRIP=true` as well, since the `strip` inside linuxdeploy cannot
+read Arch's libraries:
+
+```sh
+env $(scripts/appimage-gstreamer.sh target/gstreamer) \
+  NO_STRIP=true npx tauri build --bundles appimage
 ```
 
 The web demo is the same app reading pre-built dumps of public repositories

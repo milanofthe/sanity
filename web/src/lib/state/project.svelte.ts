@@ -106,6 +106,11 @@ class ProjectState {
 	 *  status bar, because the difference between a live view and a snapshot is
 	 *  not something you can see by looking at the canvas. */
 	watching = $state(false);
+	/** Why the folder is not being watched, when the backend could not start a
+	 *  watcher on it. The view still works, it just is not live, and that
+	 *  difference is invisible on the canvas: without this the panels simply
+	 *  stop flashing and nothing says why. Cleared when a folder is opened. */
+	watchError = $state<string | null>(null);
 	/** Files with a change on screen right now. */
 	changed = $state(0);
 	/** When the last batch of changes arrived, as a performance timestamp, or

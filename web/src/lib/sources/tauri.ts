@@ -264,6 +264,8 @@ const resized = (a: ScanFile | undefined, b: ScanFile): boolean =>
  * folder was opened meanwhile.
  */
 export async function fillRepo(app: CanvasApp): Promise<boolean> {
+  await watchFailures();
+  project.watchError = null;
   const mine = ++filling;
   const t0 = performance.now();
   let layouts = 0;
@@ -491,6 +493,31 @@ async function restructure(app: CanvasApp): Promise<void> {
   openLoaded(app, true);
 }
 
+/** Registered once, and never taken down; see `watchFailures`. */
+let failureListener: Promise<UnlistenFn> | null = null;
+
+/**
+ * Report a folder the backend could not watch.
+ *
+ * A folder that cannot be watched is still perfectly viewable, so the backend
+ * says so and carries on rather than failing the open; see `scanjob.rs`. It
+ * has to reach the status bar all the same, because a view that has quietly
+ * stopped being live looks exactly like one where nothing has changed yet.
+ *
+ * Registered here rather than in `watchRepo`, and kept for as long as the
+ * window lives, because of when the backend reports it: at the end of the
+ * scan, which is before `watchRepo` is reached on an open and is the whole of
+ * what happens when the file type switches force a rescan.
+ */
+function watchFailures(): Promise<UnlistenFn> {
+  failureListener ??= listen<string>('sanity://watch-failed', (event) => {
+    project.watching = false;
+    project.watchError = event.payload;
+    uiLog(`watch failed: ${event.payload}`);
+  });
+  return failureListener;
+}
+
 /**
  * Watch the open repository and keep the canvas in step.
  *
@@ -501,7 +528,9 @@ async function restructure(app: CanvasApp): Promise<void> {
  */
 export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
   let busy: Promise<void> = Promise.resolve();
-  project.watching = true;
+  // Unless the scan has already said it could not be watched: the events
+  // still arrive on this channel, there just will not be any.
+  project.watching = project.watchError === null;
 
   const unlisten = await listen<ChangeBatch>('sanity://changed', (event) => {
     const batch = event.payload;

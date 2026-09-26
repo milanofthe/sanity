@@ -21,6 +21,7 @@ import {
   type VideoCodec,
 } from 'mediabunny';
 import type { CanvasApp } from '$lib/canvas/app';
+import { isWebKitGTK } from './platform.ts';
 
 /** Frame sizes offered, 16:9. The project is fitted inside with the margin the
  *  fit always leaves, whatever its own shape. */
@@ -183,6 +184,7 @@ export async function renderReplay(
   const [width, height] = VIDEO_SIZES[opts.size];
   const dt = 1 / fps;
   const canvas = app.beginCapture(width, height);
+  const frames = upright(canvas);
   let keep = false;
   let output: Output | null = null;
   try {
@@ -192,7 +194,7 @@ export async function renderReplay(
       format: new Mp4OutputFormat({ fastStart: 'reserve' }),
       target: new StreamTarget(sink.writable, { chunked: true, chunkSize: 4 << 20 }),
     });
-    const video = new CanvasSource(canvas, {
+    const video = new CanvasSource(frames.canvas, {
       codec: opts.codec ?? 'avc',
       quality: QUALITY_HIGH,
       keyFrameInterval: 2,
@@ -205,6 +207,7 @@ export async function renderReplay(
       for (let i = 0; i < count; i++) {
         if (opts.signal?.aborted) throw new DOMException('cancelled', 'AbortError');
         await app.captureFrame(dt);
+        frames.copy();
         await video.add(frame * dt, dt);
         frame++;
         opts.onProgress?.(frame, plan.frames);
@@ -240,6 +243,32 @@ export async function renderReplay(
     app.endCapture();
   }
   return sink.close(keep);
+}
+
+/**
+ * The canvas the encoder reads, with the frame the right way up.
+ *
+ * WebKitGTK encodes a WebGL canvas upside down: the frame it takes from one
+ * keeps GL's origin at the bottom, and the video came out mirrored top to
+ * bottom. A 2D canvas it gets right, and drawing the WebGL one into it puts
+ * the picture the right way up, so there each frame is copied across before
+ * it is added. Everywhere else the canvas is read as it is.
+ */
+function upright(canvas: HTMLCanvasElement): { canvas: HTMLCanvasElement; copy(): void } {
+  const direct = { canvas, copy() {} };
+  if (!isWebKitGTK()) return direct;
+  const flat = document.createElement('canvas');
+  flat.width = canvas.width;
+  flat.height = canvas.height;
+  const g = flat.getContext('2d');
+  if (!g) return direct;
+  return {
+    canvas: flat,
+    copy() {
+      g.clearRect(0, 0, flat.width, flat.height);
+      g.drawImage(canvas, 0, 0);
+    },
+  };
 }
 
 /** How long the camera takes to fit a step's layout, in the video's time. */
