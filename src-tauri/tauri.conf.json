@@ -31,6 +31,9 @@
     "targets": "all",
     "category": "DeveloperTool",
     "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
       "deb": {
         "desktopTemplate": "main.desktop"
       }

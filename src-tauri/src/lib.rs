@@ -954,6 +954,35 @@ fn prefer_software_compositing() {
     }
 }
 
+/// Keep the AppImage's GStreamer out of the system's plugin registry.
+///
+/// The AppImage carries its own GStreamer and a handful of plugins (see
+/// scripts/appimage-gstreamer.sh), and GStreamer caches what it found in one
+/// registry file per user and architecture, the same file the system's
+/// GStreamer uses. Each would find the other's plugins missing and rewrite it,
+/// so every media application on the machine rescanned after sanity ran, and
+/// sanity after them. Its own file ends that. Only inside an AppImage, where
+/// `APPDIR` is set, and only when nobody chose a registry already.
+#[cfg(target_os = "linux")]
+fn own_gstreamer_registry() {
+    const VAR: &str = "GST_REGISTRY_1_0";
+    if std::env::var_os("APPDIR").is_none()
+        || std::env::var_os(VAR).is_some()
+        || std::env::var_os("GST_REGISTRY").is_some()
+    {
+        return;
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")));
+    if let Some(cache) = cache {
+        // GStreamer makes the directory when it writes the file. Sound for the
+        // same reason as above: nothing else is running yet.
+        std::env::set_var(VAR, cache.join("sanity").join("gstreamer-registry.bin"));
+    }
+}
+
 /// What the window should do on startup.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Startup {
@@ -1173,6 +1202,8 @@ pub fn run() {
     // tauri.conf.json exists before `.setup` below is reached.
     #[cfg(target_os = "linux")]
     prefer_software_compositing();
+    #[cfg(target_os = "linux")]
+    own_gstreamer_registry();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

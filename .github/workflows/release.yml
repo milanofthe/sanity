@@ -59,8 +59,9 @@ jobs:
       # loader GTK draws its own icons through, and `patchelf` and `file` are
       # what linuxdeploy rewrites the AppImage's library paths with. Tauri's
       # prerequisites also name libxdo and appindicator; this app builds
-      # neither a tray icon nor anything that links them. Before the cache, so
-      # a cache hit still gets these.
+      # neither a tray icon nor anything that links them. The GStreamer
+      # plugins are where the few the AppImage carries are taken from; see the
+      # next step. Before the cache, so a cache hit still gets these.
       - name: Install the Linux system dependencies
         if: ${{ matrix.name == 'Linux' }}
         run: |
@@ -68,8 +69,19 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             libwebkit2gtk-4.1-dev \
             librsvg2-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
             patchelf \
             file
+      # WebKitGTK encodes the history video through GStreamer, and without
+      # plugins inside the AppImage it finds no encoder on any machine. This
+      # picks the handful it needs, VP9 and what feeds it, and tells
+      # linuxdeploy's GStreamer plugin (`bundleMediaFramework`) to copy those
+      # instead of everything the runner has.
+      - name: Gather the GStreamer plugins the AppImage carries
+        if: ${{ matrix.name == 'Linux' }}
+        run: scripts/appimage-gstreamer.sh "$RUNNER_TEMP/gstreamer" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: '. -> target'

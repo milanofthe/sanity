@@ -81,6 +81,8 @@ the same commit in reverse. Clicking the commit id returns to the present.
 Right click, Export history, renders the replay to an MP4: from the oldest
 commit to the newest in the length you set, several commits a step when there
 are more than fit, with each commit's date, id and subject along the bottom.
+The video is H.264 where the machine can encode it and VP9 where it cannot,
+which includes the Linux AppImage; both play in browsers, VLC and mpv.
 
 Each commit is laid out for the files it has, so there are no empty places
 for files that come later or went earlier. When a step adds or removes files,
@@ -125,6 +127,19 @@ system WebKitGTK, which has to be there to build at all — on Debian and Ubuntu
 that is `libwebkit2gtk-4.1-dev librsvg2-dev patchelf file`, and on Arch
 `webkit2gtk-4.1 librsvg patchelf`. Without them the build stops at a
 pkg-config error rather than anything about this project.
+
+The AppImage carries the few GStreamer plugins WebKitGTK encodes the history
+video with, and `scripts/appimage-gstreamer.sh` picks them; without it every
+plugin on the machine goes in. On Debian and Ubuntu they come from
+`gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad`,
+on Arch from `gst-plugins-base gst-plugins-good gst-plugins-bad`. On Arch,
+`NO_STRIP=true` as well, since the `strip` inside linuxdeploy cannot
+read Arch's libraries:
+
+```sh
+env $(scripts/appimage-gstreamer.sh target/gstreamer) \
+  NO_STRIP=true npx tauri build --bundles appimage
+```
 
 The web demo is the same app reading pre-built dumps of public repositories
 over HTTP:
