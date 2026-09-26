@@ -922,6 +922,38 @@ fn platform_open(path: &Path) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Take WebKitGTK off its DMA-BUF renderer where that renderer cannot work.
+///
+/// WebKitGTK composites into a buffer it allocates through GBM, and against
+/// the proprietary NVIDIA driver the allocation fails. The window opens at the
+/// right size and stays completely blank, with `Failed to create GBM buffer of
+/// size 1600x1000: Invalid argument` on stderr and nothing on screen to say
+/// so. The other path draws the whole interface correctly, so it is taken on
+/// the machines that need it and Mesa, where DMA-BUF works and is the faster
+/// of the two, keeps it.
+///
+/// Set by the process rather than by the bundle because there is nowhere in
+/// the bundle to set it: Tauri 2 builds its AppImage with linuxdeploy and no
+/// longer wraps the binary in a launcher script. Doing it here also means
+/// `npm run app` behaves like a release build without anyone remembering to
+/// export anything.
+///
+/// Only when the variable is absent, so `WEBKIT_DISABLE_DMABUF_RENDERER=0`
+/// still means what it says and the faster path can be asked for on a machine
+/// this misjudges. `/sys/module/nvidia` is there while the proprietary module
+/// is loaded, and asking the filesystem starts no process; see clippy.toml.
+#[cfg(target_os = "linux")]
+fn prefer_software_compositing() {
+    const VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+    if std::env::var_os(VAR).is_none() && Path::new("/sys/module/nvidia").exists() {
+        // Sound only because nothing has started yet: this runs before the
+        // builder, so there is no second thread to read the environment while
+        // it is being written. The 2024 edition asks for `unsafe` here for
+        // exactly that reason.
+        std::env::set_var(VAR, "1");
+    }
+}
+
 /// What the window should do on startup.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Startup {
@@ -938,10 +970,19 @@ pub struct Startup {
 
 #[tauri::command]
 fn startup() -> Startup {
-    let from_arg = std::env::args().skip(1).find(|a| !a.starts_with('-'));
+    // The directory test belongs in the search rather than after it. `find`
+    // stops at the first argument that is not a flag and a later `filter`
+    // then throws it away if it is not a folder, having already skipped the
+    // fall back to `SANITY_OPEN` and passed over any real folder behind it.
+    // A launcher that hands over a field code it did not expand is enough to
+    // hit that: `sanity %F /repo` opened nothing.
+    let from_arg = std::env::args()
+        .skip(1)
+        .find(|a| !a.starts_with('-') && Path::new(a).is_dir());
     let repo = from_arg
         .or_else(|| std::env::var("SANITY_OPEN").ok())
         .map(PathBuf::from)
+        // Still needed: `SANITY_OPEN` has not been tested by the search.
         .filter(|p| p.is_dir())
         .map(|p| p.canonicalize().unwrap_or(p).to_string_lossy().into_owned());
     let lod = std::env::var("SANITY_LOD").ok().filter(|v| !v.trim().is_empty());
@@ -1127,6 +1168,12 @@ fn read_text(root: &Path, rel: &str) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before the builder, which is what makes the window and its webview:
+    // WebKitGTK reads this when the web process starts, and the window from
+    // tauri.conf.json exists before `.setup` below is reached.
+    #[cfg(target_os = "linux")]
+    prefer_software_compositing();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
