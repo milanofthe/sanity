@@ -11,25 +11,41 @@ import { existsSync, readdirSync } from 'node:fs';
 export const base = process.env.SANITY_URL ?? 'http://localhost:5183';
 export const src = process.env.SANITY_SRC ?? 'fixture=fixture';
 
+/** Where Playwright keeps its browsers, and what the Chromium inside one is
+ *  called. Both differ per platform, and the build names have changed with
+ *  Playwright's versions, so each is a list and the first that exists wins. */
+const CACHE_ROOT = {
+  darwin: `${process.env.HOME}/Library/Caches/ms-playwright`,
+  linux: `${process.env.XDG_CACHE_HOME ?? `${process.env.HOME}/.cache`}/ms-playwright`,
+};
+/** ANGLE's backend for each platform; see `launch`. */
+const ANGLE = { darwin: 'metal', linux: 'gl' };
+const CHROME_IN_BUILD = {
+  darwin: [
+    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+    'chrome-mac/Chromium.app/Contents/MacOS/Chromium',
+  ],
+  linux: ['chrome-linux64/chrome', 'chrome-linux/chrome'],
+};
+
 /**
  * Playwright's bundled Chromium, newest first.
  *
  * Resolved by hand rather than left to Playwright because the checks run
  * through `npm exec` from the repo root, where Playwright's own lookup does
  * not find the cache. Undefined falls back to its default, which is right when
- * the browser was installed some other way.
+ * the browser was installed some other way, and is also what a platform with
+ * no entry above gets.
  */
 export function chromiumPath() {
   if (process.env.SANITY_CHROME) return process.env.SANITY_CHROME;
-  const cacheRoot = `${process.env.HOME}/Library/Caches/ms-playwright`;
-  if (!existsSync(cacheRoot)) return undefined;
+  const cacheRoot = CACHE_ROOT[process.platform];
+  const names = CHROME_IN_BUILD[process.platform];
+  if (!cacheRoot || !existsSync(cacheRoot)) return undefined;
   for (const d of readdirSync(cacheRoot)
     .filter((x) => /^chromium-\d+$/.test(x))
     .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
-    for (const c of [
-      `${cacheRoot}/${d}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
-      `${cacheRoot}/${d}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
-    ]) {
+    for (const c of names.map((n) => `${cacheRoot}/${d}/${n}`)) {
       if (existsSync(c)) return c;
     }
   }
@@ -37,7 +53,7 @@ export function chromiumPath() {
 }
 
 /**
- * A browser with a GPU backend that supports WebGL2 on macOS.
+ * A browser with a GPU backend that supports WebGL2.
  *
  * `args` are appended: the screenshot scripts want rasterisation flags that
  * the checks do not. `SANITY_HEADED=1` runs it in a real window, which is the
@@ -47,15 +63,18 @@ export function chromiumPath() {
 export async function launch({ args = [], headless } = {}) {
   const head = headless ?? process.env.SANITY_HEADED !== '1';
   // `SANITY_ENGINE=webkit` runs a check on the engine the desktop app
-  // actually ships: Tauri draws into WKWebView on macOS, while every check
-  // here defaults to Chromium. The two differ on things that matter, decode
+  // actually ships: Tauri draws into WKWebView on macOS and WebKitGTK on
+  // Linux, while every check here defaults to Chromium. The two differ on things that matter, decode
   // being the clearest: a picture resized while decoding costs two to four
   // times as much in WebKit, and that is the app's number, not Chromium's.
   if (process.env.SANITY_ENGINE === 'webkit') return webkit.launch({ headless: head });
   return chromium.launch({
     executablePath: chromiumPath(),
     headless: head,
-    args: ['--use-gl=angle', '--use-angle=metal', ...args],
+    // ANGLE over the platform's own graphics API: Metal on macOS, and on
+    // Linux OpenGL, where `metal` is not a backend at all and asking for it
+    // drops the tab to SwiftShader, which measures the CPU.
+    args: ['--use-gl=angle', `--use-angle=${ANGLE[process.platform] ?? 'default'}`, ...args],
   });
 }
 

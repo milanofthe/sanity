@@ -261,6 +261,67 @@ mod tests {
     }
 
     #[test]
+    fn php_colours_its_code_and_the_html_around_it() {
+        // The HTML half comes through an injection the crate does not export,
+        // so leaving it out is quiet: the tags just render as plain text.
+        let g = grammar_for_extension("php").unwrap();
+        let src = "<div class=\"a\">\n<?php\nfunction f($x) { return \"s\"; }\n?>\n</div>\n";
+        let f = tokenize(src, g);
+        f.validate().unwrap();
+        assert!(
+            kinds_on_line(&f, 0).contains(&(Kind::Type as u8)),
+            "the div outside the php block is a tag: {:?}",
+            kinds_on_line(&f, 0)
+        );
+        let code = kinds_on_line(&f, 2);
+        assert!(code.contains(&(Kind::Keyword as u8)), "function is a keyword: {code:?}");
+        assert!(code.contains(&(Kind::String as u8)), "string literal: {code:?}");
+    }
+
+    #[test]
+    fn xml_gets_tags_attributes_and_comments() {
+        let g = grammar_for_extension("xml").unwrap();
+        let src = "<?xml version=\"1.0\"?>\n<!-- a note -->\n<root id=\"x\">text</root>\n";
+        let f = tokenize(src, g);
+        f.validate().unwrap();
+        assert!(kinds_on_line(&f, 1).contains(&(Kind::Comment as u8)), "comment on line 1");
+        let el = kinds_on_line(&f, 2);
+        assert!(el.contains(&(Kind::Type as u8)), "root is a tag: {el:?}");
+        assert!(el.contains(&(Kind::String as u8)), "attribute value: {el:?}");
+    }
+
+    #[test]
+    fn java_gets_keywords_types_and_strings() {
+        let g = grammar_for_extension("java").unwrap();
+        let src = "// a note\npublic class A {\n  String s = \"hi\";\n}\n";
+        let f = tokenize(src, g);
+        f.validate().unwrap();
+        assert!(kinds_on_line(&f, 0).contains(&(Kind::Comment as u8)), "comment on line 0");
+        let decl = kinds_on_line(&f, 1);
+        assert!(decl.contains(&(Kind::Keyword as u8)), "public and class: {decl:?}");
+        let field = kinds_on_line(&f, 2);
+        assert!(field.contains(&(Kind::Type as u8)), "String is a type: {field:?}");
+        assert!(field.contains(&(Kind::String as u8)), "string literal: {field:?}");
+    }
+
+    #[test]
+    fn kotlin_control_flow_is_a_keyword() {
+        // The query uses nvim-treesitter's old names, `conditional` and
+        // `repeat` among them, and a name missing from the list is plain text
+        // rather than an error.
+        let g = grammar_for_extension("kt").unwrap();
+        let src = "fun f(x: Int) {\n  if (x > 1) return\n  for (i in 0..x) println(\"s\")\n  val t = 1.5\n}\n";
+        let f = tokenize(src, g);
+        f.validate().unwrap();
+        assert!(kinds_on_line(&f, 0).contains(&(Kind::Keyword as u8)), "fun is a keyword");
+        assert!(kinds_on_line(&f, 1).contains(&(Kind::Keyword as u8)), "if is a keyword");
+        let each = kinds_on_line(&f, 2);
+        assert!(each.contains(&(Kind::Keyword as u8)), "for is a keyword: {each:?}");
+        assert!(each.contains(&(Kind::String as u8)), "string literal: {each:?}");
+        assert!(kinds_on_line(&f, 3).contains(&(Kind::Number as u8)), "a float is a number");
+    }
+
+    #[test]
     fn latex_gets_commands_comments_and_environments() {
         // The query is hand written, so this is the only thing standing
         // between it and quietly matching nothing.
@@ -287,6 +348,9 @@ mod tests {
             ("py", "def f(x):\n    return \"s\"\n", Kind::Keyword),
             ("ts", "const x: number = 1;\n", Kind::Keyword),
             ("json", "{\"a\": 1}\n", Kind::String),
+            // Captured as `boolean`, which is in the list for Kotlin's sake.
+            ("toml", "a = true\n", Kind::Constant),
+            ("yaml", "a: false\n", Kind::Constant),
         ] {
             let g = grammar_for_extension(ext).unwrap();
             let f = tokenize(src, g);

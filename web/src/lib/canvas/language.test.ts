@@ -5,10 +5,10 @@ import assert from 'node:assert/strict';
 import { FAMILY_COUNT, Family, familyColours, familyOf, familyTints } from './language.ts';
 
 test('every language in the registry has a family', () => {
-  // Ids 1 to 19, which is what crates/sanity-core/src/lang.rs defines. A gap
+  // Ids 1 to 24, which is what crates/sanity-core/src/lang.rs defines. A gap
   // here would show up as a file drawn in the unclaimed colour, which looks
   // like a missing grammar rather than a missing table entry.
-  for (let id = 1; id <= 19; id++) {
+  for (let id = 1; id <= 24; id++) {
     assert.ok(
       familyOf(id) < FAMILY_COUNT - 1,
       `language ${id} falls through to the unclaimed colour`,
@@ -27,6 +27,9 @@ test('related languages share a colour and unrelated ones do not', () => {
   assert.equal(familyOf(3), familyOf(5), 'typescript and javascript');
   assert.equal(familyOf(6), familyOf(7), 'c and cpp');
   assert.equal(familyOf(9), familyOf(11), 'json and yaml');
+  assert.equal(familyOf(20), familyOf(14), 'php and html');
+  assert.equal(familyOf(21), familyOf(9), 'xml and json');
+  assert.equal(familyOf(23), familyOf(24), 'java and kotlin');
   assert.notEqual(familyOf(1), familyOf(9), 'rust and json');
   assert.notEqual(familyOf(12), familyOf(1), 'markdown and rust');
 });
@@ -40,7 +43,7 @@ test('the colour array covers every family and ends with the dim one', () => {
     assert.equal(colours[i], data[i], `family ${i}`);
   }
   // Every family index the table can produce has to land inside the array.
-  for (let id = 0; id <= 20; id++) {
+  for (let id = 0; id <= 25; id++) {
     assert.ok(colours[familyOf(id)] !== undefined, `id ${id}`);
   }
 });

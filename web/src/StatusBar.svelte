@@ -129,6 +129,8 @@
 					<b>{n(project.changed)}</b> changed
 				{/if}
 			</span>
+		{:else if project.watchError}
+			<span class="group err" title={project.watchError}>not live: {project.watchError}</span>
 		{/if}
 		<span class="spacer"></span>
 		{#if contextLost}

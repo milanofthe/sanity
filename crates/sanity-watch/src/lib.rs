@@ -258,6 +258,28 @@ impl Drop for Watch {
     }
 }
 
+/// A watch failure in words somebody can do something about.
+///
+/// One kind is worth translating. Linux watches with inotify, which takes a
+/// watch per directory out of `fs.inotify.max_user_watches`, and several
+/// distributions still set that to 8192: a project with a `node_modules` in
+/// it runs out on a machine that looks idle, and the folder then opens and
+/// simply never updates. notify calls that "OS file watch limit reached",
+/// which is true and leaves nowhere to go, while the name of the knob is a
+/// search away from a fix.
+fn explain(e: notify::Error) -> String {
+    // An `if` rather than a `match` arm, because of what is left when the
+    // `cfg` takes it away: a match on one wildcard, which says there is a
+    // choice being made where there is not one.
+    #[cfg(target_os = "linux")]
+    if matches!(e.kind, notify::ErrorKind::MaxFilesWatch) {
+        return "the system ran out of file watches, so changes to this folder \
+                will not be noticed \u{2014} raise fs.inotify.max_user_watches"
+            .into();
+    }
+    e.to_string()
+}
+
 /// Start watching `root` recursively, calling `emit` once per batch.
 ///
 /// Whether a path the scan never saw is gitignored needs git, and asking per
@@ -273,9 +295,9 @@ where
         // shutdown; there is nothing useful to do about it.
         let _ = tx.send(res);
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(explain)?;
 
-    watcher.watch(&root, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
+    watcher.watch(&root, RecursiveMode::Recursive).map_err(explain)?;
 
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let thread_stop = stop.clone();
@@ -350,6 +372,21 @@ pub struct WatchSlot(pub Mutex<Option<Watch>>);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn running_out_of_watches_names_the_limit_that_ran_out() {
+        // notify renders this one as "OS file watch limit reached", which is
+        // true and leaves nowhere to go from.
+        let e = explain(notify::Error::new(notify::ErrorKind::MaxFilesWatch));
+        assert!(e.contains("fs.inotify.max_user_watches"), "{e}");
+    }
+
+    #[test]
+    fn every_other_failure_is_passed_through_as_it_came() {
+        let e = explain(notify::Error::path_not_found());
+        assert_eq!(e, notify::Error::path_not_found().to_string());
+    }
 
     #[test]
     fn paths_relativise_with_forward_slashes() {

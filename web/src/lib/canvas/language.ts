@@ -2,7 +2,7 @@
 // showing.
 //
 // Grouped into families rather than one colour per language, for two reasons.
-// The palette has six data hues and there are eighteen languages, so one each
+// The palette has six data hues and there are twenty-three languages, so one each
 // is not on offer. And the useful distinction at that distance is not Rust
 // from Go, it is source from configuration from prose: a directory of YAML
 // reads as a different kind of thing from a directory of code, and that is
@@ -54,6 +54,11 @@ const FAMILY: Record<number, Family> = {
   17: Family.Prose, // markdown_inline, reachable only through an injection
   18: Family.Hardware, // veriloga
   19: Family.Hardware, // spice
+  20: Family.Web, // php
+  21: Family.Data, // xml
+  22: Family.Data, // dtd
+  23: Family.Systems, // java
+  24: Family.Systems, // kotlin
 };
 
 /** The highest family index, so a caller can size a uniform array. */

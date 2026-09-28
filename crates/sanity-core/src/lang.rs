@@ -59,6 +59,26 @@ pub const HIGHLIGHT_NAMES: &[&str] = &[
     "variable.builtin",
     "variable.member",
     "variable.parameter",
+    // nvim-treesitter's names from before its 2024 rename, which is what
+    // tree-sitter-kotlin-sg's query is written in. Without them Kotlin's `if`,
+    // `for` and `try` are plain text. Not sorted in with the rest because
+    // resolution is by longest prefix, not position, and they are easier to
+    // recognise as a set.
+    //
+    // `keyword.function` is here because a capture takes the entry sharing the
+    // most of its parts and the earlier one on a tie, so without its own row
+    // Kotlin's `fun` ties `function` with `keyword` and comes out a function
+    // name.
+    "keyword.function",
+    "boolean",
+    "character",
+    "conditional",
+    "exception",
+    "float",
+    "include",
+    "namespace",
+    "parameter",
+    "repeat",
 ];
 
 /// Wire-format kind per entry in `HIGHLIGHT_NAMES`, same order.
@@ -107,6 +127,17 @@ const KIND_FOR_NAME: &[Kind] = &[
     Kind::Variable,    // variable.builtin
     Kind::Variable,    // variable.member
     Kind::Variable,    // variable.parameter
+    Kind::Keyword,     // keyword.function
+    // `boolean` is also what TOML, YAML and XML call `true` and `false`.
+    Kind::Constant,    // boolean
+    Kind::String,      // character
+    Kind::Keyword,     // conditional
+    Kind::Keyword,     // exception
+    Kind::Number,      // float
+    Kind::Keyword,     // include
+    Kind::Type,        // namespace
+    Kind::Variable,    // parameter
+    Kind::Keyword,     // repeat
 ];
 
 /// Kind for a highlight index, or `Plain` when the grammar reported a capture
@@ -141,6 +172,10 @@ const MARKDOWN_INJECTIONS: &str = include_str!("../queries/markdown/injections.s
 /// The LaTeX highlight query, written by hand against the node names the
 /// grammar produces. See the note at the top of the file.
 const LATEX_HIGHLIGHTS: &str = include_str!("../queries/latex/highlights.scm");
+
+/// PHP's HTML injection, which the crate ships but does not export. See the
+/// note in the file.
+const PHP_TEXT_INJECTIONS: &str = include_str!("../queries/php/injections-text.scm");
 
 /// Registry order sets the language ids, so entries are only ever appended.
 ///
@@ -313,6 +348,63 @@ fn entries() -> &'static [Entry] {
             injections: &[],
             locals: &[],
         },
+        // 18 and 19 are the lexed languages in `LEXED`.
+        Entry {
+            // The grammar for PHP embedded in HTML rather than `php_only`,
+            // because that is what a `.php` file is: even a pure class file
+            // opens with `<?php`, which only this one accepts. `.inc` stays
+            // with SPICE.
+            id: 20,
+            name: "php",
+            extensions: &["php", "phtml", "php3", "php4", "php5", "php7", "php8", "phps"],
+            language: || tree_sitter_php::LANGUAGE_PHP.into(),
+            highlights: &[tree_sitter_php::HIGHLIGHTS_QUERY],
+            injections: &[tree_sitter_php::INJECTIONS_QUERY, PHP_TEXT_INJECTIONS],
+            locals: &[],
+        },
+        Entry {
+            // `svg` is not here: media.rs draws it as a picture first.
+            id: 21,
+            name: "xml",
+            extensions: &[
+                "xml", "xsd", "xsl", "xslt", "plist", "xaml", "csproj", "fsproj", "vbproj",
+                "props", "targets", "resx", "wsdl", "rss", "atom",
+            ],
+            language: || tree_sitter_xml::LANGUAGE_XML.into(),
+            highlights: &[tree_sitter_xml::XML_HIGHLIGHT_QUERY],
+            injections: &[],
+            locals: &[],
+        },
+        Entry {
+            id: 22,
+            name: "dtd",
+            extensions: &["dtd"],
+            language: || tree_sitter_xml::LANGUAGE_DTD.into(),
+            highlights: &[tree_sitter_xml::DTD_HIGHLIGHT_QUERY],
+            injections: &[],
+            locals: &[],
+        },
+        Entry {
+            id: 23,
+            name: "java",
+            extensions: &["java"],
+            language: || tree_sitter_java::LANGUAGE.into(),
+            highlights: &[tree_sitter_java::HIGHLIGHTS_QUERY],
+            injections: &[],
+            locals: &[],
+        },
+        Entry {
+            // The ast-grep fork of fwcd's grammar. The original crate pins
+            // tree-sitter below 0.23, and tree-sitter-kotlin-ng ships no
+            // highlight query at all.
+            id: 24,
+            name: "kotlin",
+            extensions: &["kt", "kts"],
+            language: || tree_sitter_kotlin_sg::LANGUAGE.into(),
+            highlights: &[tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY],
+            injections: &[],
+            locals: &[],
+        },
     ]
 }
 
@@ -439,6 +531,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("markdown-inline", "markdown_inline"),
     ("tex", "latex"),
     ("yml", "yaml"),
+    ("kt", "kotlin"),
 ];
 
 /// The grammar registered under this name, following aliases. Case
@@ -540,7 +633,9 @@ mod tests {
         for (ext, name) in [
             ("rs", "rust"), ("RS", "rust"), ("py", "python"), ("ts", "typescript"),
             ("tsx", "tsx"), ("h", "c"), ("cuh", "cpp"), ("svelte", "html"),
-            ("yml", "yaml"), ("md", "markdown"),
+            ("yml", "yaml"), ("md", "markdown"), ("php", "php"), ("phtml", "php"),
+            ("xml", "xml"), ("csproj", "xml"), ("dtd", "dtd"), ("java", "java"),
+            ("kt", "kotlin"), ("kts", "kotlin"),
         ] {
             let g = grammar_for_extension(ext).unwrap_or_else(|| panic!("{ext} unresolved"));
             assert_eq!(g.name, name, "{ext}");

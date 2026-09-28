@@ -1,0 +1,33 @@
+{{!--
+  Replaces tauri-bundler's built-in template, for two things it does not do:
+  `%F`, so a folder dropped on the launcher is opened the way `sanity <path>`
+  opens one, and `MimeType`, so sanity is offered under a file manager's Open
+  With for a directory, which is how somebody would actually reach for it.
+
+  Reached through `bundle > linux > deb > desktopTemplate`. That is named for
+  the Debian bundle but is the only desktop file template there is: the
+  AppImage bundler lays out a Debian data tree and takes this file out of it.
+
+  `categories` is `bundle > category`. A custom template replaces the default
+  whole, so two things it provides have to be kept by hand here: the
+  `StartupWMClass`, without which the running window does not group under its
+  own icon, and, should `fileAssociations` ever be added, the `MimeType` it
+  would otherwise contribute.
+
+  Handlebars comments rather than `#` ones: this file is the source, and the
+  reasoning above belongs to whoever edits it rather than in every copy that
+  ships inside a bundle.
+--}}
+[Desktop Entry]
+Type=Application
+Name={{name}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Categories={{categories}}
+Keywords=repository;git;code;canvas;monitor;
+Exec={{exec}} %F
+StartupWMClass={{exec}}
+Icon={{icon}}
+Terminal=false
+MimeType=inode/directory;

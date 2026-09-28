@@ -36,13 +36,19 @@ tree-sitter-css = "0.25.0"
 tree-sitter-go = "0.25.0"
 tree-sitter-highlight = "0.27.0"
 tree-sitter-html = "0.23.2"
+tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-json = "0.24.8"
+# The ast-grep fork of the Kotlin grammar: the original pins tree-sitter
+# below 0.23 and the tree-sitter-grammars one ships no highlight query.
+tree-sitter-kotlin-sg = "0.4.1"
 tree-sitter-md = "0.5.3"
+tree-sitter-php = "0.24.2"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
+tree-sitter-xml = "0.7.0"
 # The latex-lsp grammar. Published under this name because the
 # canonical crate stopped at 0.1.0; it parses real papers cleanly
 # while `tree-sitter-latex` ships its query commented out.

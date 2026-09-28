@@ -148,7 +148,10 @@
 			{codec.name}{/if}.
 	</p>
 	{#if codec === null}
-		<p class="error">This machine has no video encoder for {size}. Try 1080p, or update the graphics driver.</p>
+		<p class="error">
+			This machine has no video encoder for {size}.{#if size !== '1080p'} Try 1080p, or update the graphics driver.{:else}
+				Update the graphics driver.{/if}
+		</p>
 	{/if}
 	{#if running}
 		<div class="progress" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done}>
