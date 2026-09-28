@@ -123,32 +123,25 @@ npm run app:build      # release bundle
 ```
 
 macOS and Windows need nothing beyond Rust and Node. Linux links against the
-system WebKitGTK, which has to be there to build at all — on Debian and Ubuntu
+system WebKitGTK, which has to be there to build at all. On Debian and Ubuntu
 that is `libwebkit2gtk-4.1-dev librsvg2-dev patchelf file`, and on Arch
 `webkit2gtk-4.1 librsvg patchelf`. Without them the build stops at a
 pkg-config error rather than anything about this project.
 
 The AppImage carries the few GStreamer plugins WebKitGTK encodes the history
-video with, and `scripts/appimage-gstreamer.sh` picks them; without it every
-plugin on the machine goes in. On Debian and Ubuntu they come from
+video with, which `scripts/appimage-gstreamer.sh` picks. On Debian and Ubuntu
+they come from
 `gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad`,
-on Arch from `gst-plugins-base gst-plugins-good gst-plugins-bad`. On Arch,
-`NO_STRIP=true` as well, since the `strip` inside linuxdeploy cannot
-read Arch's libraries. Without it the build ends in nothing more than
-`failed to run linuxdeploy`; `--verbose` shows the real error.
-
-linuxdeploy's GStreamer step also needs `patchelf` on the `PATH`, and fails
-the same way without it — `--verbose` shows `Error: patchelf not found` from
-the gstreamer plugin. It is in the package lists above, but easy to miss if
-WebKitGTK was already installed: `sudo pacman -S patchelf` on Arch,
-`sudo apt install patchelf` on Debian and Ubuntu.
+on Arch from `gst-plugins-base gst-plugins-good gst-plugins-bad`.
 
 ```sh
-env $(bash scripts/appimage-gstreamer.sh target/gstreamer) NO_STRIP=true npx tauri build --bundles appimage
+npm run app:appimage   # Linux release bundle
 ```
 
-The script goes through `bash` because it is not marked executable; run
-directly, it fails, the `env` comes out empty and every plugin goes in anyway.
+It sets `NO_STRIP=true`, since the `strip` inside linuxdeploy cannot read
+Arch's libraries, and stops early when `patchelf` is missing, which
+linuxdeploy's GStreamer step needs. When the build still ends in nothing more
+than `failed to run linuxdeploy`, `--verbose` shows the real error.
 
 The web demo is the same app reading pre-built dumps of public repositories
 over HTTP:

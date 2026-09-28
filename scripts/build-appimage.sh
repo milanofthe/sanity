@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # linuxdeploy's GStreamer plugin needs it, and without it the build only says
 # "failed to run linuxdeploy".

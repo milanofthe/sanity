@@ -7,6 +7,7 @@
 	"scripts": {
 		"app": "tauri dev",
 		"app:build": "tauri build",
+		"app:appimage": "scripts/build-appimage.sh",
 		"tauri": "tauri",
 		"dev": "npm --prefix web run dev",
 		"check": "npm --prefix web run check && npm --prefix web exec svelte-check -- --threshold error && cargo clippy --workspace --all-targets -- -D warnings",

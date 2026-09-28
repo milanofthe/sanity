@@ -274,7 +274,7 @@ fn explain(e: notify::Error) -> String {
     #[cfg(target_os = "linux")]
     if matches!(e.kind, notify::ErrorKind::MaxFilesWatch) {
         return "the system ran out of file watches, so changes to this folder \
-                will not be noticed \u{2014} raise fs.inotify.max_user_watches"
+                will not be noticed; raise fs.inotify.max_user_watches"
             .into();
     }
     e.to_string()
