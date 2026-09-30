@@ -26,8 +26,37 @@ function webOnlyPayloads() {
   };
 }
 
+/**
+ * The visitor count for the website, whatsmytraffic's beacon.
+ *
+ * Only in a build for the web: the app is the same page, and a desktop app
+ * has no business reporting to anyone, and the dev server is where the
+ * checks run, which would count every run as a visit.
+ */
+const BEACON = {
+  src: 'https://whatsmytraffic.com/beacon.js',
+  websiteId: '97ec12ef-2519-4994-a39d-4075fc3a617d',
+};
+
+function webBeacon() {
+  return {
+    name: 'sanity-web-beacon',
+    apply: 'build' as const,
+    transformIndexHtml() {
+      if (process.env.TAURI_ENV_PLATFORM) return [];
+      return [
+        {
+          tag: 'script',
+          attrs: { defer: true, src: BEACON.src, 'data-website-id': BEACON.websiteId },
+          injectTo: 'body' as const,
+        },
+      ];
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [svelte(), webOnlyPayloads()],
+  plugins: [svelte(), webOnlyPayloads(), webBeacon()],
   resolve: {
     alias: {
       $lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
