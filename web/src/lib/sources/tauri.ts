@@ -464,18 +464,52 @@ export function loadedRoot(): string | null {
  * file that outgrew its panel, or one that appeared or disappeared, because
  * those change what the treemap has to divide up.
  */
-async function readFresh(paths: string[]): Promise<Map<string, FileData>> {
-  const out = new Map<string, FileData>();
-  if (paths.length === 0) return out;
-  const blob = await answered(invoke<ArrayBuffer>('refresh_files', { paths }), 'refresh_files');
-  for (const [path, buf] of unpack(blob)) {
+async function readFresh(paths: string[]): Promise<{
+  fresh: Map<string, FileData>; rows: ScanFile[]; groups: ScanResult['groups'];
+}> {
+  // Asked even with nothing to read: the reply carries the picker's groups
+  // as they stand, which a batch of deletions changes too.
+  const reply = await answered(invoke<ArrayBuffer>('refresh_files', { paths }), 'refresh_files');
+  const headerLen = new DataView(reply).getUint32(0, true);
+  const { rows, groups } = JSON.parse(new TextDecoder().decode(new Uint8Array(reply, 4, headerLen))) as {
+    rows: ScanFile[]; groups: ScanResult['groups'];
+  };
+  const fresh = new Map<string, FileData>();
+  for (const [path, buf] of unpack(reply.slice(4 + headerLen))) {
     payloads.set(path, buf);
     const data = decodeFile(buf);
     decoded.set(path, data);
     text.invalidate(path);
-    out.set(path, data);
+    fresh.set(path, data);
   }
-  return out;
+  return { fresh, rows, groups };
+}
+
+/**
+ * Bring the index up to date with a batch: the rows of what was read, less
+ * what is gone, and the picker's groups.
+ *
+ * In place of asking for the whole index, which at 20,000 files was the
+ * whole of it as JSON for every save that changed a file's size, for one
+ * changed row. And on every batch rather than only the ones that lay out
+ * again, so the rows of a file updated in place are not left as they were.
+ */
+function patchIndex(rows: ScanFile[], removed: string[], groups: ScanResult['groups']): void {
+  if (!scan) return;
+  if (rows.length > 0 || removed.length > 0) {
+    const byPath = new Map(scan.files.map((f) => [f.path, f]));
+    for (const path of removed) byPath.delete(path);
+    let added = false;
+    for (const row of rows) {
+      if (!byPath.has(row.path)) added = true;
+      byPath.set(row.path, row);
+    }
+    const files = [...byPath.values()];
+    // In path order, as the backend lists them.
+    if (added) files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    scan = { ...scan, files };
+  }
+  project.refreshGroups(groups);
 }
 
 /** Forget files that are gone. Always structural: the treemap loses a leaf. */
@@ -489,15 +523,9 @@ async function forget(paths: string[]): Promise<void> {
   await answered(invoke('drop_files', { paths }), 'drop_files');
 }
 
-/**
- * Pick up the index after a structural change, then lay out again.
- *
- * The index comes from held backend state rather than a fresh scan, so a new
- * file costs one read instead of the four seconds a large project takes.
- */
+/** Lay out again after a structural change, from the index as patched;
+ *  see `patchIndex`. */
 async function restructure(app: CanvasApp): Promise<void> {
-  scan = await answered(invoke<ScanResult>('repo_index'), 'repo_index');
-  project.refreshGroups(scan.groups);
   openLoaded(app, true);
 }
 
@@ -547,15 +575,12 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
     busy = busy
       .then(async () => {
         await forget(batch.removed);
-        const fresh = await readFresh(batch.changed);
+        const { fresh, rows, groups } = await readFresh(batch.changed);
+        patchIndex(rows, batch.removed, groups);
         // Showing the history: the live state is kept current and the canvas
         // is left alone. Coming back to the present is one step from the
         // commit to the working tree as it then is, this batch included.
-        if (inHistory()) {
-          scan = await answered(invoke<ScanResult>('repo_index'), 'repo_index');
-          project.refreshGroups(scan.groups);
-          return;
-        }
+        if (inHistory()) return;
         let structural = await app.applyBatch(
           fresh, batch.removed, () => restructure(app), true,
         );

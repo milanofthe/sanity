@@ -271,7 +271,7 @@ fn extension_of(path: &str) -> String {
 /// Derived rather than accumulated, so that a file the watcher adds or removes
 /// updates the picker through the same code the scan used. Sorted by weight,
 /// which is the order the picker shows.
-fn groups_from(files: &[FileInfo]) -> Vec<GroupInfo> {
+fn groups_from<'a>(files: impl IntoIterator<Item = &'a FileInfo>) -> Vec<GroupInfo> {
     let mut groups: Vec<GroupInfo> = Vec::new();
     for f in files {
         let ext = extension_of(&f.path);
@@ -724,8 +724,26 @@ async fn refresh_files(
         );
     }
 
+    // The rows of what was sent and the picker's groups as they now stand,
+    // so the window can patch its index rather than ask for all of it: at
+    // 20,000 files that was the whole index as JSON for each save that
+    // changed a file's size.
+    #[derive(Serialize)]
+    struct Header {
+        rows: Vec<FileInfo>,
+        groups: Vec<GroupInfo>,
+    }
+    let header = {
+        let repo = state.repo.locked();
+        let rows = out.iter().filter_map(|(p, _)| repo.held.get(p).map(|h| h.row.clone())).collect();
+        let groups = groups_from(repo.held.values().map(|h| &h.row).chain(repo.placeholders.iter()));
+        serde_json::to_vec(&Header { rows, groups }).map_err(|e| e.to_string())?
+    };
     let out: Vec<(&str, &[u8])> = out.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
-    Ok(Response::new(pack_payloads(&out)?))
+    let mut reply = (header.len() as u32).to_le_bytes().to_vec();
+    reply.extend_from_slice(&header);
+    reply.extend_from_slice(&pack_payloads(&out)?);
+    Ok(Response::new(reply))
 }
 
 /// The file rows and picker groups as they now stand.
