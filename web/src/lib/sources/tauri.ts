@@ -242,11 +242,12 @@ const RELAYOUT_SHARE = 6;
 /** A reply of `scan_next`: rows, dropped paths, progress and payloads. */
 function readScanBatch(reply: ArrayBuffer): {
   rows: ScanFile[]; dropped: string[]; read: number; total: number; done: boolean;
-  parts: [string, ArrayBuffer][];
+  watchError?: string; parts: [string, ArrayBuffer][];
 } {
   const headerLen = new DataView(reply).getUint32(0, true);
   const header = JSON.parse(new TextDecoder().decode(new Uint8Array(reply, 4, headerLen))) as {
     rows: ScanFile[]; dropped: string[]; read: number; total: number; done: boolean;
+    watchError?: string;
   };
   return { ...header, parts: [...unpack(reply.slice(4 + headerLen))] };
 }
@@ -305,6 +306,12 @@ export async function fillRepo(app: CanvasApp): Promise<boolean> {
     if (arrived.length > 0) app.fillIn(arrived);
     batches++;
     if (batch.done) {
+      // The backend has said whether the watch started by now; see
+      // `watch_error` in scanjob.rs.
+      if (batch.watchError) {
+        project.watching = false;
+        project.watchError = batch.watchError;
+      }
       uiLog(
         `read ${batch.total} files in ${(performance.now() - t0).toFixed(0)} ms after the layout, ` +
           `${batches} batches, laid out again ${layouts} times`,
@@ -528,6 +535,7 @@ function watchFailures(): Promise<UnlistenFn> {
  * two relayouts at once would leave the scene describing neither state.
  */
 export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
+  watchHealth();
   let busy: Promise<void> = Promise.resolve();
   // Unless the scan has already said it could not be watched: the events
   // still arrive on this channel, there just will not be any.
@@ -535,6 +543,7 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
 
   const unlisten = await listen<ChangeBatch>('sanity://changed', (event) => {
     const batch = event.payload;
+    lastSeen = performance.now();
     busy = busy
       .then(async () => {
         await forget(batch.removed);
@@ -670,6 +679,52 @@ export async function savePng(bytes: Uint8Array, name: string): Promise<string |
   if (!path) return null;
   await invoke('stage_save', { path });
   return invoke<string>('save_png', new Uint8Array(bytes));
+}
+
+/** How long the window has to have been away before coming back to it
+ *  compares the folder again; see `checkWatch`. */
+const CHECK_AFTER_MS = 2 * 60_000;
+
+/** When the folder was last compared, or a batch last arrived, which says
+ *  as much. */
+let lastSeen = performance.now();
+
+/**
+ * Compare the folder with what is shown, for a watch that went quiet without
+ * failing: after the machine slept, which the backend notices and says, and
+ * when the window comes back after a while. What the watch missed arrives as
+ * a batch; see `check_watch`. Registered once, like `watchFailures`.
+ */
+let healthWatched = false;
+function watchHealth(): void {
+  if (healthWatched) return;
+  healthWatched = true;
+  void listen<number>('sanity://woke', (event) => {
+    uiLog(`woke after ${event.payload} s asleep`);
+    void checkWatch(true);
+  });
+  const back = () => {
+    if (document.visibilityState === 'visible' && performance.now() - lastSeen > CHECK_AFTER_MS) {
+      void checkWatch(false);
+    }
+  };
+  window.addEventListener('focus', back);
+  document.addEventListener('visibilitychange', back);
+}
+
+async function checkWatch(restart: boolean): Promise<void> {
+  if (!inTauri() || (!project.watching && !project.watchError)) return;
+  lastSeen = performance.now();
+  try {
+    const missed = await answered(invoke<number>('check_watch', { restart }), 'check_watch');
+    if (missed > 0) uiLog(`the watch missed ${missed} changes; started again`);
+    if (restart || missed > 0) {
+      project.watching = true;
+      project.watchError = null;
+    }
+  } catch (e) {
+    uiLog(`check failed: ${e}`);
+  }
 }
 
 /** Stop watching. */

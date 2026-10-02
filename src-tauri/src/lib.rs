@@ -2,7 +2,7 @@
 //! contains lives in `sanity-core`, and this file only moves bytes between
 //! that crate and the webview.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use sanity_core::process;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -174,6 +174,10 @@ pub struct Repo {
     ignored_shown: u32,
     /// Files skipped as binary, carried so the index still adds up.
     binary: u32,
+    /// The files in the folder that are not panels: binary, and not
+    /// pictures. Known so a comparison of the folder with what is held does
+    /// not take each of them for a file the watch missed; see `check_watch`.
+    skipped: HashSet<String>,
 }
 
 /// One file as the backend holds it.
@@ -198,6 +202,7 @@ struct Held {
 
 impl Repo {
     fn hold(&mut self, rel: String, held: Held) {
+        self.skipped.remove(&rel);
         self.dirs.add(&rel);
         if let Some(was) = self.held.insert(rel, held) {
             // Already counted; the add above counted it again.
@@ -653,6 +658,7 @@ async fn refresh_files(
     let root_canonical = root.canonicalize().map_err(|e| e.to_string())?;
 
     let mut fresh: Vec<(String, Held)> = Vec::with_capacity(paths.len());
+    let mut binary: Vec<String> = Vec::new();
     let mut unchanged = 0usize;
     for rel in &paths {
         // Containment, as everywhere a path arrives from outside.
@@ -671,6 +677,7 @@ async fn refresh_files(
 
         let Some((data_one, info)) = scan::read_file(&root, rel) else { continue };
         if data_one.flags & FLAG_BINARY != 0 && info.media.is_none() {
+            binary.push(rel.clone());
             continue;
         }
         fresh.push((
@@ -690,6 +697,7 @@ async fn refresh_files(
     let mut same = 0usize;
     {
         let mut repo = state.repo.locked();
+        repo.skipped.extend(binary);
         for (rel, h) in fresh {
             if let Some(was) = repo.held.get_mut(&rel) {
                 // A picture's payload is its size and nothing of its pixels,
@@ -847,6 +855,104 @@ async fn resync_watch(app: tauri::AppHandle, state: State<'_, AppState>) -> Resu
         app.emit("sanity://changed", batch).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Compare the folder with what is held, and catch up with what the watch
+/// did not report.
+///
+/// For a watch that went quiet without failing: the event stream can stop
+/// after the machine sleeps, the volume is remounted or the folder moves,
+/// and nothing says so. One listing of the folder and a stat per held file,
+/// in the backend, so nothing crosses to the window unless something
+/// differs. What differs arrives as an ordinary batch, and since the watch
+/// should have reported it, the watch is started afresh; `restart` starts it
+/// afresh regardless, for after a wake. Returns how many files differed.
+#[tauri::command]
+async fn check_watch(
+    restart: bool,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    if !scanjob::finished(&state) {
+        return Ok(0);
+    }
+    let (root, stamps, skipped) = {
+        let repo = state.repo.locked();
+        let stamps: Vec<(String, (u128, u64))> =
+            repo.held.iter().map(|(p, h)| (p.clone(), h.stamp)).collect();
+        (repo.root.clone(), stamps, repo.skipped.clone())
+    };
+    if root.as_os_str().is_empty() {
+        return Ok(0);
+    }
+    let listed = scan::list_files(&root).map_err(|e| e.to_string())?;
+    let (mut changed, mut removed) =
+        differences(&stamps, listed, &skipped, |p| scan::stamp_of(&root, p));
+    let found = changed.len() + removed.len();
+    if restart || found > 0 {
+        *state.watch.0.locked() = Some(start_watch(&app, &root)?);
+    }
+    if found > 0 {
+        if watch_log() {
+            eprintln!("check_watch: {} changed, {} removed that the watch did not report", changed.len(), removed.len());
+        }
+        changed.sort();
+        removed.sort();
+        app.emit("sanity://changed", watch::Batch { changed, removed, dirs: Vec::new() })
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(found as u32)
+}
+
+/// What differs between the files held, by their stamps, and the folder as
+/// listed now: held files whose stamp moved, and listed files neither held
+/// nor known to be skipped, as changed; held files no longer listed, as
+/// removed.
+fn differences(
+    held: &[(String, (u128, u64))],
+    listed: Vec<String>,
+    skipped: &HashSet<String>,
+    stamp_of: impl Fn(&str) -> Option<(u128, u64)>,
+) -> (Vec<String>, Vec<String>) {
+    let listed: HashSet<String> = listed.into_iter().collect();
+    let mut changed = Vec::new();
+    let mut removed = Vec::new();
+    for (path, was) in held {
+        // Listed is not enough to be there: git lists a tracked file that was
+        // deleted until the deletion is staged.
+        match listed.contains(path).then(|| stamp_of(path)).flatten() {
+            None => removed.push(path.clone()),
+            Some(now) if now != *was => changed.push(path.clone()),
+            Some(_) => {}
+        }
+    }
+    let known: HashSet<&str> = held.iter().map(|(p, _)| p.as_str()).collect();
+    changed.extend(listed.into_iter().filter(|p| {
+        !known.contains(p.as_str()) && !skipped.contains(p) && stamp_of(p).is_some()
+    }));
+    (changed, removed)
+}
+
+/// Check the watch whenever the machine wakes.
+///
+/// A sleep is time the wall clock counts and the monotonic clock does not, so
+/// a thread that wakes every half minute and finds the two apart by more
+/// than that knows. Once in thirty seconds is the whole cost.
+fn check_after_sleep(app: tauri::AppHandle) {
+    const TICK: std::time::Duration = std::time::Duration::from_secs(30);
+    let _ = std::thread::Builder::new().name("sanity-wake".into()).spawn(move || {
+        let mut wall = std::time::SystemTime::now();
+        let mut mono = std::time::Instant::now();
+        loop {
+            std::thread::sleep(TICK);
+            let slept = wall.elapsed().unwrap_or_default().saturating_sub(mono.elapsed());
+            wall = std::time::SystemTime::now();
+            mono = std::time::Instant::now();
+            if slept > TICK {
+                let _ = app.emit("sanity://woke", slept.as_secs());
+            }
+        }
+    });
 }
 
 /// Stop watching. Used when the window closes or a folder is closed without
@@ -1297,6 +1403,7 @@ pub fn run() {
             if let Ok(dir) = app.path().app_log_dir() {
                 log_panics(dir.join("panic.log"));
             }
+            check_after_sleep(app.handle().clone());
             app.manage(AppState {
                 repo: Mutex::new(Repo::default()),
                 watch: watch::WatchSlot::default(),
@@ -1320,6 +1427,7 @@ pub fn run() {
             refresh_files,
             stop_watch,
             resync_watch,
+            check_watch,
             drop_files,
             repo_index,
             stage_save,
@@ -1338,6 +1446,33 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_comparison_finds_what_the_watch_missed_and_nothing_else() {
+        let held = vec![
+            ("same.rs".to_string(), (1, 10)),
+            ("edited.rs".to_string(), (1, 10)),
+            ("gone.rs".to_string(), (1, 10)),
+        ];
+        // `deleted.rs` is still listed, as git lists a tracked file that was
+        // deleted, and `stale.rs` is listed and was never there at all.
+        let held = [held, vec![("deleted.rs".to_string(), (1, 10))]].concat();
+        let listed = ["same.rs", "edited.rs", "new.rs", "logo.bin", "deleted.rs", "stale.rs"]
+            .map(String::from)
+            .to_vec();
+        let skipped: HashSet<String> = ["logo.bin".to_string()].into();
+        let (changed, removed) = differences(&held, listed, &skipped, |p| match p {
+            "edited.rs" => Some((2, 12)),
+            "deleted.rs" | "stale.rs" => None,
+            _ => Some((1, 10)),
+        });
+        let mut changed = changed;
+        changed.sort();
+        let mut removed = removed;
+        removed.sort();
+        assert_eq!(changed, ["edited.rs", "new.rs"]);
+        assert_eq!(removed, ["deleted.rs", "gone.rs"]);
+    }
 
     #[test]
     fn only_an_object_id_is_taken_for_a_blob() {

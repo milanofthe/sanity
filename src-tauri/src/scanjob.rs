@@ -9,6 +9,7 @@
 //! empty panels. The reading carries on across the cores behind it, and the
 //! window collects what is done with `scan_next` and fills the panels in.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -42,6 +43,11 @@ struct Progress {
     read: usize,
     total: usize,
     done: bool,
+    /// Why the folder could not be watched once it was read. Carried here as
+    /// well as sent as an event: on a folder read in a few milliseconds the
+    /// event went out before the window was listening, and the status bar
+    /// said live over a watch that had never started.
+    watch_error: Option<String>,
 }
 
 /// List a folder and estimate every file in it, and start reading them.
@@ -71,10 +77,12 @@ pub async fn scan_start(
     let mut rows: Vec<FileInfo> = Vec::with_capacity(listed.len());
     let mut to_read: Vec<String> = Vec::with_capacity(listed.len());
     let mut binary = 0u32;
+    let mut skipped = HashSet::new();
     for (rel, est) in listed.iter().zip(scan::estimate_all(&root, &listed)) {
         let Some(est) = est else { continue };
         if est.binary {
             binary += 1;
+            skipped.insert(rel.clone());
             continue;
         }
         rows.push(estimated_row(rel, &est));
@@ -93,6 +101,7 @@ pub async fn scan_start(
         repo.root = root.clone();
         repo.placeholders = placeholders;
         repo.binary = binary;
+        repo.skipped = skipped;
         repo.ignored_total = ignored_total as u32;
         repo.ignored_shown = extra.len() as u32;
     }
@@ -150,6 +159,7 @@ fn thin(v: &[u16], n: usize) -> Vec<u16> {
 fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64) {
     let state = app.state::<AppState>();
     let held: Mutex<Vec<(String, Held)>> = Mutex::new(Vec::with_capacity(paths.len()));
+    let skipped: Mutex<Vec<String>> = Mutex::new(Vec::new());
     scan::read_each(
         &root,
         &paths,
@@ -185,7 +195,10 @@ fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64
                     p.ready.push((h.row.clone(), h.payload.clone()));
                     held.locked().push((rel.clone(), h));
                 }
-                None => p.dropped.push(rel.clone()),
+                None => {
+                    p.dropped.push(rel.clone());
+                    skipped.locked().push(rel.clone());
+                }
             }
         },
     );
@@ -194,7 +207,8 @@ fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64
     }
     {
         let mut repo = state.repo.locked();
-        for (rel, h) in held.into_inner().unwrap() {
+        repo.skipped.extend(skipped.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for (rel, h) in held.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner) {
             repo.hold(rel, h);
         }
     }
@@ -206,6 +220,7 @@ fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64
             *state.watch.0.locked() = Some(w);
         }
         Err(e) => {
+            state.scan.0.locked().watch_error = Some(e.clone());
             let _ = app.emit("sanity://watch-failed", e);
         }
     }
@@ -234,13 +249,15 @@ pub fn scan_next(state: State<'_, AppState>) -> Result<Response, String> {
         read: usize,
         total: usize,
         done: bool,
+        #[serde(rename = "watchError", skip_serializing_if = "Option::is_none")]
+        watch_error: Option<String>,
     }
-    let (ready, dropped, read, total, done) = {
+    let (ready, dropped, read, total, done, watch_error) = {
         let mut p = state.scan.0.locked();
-        (std::mem::take(&mut p.ready), std::mem::take(&mut p.dropped), p.read, p.total, p.done)
+        (std::mem::take(&mut p.ready), std::mem::take(&mut p.dropped), p.read, p.total, p.done, p.watch_error.clone())
     };
     let rows: Vec<FileInfo> = ready.iter().map(|(r, _)| r.clone()).collect();
-    let header = serde_json::to_vec(&Header { rows: &rows, dropped: &dropped, read, total, done })
+    let header = serde_json::to_vec(&Header { rows: &rows, dropped: &dropped, read, total, done, watch_error })
         .map_err(|e| e.to_string())?;
     let packed: Vec<(&str, &[u8])> =
         ready.iter().map(|(r, b)| (r.path.as_str(), b.as_slice())).collect();
