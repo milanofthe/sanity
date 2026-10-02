@@ -12,7 +12,7 @@ use serde::Serialize;
 use tauri::ipc::Response;
 use tauri::State;
 
-use crate::{file_info, pack_payloads, AppState, FileInfo};
+use crate::{file_info, pack_payloads, AppState, FileInfo, Locked};
 
 /// One commit as the ticker shows it.
 #[derive(Debug, Clone, Serialize)]
@@ -47,7 +47,7 @@ pub async fn history_log(
     limit: usize,
     state: State<'_, AppState>,
 ) -> Result<Vec<CommitInfo>, String> {
-    let root = state.repo.lock().map_err(|e| e.to_string())?.root.clone();
+    let root = state.repo.locked().root.clone();
     if root.as_os_str().is_empty() {
         return Ok(Vec::new());
     }
@@ -69,7 +69,7 @@ pub async fn history_step(
     to: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    let root = state.repo.lock().map_err(|e| e.to_string())?.root.clone();
+    let root = state.repo.locked().root.clone();
     if root.as_os_str().is_empty() {
         return Err("no folder open".into());
     }
@@ -92,7 +92,7 @@ fn contents(
 ) -> Result<Contents, String> {
     // What the cache does not have, read in one go.
     let missing: Vec<String> = {
-        let cache = state.history.held.lock().map_err(|e| e.to_string())?;
+        let cache = state.history.held.locked();
         changed
             .iter()
             .filter_map(|(_, s)| match s {
@@ -106,8 +106,8 @@ fn contents(
     let mut rows: Vec<FileInfo> = Vec::new();
     let mut payloads: Vec<(String, Vec<u8>)> = Vec::new();
     {
-        let mut cache = state.history.held.lock().map_err(|e| e.to_string())?;
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let mut cache = state.history.held.locked();
+        let repo = state.repo.locked();
         for (path, source) in changed {
             let got = match source {
                 // The working tree as the backend holds it, which the watcher

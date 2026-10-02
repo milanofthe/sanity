@@ -20,7 +20,7 @@ use tauri::{Emitter, Manager, State};
 
 use super::{
     encode, file_info, groups_from, ignored_info, pack_payloads, start_watch, width_percentile,
-    AppState, FileInfo, Held, MediaInfo, Repo, ScanResult, FLAG_BINARY, IGNORED_CAP,
+    AppState, FileInfo, Held, Locked, MediaInfo, Repo, ScanResult, FLAG_BINARY, IGNORED_CAP,
 };
 
 /// Which scan is the current one. A scan started while another still reads
@@ -86,9 +86,9 @@ pub async fn scan_start(
     // The folder is this one from now on. What is held fills in as the files
     // are read; the watch starts once they all are, since a change reported
     // before then would be compared against nothing.
-    *state.watch.0.lock().map_err(|e| e.to_string())? = None;
+    *state.watch.0.locked() = None;
     {
-        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let mut repo = state.repo.locked();
         *repo = Repo::default();
         repo.root = root.clone();
         repo.placeholders = placeholders;
@@ -97,7 +97,7 @@ pub async fn scan_start(
         repo.ignored_shown = extra.len() as u32;
     }
     let id = CURRENT.fetch_add(1, Ordering::SeqCst) + 1;
-    *state.scan.0.lock().map_err(|e| e.to_string())? = Progress {
+    *state.scan.0.locked() = Progress {
         scan: id,
         total: to_read.len(),
         ..Progress::default()
@@ -175,7 +175,7 @@ fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64
                     stamp: (info.mtime, info.byte_len),
                 })
             });
-            let Ok(mut p) = state.scan.0.lock() else { return };
+            let mut p = state.scan.0.locked();
             if p.scan != id {
                 return;
             }
@@ -183,7 +183,7 @@ fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64
             match kept {
                 Some(h) => {
                     p.ready.push((h.row.clone(), h.payload.clone()));
-                    held.lock().unwrap().push((rel.clone(), h));
+                    held.locked().push((rel.clone(), h));
                 }
                 None => p.dropped.push(rel.clone()),
             }
@@ -193,7 +193,7 @@ fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64
         return;
     }
     {
-        let Ok(mut repo) = state.repo.lock() else { return };
+        let mut repo = state.repo.locked();
         for (rel, h) in held.into_inner().unwrap() {
             repo.hold(rel, h);
         }
@@ -203,20 +203,16 @@ fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64
     // and not fatal.
     match start_watch(&app, &root) {
         Ok(w) => {
-            if let Ok(mut slot) = state.watch.0.lock() {
-                *slot = Some(w);
-            }
+            *state.watch.0.locked() = Some(w);
         }
         Err(e) => {
             let _ = app.emit("sanity://watch-failed", e);
         }
     }
-    let finished = state.scan.0.lock().map(|mut p| {
-        if p.scan == id {
-            p.done = true;
-        }
-    });
-    drop(finished);
+    let mut p = state.scan.0.locked();
+    if p.scan == id {
+        p.done = true;
+    }
 }
 
 /// What has been read since the last call, as a raw body:
@@ -234,7 +230,7 @@ pub fn scan_next(state: State<'_, AppState>) -> Result<Response, String> {
         done: bool,
     }
     let (ready, dropped, read, total, done) = {
-        let mut p = state.scan.0.lock().map_err(|e| e.to_string())?;
+        let mut p = state.scan.0.locked();
         (std::mem::take(&mut p.ready), std::mem::take(&mut p.dropped), p.read, p.total, p.done)
     };
     let rows: Vec<FileInfo> = ready.iter().map(|(r, _)| r.clone()).collect();

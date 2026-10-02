@@ -11,6 +11,8 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use crate::Locked;
+
 struct Open {
     path: PathBuf,
     file: File,
@@ -24,7 +26,7 @@ pub struct VideoSlot(Mutex<Option<Open>>);
 impl VideoSlot {
     /// Start a file at `path`, giving up any video still open.
     pub fn open(&self, path: PathBuf) -> Result<(), String> {
-        let mut slot = self.0.lock().map_err(|e| e.to_string())?;
+        let mut slot = self.0.locked();
         if let Some(old) = slot.take() {
             // Left behind by a window that went away mid-export.
             let _ = std::fs::remove_file(&old.path);
@@ -40,7 +42,7 @@ impl VideoSlot {
             return Err("a piece of video needs its offset".into());
         }
         let offset = u64::from_le_bytes(piece[..8].try_into().unwrap());
-        let mut slot = self.0.lock().map_err(|e| e.to_string())?;
+        let mut slot = self.0.locked();
         let open = slot.as_mut().ok_or("no video is being written")?;
         open.file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         open.file.write_all(&piece[8..]).map_err(|e| e.to_string())?;
@@ -51,7 +53,7 @@ impl VideoSlot {
     /// Finish the file and say where it is, or throw it away when the export
     /// was cancelled or failed: half a video is not a video.
     pub fn close(&self, keep: bool) -> Result<Option<String>, String> {
-        let mut slot = self.0.lock().map_err(|e| e.to_string())?;
+        let mut slot = self.0.locked();
         let Some(mut open) = slot.take() else { return Ok(None) };
         if !keep {
             drop(open.file);

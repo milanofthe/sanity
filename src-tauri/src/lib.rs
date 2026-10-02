@@ -5,8 +5,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use sanity_core::process;
-use std::sync::Mutex;
-
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 mod history;
 mod scanjob;
@@ -19,6 +18,25 @@ use sanity_core::wire::{encode, FileData, FLAG_BINARY};
 use serde::Serialize;
 use tauri::ipc::Response;
 use tauri::{Emitter, Manager, State};
+
+/// A lock that a panic somewhere else cannot take away.
+///
+/// A panic while a `Mutex` is held poisons it, and `lock` then fails for
+/// everybody after. On the folder that meant every save and every step
+/// through the history failing from then on, quietly, with the status bar
+/// still saying live, until the app was started again. What is behind these
+/// locks is a cache of what is on disk, and the watch reconciles it with the
+/// disk anyway, so carrying on with it is right where failing for good is
+/// not.
+pub(crate) trait Locked<T> {
+    fn locked(&self) -> MutexGuard<'_, T>;
+}
+
+impl<T> Locked<T> for Mutex<T> {
+    fn locked(&self) -> MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// One file in the scan result, as the layout needs it.
 #[derive(Debug, Clone, Serialize)]
@@ -410,7 +428,7 @@ async fn thumbs(
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
     let root = {
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let repo = state.repo.locked();
         repo.root.clone()
     };
     if root.as_os_str().is_empty() {
@@ -536,7 +554,7 @@ async fn file_bytes(
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
     let root = {
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let repo = state.repo.locked();
         repo.root.clone()
     };
     if root.as_os_str().is_empty() {
@@ -560,7 +578,7 @@ async fn pdf_page(
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
     let root = {
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let repo = state.repo.locked();
         repo.root.clone()
     };
     if root.as_os_str().is_empty() {
@@ -624,7 +642,7 @@ async fn refresh_files(
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
     let (root, stamps): (PathBuf, HashMap<String, (u128, u64)>) = {
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let repo = state.repo.locked();
         let stamps =
             paths.iter().filter_map(|p| repo.held.get(p).map(|h| (p.clone(), h.stamp))).collect();
         (repo.root.clone(), stamps)
@@ -671,7 +689,7 @@ async fn refresh_files(
     let mut out: Vec<(String, Vec<u8>)> = Vec::with_capacity(fresh.len());
     let mut same = 0usize;
     {
-        let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let mut repo = state.repo.locked();
         for (rel, h) in fresh {
             if let Some(was) = repo.held.get_mut(&rel) {
                 // A picture's payload is its size and nothing of its pixels,
@@ -708,7 +726,7 @@ async fn refresh_files(
 /// added without the four seconds a full re-read of a large project costs.
 #[tauri::command]
 async fn repo_index(state: State<'_, AppState>) -> Result<ScanResult, String> {
-    let repo = state.repo.lock().map_err(|e| e.to_string())?;
+    let repo = state.repo.locked();
     let files = repo.rows();
     if watch_log() {
         eprintln!("repo_index: {} files (relayout)", files.len());
@@ -765,7 +783,7 @@ fn start_watch(app: &tauri::AppHandle, root: &Path) -> Result<watch::Watch, Stri
 fn settle_batch(app: &tauri::AppHandle, batch: watch::Batch) -> watch::Batch {
     let state: State<'_, AppState> = app.state();
     let (root, mut removed, unknown, to_list) = {
-        let Ok(repo) = state.repo.lock() else { return watch::Batch::default() };
+        let repo = state.repo.locked();
         let mut removed = Vec::new();
         let mut to_list = batch.dirs.clone();
         for p in &batch.removed {
@@ -790,7 +808,7 @@ fn settle_batch(app: &tauri::AppHandle, batch: watch::Batch) -> watch::Batch {
     for dir in &to_list {
         // Listed without the lock: it is a git call.
         let listed = scan::list_files_under(&root, dir);
-        let Ok(repo) = state.repo.lock() else { return watch::Batch::default() };
+        let repo = state.repo.locked();
         let held = repo.held.keys().map(String::as_str).filter(|p| is_under(dir, p));
         let (present, gone) = reconcile(listed, held);
         changed.extend(present);
@@ -811,7 +829,7 @@ async fn stop_watch(state: State<'_, AppState>) -> Result<(), String> {
     if watch_log() {
         eprintln!("stop_watch");
     }
-    *state.watch.0.lock().map_err(|e| e.to_string())? = None;
+    *state.watch.0.locked() = None;
     Ok(())
 }
 
@@ -831,7 +849,7 @@ fn log_line(message: String) {
 /// back something that no longer exists.
 #[tauri::command]
 async fn drop_files(paths: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
-    let mut repo = state.repo.lock().map_err(|e| e.to_string())?;
+    let mut repo = state.repo.locked();
     for path in &paths {
         repo.forget(path);
         repo.placeholders.retain(|f| f.path != *path);
@@ -854,7 +872,7 @@ const TERMINAL_EDITORS: &[&str] = &["vi", "vim", "nvim", "nano", "emacs", "helix
 #[tauri::command]
 async fn open_in_editor(path: String, state: State<'_, AppState>) -> Result<String, String> {
     let root = {
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let repo = state.repo.locked();
         repo.root.clone()
     };
     // Same containment check as reading: a path from the frontend is not
@@ -1040,7 +1058,7 @@ async fn file_text(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let root = {
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let repo = state.repo.locked();
         repo.root.clone()
     };
     match at {
@@ -1087,7 +1105,7 @@ async fn find_text(
     state: State<'_, AppState>,
 ) -> Result<FoundResult, String> {
     let (root, paths) = {
-        let repo = state.repo.lock().map_err(|e| e.to_string())?;
+        let repo = state.repo.locked();
         (
             repo.root.clone(),
             repo.rows().into_iter().map(|f| f.path).collect::<Vec<_>>(),
@@ -1133,7 +1151,7 @@ fn stage_save(path: String, state: State<'_, AppState>) -> Result<(), String> {
     if path.is_empty() {
         return Err("stage_save needs a path".into());
     }
-    *state.save_to.lock().unwrap() = Some(PathBuf::from(path));
+    *state.save_to.locked() = Some(PathBuf::from(path));
     Ok(())
 }
 
@@ -1150,14 +1168,14 @@ fn save_png(request: tauri::ipc::Request<'_>, state: State<'_, AppState>) -> Res
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("save_png expects the image as a raw body".into());
     };
-    let path = state.save_to.lock().unwrap().take();
+    let path = state.save_to.locked().take();
     write_image(path, bytes)
 }
 
 /// Start writing a video to the path `stage_save` was given.
 #[tauri::command]
 fn video_open(state: State<'_, AppState>) -> Result<(), String> {
-    let path = state.save_to.lock().unwrap().take().ok_or("no file was chosen for the video")?;
+    let path = state.save_to.locked().take().ok_or("no file was chosen for the video")?;
     state.video.open(path)
 }
 
