@@ -334,6 +334,18 @@ export interface Layout {
   /** Laid out from the layout before it rather than from scratch; see
    *  `computeLayout`. */
   continued: boolean;
+  /** What a fresh layout of about these entries came to, for the next
+   *  relayout to be weighed against; see `computeLayout`. */
+  reference?: Reference;
+}
+
+/** The stats of a layout from scratch, and the project they were taken of. */
+export interface Reference {
+  stats: LayoutStats;
+  files: number;
+  lines: number;
+  /** Relayouts weighed against it since. */
+  uses: number;
 }
 
 function newDir(name: string, path: string, depth: number): DirNode {
@@ -1136,7 +1148,8 @@ const CONTINUE_STRETCH_SLACK = 3;
  * differences, and every flip moves everything after it.
  *
  * Carried over across many changes, a layout drifts from what a fresh one
- * would be, so every relayout is also computed fresh and the carried one is
+ * would be, so it is weighed against a fresh one (kept from one relayout to
+ * the next while the project is about the same; see REFERENCE_DRIFT) and
  * only kept while it is about as good: no panel that cannot be drawn or does
  * not hold its lines where the fresh one has none, and about the same fill,
  * bloat and stretch. Shape is mostly kept in hand before that, row by row,
@@ -1158,10 +1171,45 @@ export function computeLayout(
     const carried = layoutFrom(entries, viewport, before, true);
     if (drawable(layoutStats(carried))) return carried;
   }
-  const fresh = layoutFrom(entries, viewport, null);
-  if (!before) return fresh;
+  if (!before) return withReference(layoutFrom(entries, viewport, null));
   const carried = layoutFrom(entries, viewport, before);
-  return asGood(layoutStats(carried), layoutStats(fresh)) ? carried : fresh;
+  const carriedStats = layoutStats(carried);
+  // Weighed against the fresh layout the last one was weighed against, while
+  // the project is still about the one it was taken of. A fresh layout costs
+  // six times a carried one, 485 ms against 83 at 20,000 files, and a save
+  // that adds a line to one file moves its fill and bloat by nothing anyone
+  // could see; computing it for every save was most of what a save cost.
+  const ref = before.reference;
+  if (ref && stillReference(ref, carried) && asGood(carriedStats, ref.stats)) {
+    carried.reference = { ...ref, uses: ref.uses + 1 };
+    return carried;
+  }
+  const fresh = withReference(layoutFrom(entries, viewport, null));
+  if (!asGood(carriedStats, fresh.reference!.stats)) return fresh;
+  carried.reference = fresh.reference;
+  return carried;
+}
+
+/**
+ * How far the project may move from the one a reference was taken of, as a
+ * share of its files and of its lines, and how many relayouts it serves,
+ * before a fresh layout is computed again to weigh against. The count is a
+ * floor on how often drift that the shares miss is caught: many saves that
+ * each change little add up.
+ */
+const REFERENCE_DRIFT = 0.02;
+const REFERENCE_USES = 25;
+
+function stillReference(ref: Reference, l: Layout): boolean {
+  return ref.uses < REFERENCE_USES
+    && Math.abs(l.files.length - ref.files) <= Math.max(2, ref.files * REFERENCE_DRIFT)
+    && Math.abs(l.totalLines - ref.lines) <= ref.lines * REFERENCE_DRIFT;
+}
+
+/** A layout from scratch, carrying itself as the reference. */
+function withReference(l: Layout): Layout {
+  l.reference = { stats: layoutStats(l), files: l.files.length, lines: l.totalLines, uses: 0 };
+  return l;
 }
 
 /** Nothing on the canvas that cannot be drawn, overlaps or stands outside

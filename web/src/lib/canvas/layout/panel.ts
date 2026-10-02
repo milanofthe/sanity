@@ -274,9 +274,49 @@ export function numberColsFor(lineCount: number, availableCols: number): number 
   return availableCols >= digits + 1 + LINE_NUMBER_MIN_COLS ? digits + 1 : 0;
 }
 
+/**
+ * Results of `fillSlot` and `panelGeometry` by the line widths they were
+ * worked out from, then by the rest of their arguments.
+ *
+ * Both are pure, and a relayout asks them about every file again: on a save
+ * that changes one file's length in a project of 20,000, fewer than two
+ * percent of the panels move, and these two were a third of the 600 ms the
+ * layout took. A file's widths are one array from one decode to the next (see
+ * `CanvasApp.open`), so a file that did not change is found again; one that
+ * did comes with a new array and is worked out afresh. Frozen, since the
+ * same object is handed to every layout that asks.
+ */
+const slotMemo = new WeakMap<ArrayLike<number>, Map<string, SlotFit>>();
+const shapeMemo = new WeakMap<ArrayLike<number>, Map<number, PanelGeometry>>();
+/** Entries kept per file; a panel being resized by hand can ask for a new
+ *  size every frame. */
+const MEMO_PER_FILE = 16;
+
+function remember<K, V>(memo: WeakMap<ArrayLike<number>, Map<K, V>>, of: ArrayLike<number>, key: K, make: () => V): V {
+  let byKey = memo.get(of);
+  if (!byKey) {
+    byKey = new Map();
+    memo.set(of, byKey);
+  }
+  const held = byKey.get(key);
+  if (held !== undefined) return held;
+  const made = Object.freeze(make());
+  if (byKey.size >= MEMO_PER_FILE) byKey.clear();
+  byKey.set(key, made);
+  return made;
+}
+
 export function fillSlot(
   lineCols: ArrayLike<number>, clipCols: number, slotW: number, slotH: number,
   fullCols = 0,
+): SlotFit {
+  return remember(slotMemo, lineCols, `${clipCols},${slotW},${slotH},${fullCols}`,
+    () => fillSlotNow(lineCols, clipCols, slotW, slotH, fullCols));
+}
+
+function fillSlotNow(
+  lineCols: ArrayLike<number>, clipCols: number, slotW: number, slotH: number,
+  fullCols: number,
 ): SlotFit {
   const innerW = slotW - 2 * metrics.panelPadX;
   const innerH = slotH - metrics.titleHeight - 2 * metrics.panelPadY;
@@ -406,6 +446,12 @@ export function fillSlot(
 }
 
 export function panelGeometry(
+  lineCols: ArrayLike<number>, maxCols: number,
+): PanelGeometry {
+  return remember(shapeMemo, lineCols, maxCols, () => panelGeometryNow(lineCols, maxCols));
+}
+
+function panelGeometryNow(
   lineCols: ArrayLike<number>, maxCols: number,
 ): PanelGeometry {
   const cols = Math.min(
