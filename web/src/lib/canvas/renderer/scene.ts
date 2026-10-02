@@ -307,15 +307,20 @@ const HIT_MIX_CURRENT = 0.55;
 const FLASH_WASH = 0.55;
 
 /** On-screen floor for a stub panel, in CSS pixels. */
-/** CSS pixels of picture width below which a picture is not fetched at all.
+/** CSS pixels of picture width below which an image is not fetched at all.
  *
  *  Only what would be a dot. It was 24, from when a small picture meant a
- *  decode of its source; but both sources hold a thumbnail of every picture
- *  by the time it is on screen (see sources/thumbs.ts), so a small one is a
- *  128 pixel decode, and leaving it out left a project's pictures as empty
- *  sheets at the overview zoom until somebody zoomed in. Four pixels still
- *  shows the colour of a plot. */
+ *  decode of its source; but both sources hold a thumbnail of every image by
+ *  the time it is on screen (see sources/thumbs.ts), so a small one is a 128
+ *  pixel decode, and leaving it out left a project's pictures as empty sheets
+ *  at the overview zoom until somebody zoomed in. Four pixels still shows the
+ *  colour of a plot. */
 const MEDIA_MIN_PX = 4;
+
+/** The same for a document's page, which has no thumbnail: each one is
+ *  rasterised to order, and at 4 pixels the overview of a project with one
+ *  expanded slide deck asked for 94 of them. */
+const PAGE_MIN_PX = 24;
 
 /**
  * How much of a line box a token bar is worth, as ink.
@@ -2183,8 +2188,9 @@ export class Scene {
       pxW = Math.round(rx + (x + w) * sx) - Math.round(rx + x * sx);
       pxH = Math.round(ry + y * sy) - Math.round(ry + (y + h) * sy);
     }
+    const floor = m.kind === 'image' ? MEDIA_MIN_PX : PAGE_MIN_PX;
     const held =
-      (w * zoom < MEDIA_MIN_PX
+      (w * zoom < floor
         ? this.media?.have(key)
         : still && pxW > 0 && pxH > 0
           ? this.media?.wantExact(key, pxW, pxH, sourceW)

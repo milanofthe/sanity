@@ -32,13 +32,16 @@ const layout = await page.evaluate(async (DOC) => {
     ...src,
     entries: src.entries.map((e) => (e.media?.kind === 'document' ? { ...e, media: { ...e.media, expanded: true } } : e)),
   });
-  // Every page asked for, recorded on its way through.
+  // Every page asked for, recorded on its way through. Read with the app's
+  // own parser: the key's format is the app's to change, and when it did,
+  // this saw no pages asked for at all.
+  const { parseMediaKey } = await import('/src/lib/canvas/mediakey.ts');
   window.__asks = [];
   const media = app.scene.media;
   const fetch = media.fetchBytes;
   media.fetchBytes = (key, level) => {
-    const m = /^(.*)#page=(\d+)$/.exec(key);
-    if (m) window.__asks.push({ page: Number(m[2]), level });
+    const { page } = parseMediaKey(key);
+    if (page !== undefined) window.__asks.push({ page, level });
     return fetch(key, level);
   };
   const n = app.layout.files.find((f) => f.path === DOC);
