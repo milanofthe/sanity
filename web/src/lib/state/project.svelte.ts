@@ -111,6 +111,12 @@ class ProjectState {
 	 *  difference is invisible on the canvas: without this the panels simply
 	 *  stop flashing and nothing says why. Cleared when a folder is opened. */
 	watchError = $state<string | null>(null);
+	/** A change arrived that could not be applied, so what is on screen may
+	 *  be behind the folder until it has been compared again. */
+	watchBehind = $state(false);
+	/** The folder is being compared with what is on screen; see
+	 *  `resyncWatch`. */
+	catchingUp = $state(false);
 	/** Files with a change on screen right now. */
 	changed = $state(0);
 	/** When the last batch of changes arrived, as a performance timestamp, or

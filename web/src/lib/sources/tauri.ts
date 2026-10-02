@@ -266,6 +266,7 @@ const resized = (a: ScanFile | undefined, b: ScanFile): boolean =>
 export async function fillRepo(app: CanvasApp): Promise<boolean> {
   await watchFailures();
   project.watchError = null;
+  project.watchBehind = false;
   const mine = ++filling;
   const t0 = performance.now();
   let layouts = 0;
@@ -459,7 +460,7 @@ export function loadedRoot(): string | null {
 async function readFresh(paths: string[]): Promise<Map<string, FileData>> {
   const out = new Map<string, FileData>();
   if (paths.length === 0) return out;
-  const blob = await invoke<ArrayBuffer>('refresh_files', { paths });
+  const blob = await answered(invoke<ArrayBuffer>('refresh_files', { paths }), 'refresh_files');
   for (const [path, buf] of unpack(blob)) {
     payloads.set(path, buf);
     const data = decodeFile(buf);
@@ -478,7 +479,7 @@ async function forget(paths: string[]): Promise<void> {
     decoded.delete(path);
     text.invalidate(path);
   }
-  await invoke('drop_files', { paths });
+  await answered(invoke('drop_files', { paths }), 'drop_files');
 }
 
 /**
@@ -488,7 +489,7 @@ async function forget(paths: string[]): Promise<void> {
  * file costs one read instead of the four seconds a large project takes.
  */
 async function restructure(app: CanvasApp): Promise<void> {
-  scan = await invoke<ScanResult>('repo_index');
+  scan = await answered(invoke<ScanResult>('repo_index'), 'repo_index');
   project.refreshGroups(scan.groups);
   openLoaded(app, true);
 }
@@ -542,7 +543,7 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
         // is left alone. Coming back to the present is one step from the
         // commit to the working tree as it then is, this batch included.
         if (inHistory()) {
-          scan = await invoke<ScanResult>('repo_index');
+          scan = await answered(invoke<ScanResult>('repo_index'), 'repo_index');
           project.refreshGroups(scan.groups);
           return;
         }
@@ -553,7 +554,7 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
         // rather than in the payload: without it the picture keeps its key
         // and is drawn as it was. See canvas/mediakey.ts.
         const pictures = new Set(scan?.files.filter((f) => f.media).map((f) => f.path));
-        if (!structural && batch.changed.some((p) => pictures.has(p))) {
+        if (!structural && [...fresh.keys()].some((p) => pictures.has(p))) {
           await restructure(app);
           structural = true;
         }
@@ -563,21 +564,89 @@ export async function watchRepo(app: CanvasApp): Promise<UnlistenFn> {
         // refreshed would report one when five differ.
         project.changed = app.changedCount();
         project.sawChanges(project.changed);
+        project.watchBehind = false;
         uiLog(
           `batch: ${batch.changed.length} changed, ${batch.removed.length} removed` +
             `${structural ? ' (relayout)' : ' (in place)'} · ${project.changed} marked, ` +
             `${app.recentCount()} just changed`,
         );
       })
-      // A failed batch must not stop the ones after it, and the next save
-      // re-reads the file anyway.
-      .catch((e) => uiLog(`batch failed: ${e}`));
+      // A failed batch must not stop the ones after it, and what it carried
+      // is not lost: the folder is compared again, which brings it back.
+      .catch((e) => {
+        uiLog(`batch failed: ${e}`);
+        project.watchBehind = true;
+        void resyncWatch(false);
+      });
   });
 
   return unlisten;
 }
 
-/** Stop watching. */
+/**
+ * Longest a call on the way of a save or a history step may take.
+ *
+ * Those calls are made one after another, so one that never answers holds
+ * up every one after it. And one can fail to answer: a command that panics
+ * in the backend never sends its reply, and the window then waited on it for
+ * good, the status bar still saying live while nothing changed on screen and
+ * the history ticker did nothing. Far longer than the slowest real call,
+ * which is a checkout re-reading thousands of files in a few seconds.
+ */
+const ANSWER_MS = 60_000;
+
+/** `call`, or an error once it has taken `ANSWER_MS`; see there. */
+function answered<T>(call: Promise<T>, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} did not answer`)), ANSWER_MS);
+    call.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+/** When the folder was last compared again without being asked to, so a
+ *  batch that fails every time does not set off one comparison after the
+ *  other. */
+let lastAutoResync = -Infinity;
+const AUTO_RESYNC_MS = 30_000;
+
+/**
+ * Compare the whole folder with what is on screen, and watch it afresh.
+ *
+ * After a change that could not be applied, on its own; and whenever the
+ * live indicator is clicked, which is the way back for anything this did not
+ * catch. What differs arrives as an ordinary batch. `asked` is the click,
+ * which goes ahead however recently the last one was.
+ */
+export async function resyncWatch(asked = true): Promise<void> {
+  if (!inTauri() || project.catchingUp) return;
+  const now = performance.now();
+  if (!asked && now - lastAutoResync < AUTO_RESYNC_MS) return;
+  lastAutoResync = now;
+  project.catchingUp = true;
+  try {
+    await answered(invoke('resync_watch'), 'resync_watch');
+    project.watching = true;
+    project.watchError = null;
+    // Whatever differed is on its way as a batch, which says so again if it
+    // cannot be applied either.
+    project.watchBehind = false;
+  } catch (e) {
+    uiLog(`resync failed: ${e}`);
+    project.watchBehind = true;
+  } finally {
+    project.catchingUp = false;
+  }
+}
+
 /**
  * Write a rendered PNG, asking where through the native dialog.
  *
@@ -603,6 +672,7 @@ export async function savePng(bytes: Uint8Array, name: string): Promise<string |
   return invoke<string>('save_png', new Uint8Array(bytes));
 }
 
+/** Stop watching. */
 export async function stopWatching(): Promise<void> {
   if (!inTauri()) return;
   project.watching = false;
@@ -683,7 +753,7 @@ async function stepTo(app: CanvasApp, index: number, fit = true): Promise<void> 
   if (!scan) return;
   const from = history.at >= 0 ? history.commits[history.at].sha : null;
   const to = index >= 0 ? history.commits[index].sha : null;
-  const header = readStep(await invoke<ArrayBuffer>('history_step', { from, to }));
+  const header = readStep(await answered(invoke<ArrayBuffer>('history_step', { from, to }), 'history_step'));
   // Into the history from the working tree as it was scanned.
   const rows = (shownRows ??= new Map(scan.files.map((f) => [f.path, f])));
 

@@ -21,7 +21,7 @@
 	} from '$lib/sources/demo';
 	import {
 		fillRepo, historyGo, inTauri, loadHistory, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
-		startup, stopWatching, watchRepo,
+		resyncWatch, startup, stopWatching, watchRepo,
 	} from '$lib/sources/tauri';
 	import type { UnlistenFn } from '@tauri-apps/api/event';
 	import { bandsFromQuery, setBands } from '$lib/canvas/lod';
@@ -434,7 +434,7 @@
 	onopenfile={openFile}
 	oncontextmenu={(at) => (ctx = at)}
 />
-<StatusBar {stats} {hover} {error} {notice} {contextLost} />
+<StatusBar {stats} {hover} {error} {notice} {contextLost} onresync={() => void resyncWatch()} />
 
 <ContextMenu x={ctx?.x ?? 0} y={ctx?.y ?? 0} open={ctx !== null} onclose={() => (ctx = null)}>
 	{#if ctx?.path}

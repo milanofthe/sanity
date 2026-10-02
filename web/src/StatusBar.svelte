@@ -11,7 +11,8 @@
 		hover = null,
 		error = null,
 		notice = null,
-		contextLost = false
+		contextLost = false,
+		onresync
 	}: {
 		stats: CanvasStats | null;
 		/** Path under the pointer, or null. */
@@ -24,6 +25,8 @@
 		 *  it comes back, and an empty canvas with no explanation reads as a
 		 *  bug in the layout rather than as a driver event. */
 		contextLost?: boolean;
+		/** Compare the folder with what is shown, from the live indicator. */
+		onresync?: () => void;
 	} = $props();
 
 	/** Longest path shown before the directory is cut from the front. */
@@ -120,17 +123,36 @@
 			<span class="dot">·</span>
 			{n(stats.visibleFiles)} visible
 		</span>
-		{#if project.watching}
-			<span class="group" title="Watching the folder for saves">
-				<span class="pip" class:hot={justChanged}></span>
-				live
-				{#if project.changed > 0}
+		{#if project.watching || project.watchError}
+			<!-- A button as well as an indicator: clicking it compares the
+			     folder with what is shown and watches it afresh, which is the
+			     way back from anything that left the view behind. -->
+			<button
+				class="group live"
+				class:err={project.watchError !== null || project.watchBehind}
+				disabled={project.catchingUp}
+				title={project.watchError
+					? `${project.watchError}. Click to try again`
+					: project.watchBehind
+						? 'A change could not be shown. Click to compare the folder again'
+						: 'Watching the folder for saves. Click to compare it again'}
+				onclick={() => onresync?.()}
+			>
+				<span class="pip" class:hot={justChanged && !project.watchBehind}></span>
+				{#if project.catchingUp}
+					catching up
+				{:else if project.watchError}
+					not live: {project.watchError}
+				{:else if project.watchBehind}
+					behind
+				{:else}
+					live
+				{/if}
+				{#if project.watching && project.changed > 0}
 					<span class="dot">·</span>
 					<b>{n(project.changed)}</b> changed
 				{/if}
-			</span>
-		{:else if project.watchError}
-			<span class="group err" title={project.watchError}>not live: {project.watchError}</span>
+			</button>
 		{/if}
 		<span class="spacer"></span>
 		{#if contextLost}
@@ -230,6 +252,24 @@
 		height: var(--sp-2);
 		border-radius: 50%;
 		border: var(--sep-w) solid var(--text-faint);
+	}
+	/* The live indicator is a button that looks like the rest of the line. */
+	.live {
+		font: inherit;
+		color: inherit;
+		background: none;
+		border: 0;
+		padding: 0;
+		cursor: pointer;
+	}
+	.live:hover:not(:disabled) {
+		color: var(--text);
+	}
+	.live:disabled {
+		cursor: default;
+	}
+	.err .pip {
+		border-color: var(--error);
 	}
 	.pip.hot {
 		background: var(--accent);
