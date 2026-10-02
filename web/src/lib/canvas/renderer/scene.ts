@@ -108,6 +108,9 @@ export interface SceneFile {
   /** Its overview has been written. Until then the panel is drawn without
    *  one: the base is rasterised on a worker while a project opens. */
   ready: boolean;
+  /** Seconds its arrival has waited for the detail it is to be shown with;
+   *  see `ARRIVAL_WAIT_S`. */
+  waited: number;
 }
 
 /**
@@ -305,6 +308,48 @@ const HIT_MIX_CURRENT = 0.55;
  * panels, and then get out of the way.
  */
 const FLASH_WASH = 0.55;
+
+/**
+ * Longest a panel's arrival waits for what it is to be shown with: the
+ * overview at the detail its size on screen asks for, or its picture.
+ *
+ * A panel used to arrive as soon as its coarsest overview was written, which
+ * at the opening zoom is a few smudges, and sharpen in place over the next
+ * second, its picture popping in after it: every frame there, filled in
+ * afterwards. Waiting for the detail shows each panel once, as it is. Capped,
+ * so a detail that is slow to come costs a moment and not the panel.
+ */
+const ARRIVAL_WAIT_S = 0.8;
+
+/**
+ * Least space between a picture and the edge of its panel, in CSS pixels.
+ *
+ * The padding is in world units and the panel's edge is a hairline in screen
+ * pixels, so out at the overview the padding came to a fraction of a pixel
+ * (and below the picture it is none at all) and the picture reached the
+ * edge: drawn after the directories, it painted over the directory's frame
+ * wherever a panel sat against one, and the panel's own frame disappeared
+ * into it. Two pixels keep the hairline and a pixel of air.
+ */
+const MEDIA_INSET_PX = 2;
+
+/** Where a picture may go inside its panel at this zoom: under the title,
+ *  inside the padding, and no closer to the edge than `MEDIA_INSET_PX`
+ *  where the panel has room for that. */
+export function mediaArea(n: FileNode, zoom: number): { left: number; top: number; availW: number; availH: number } {
+  // Never more than a sixth of the panel, or a panel a few pixels tall at
+  // the overview is all inset and its picture is not drawn at all.
+  const inset = Math.min(MEDIA_INSET_PX / zoom, Math.min(n.w, n.h) / 6);
+  const padX = Math.max(metrics.panelPadX, inset);
+  const padBottom = Math.max(metrics.panelPadY, inset);
+  const top = Math.max(metrics.titleHeight + metrics.panelPadY, inset);
+  return {
+    left: n.x + padX,
+    top: n.y + top,
+    availW: n.w - 2 * padX,
+    availH: n.h - top - padBottom,
+  };
+}
 
 /** On-screen floor for a stub panel, in CSS pixels. */
 /** CSS pixels of picture width below which an image is not fetched at all.
@@ -767,6 +812,16 @@ export class Scene {
    * was the largest part of what a relayout looked like.
    */
   private dirAnims = new Map<string, PanelAnim>();
+  /** Directories that have shown a panel, by path. A directory is drawn only
+   *  once the first panel in it is, and arrives with that panel: the
+   *  project used to open as a set of empty boxes that filled in. */
+  private shownDirs = new Set<string>();
+  /** The last frame's arrival, for scripts/arrival-check.mjs: panels that
+   *  arrived in it, how many of those without the detail they are to be
+   *  shown with, and how many directories were drawn. */
+  arrival = { shown: 0, lacking: 0, dirs: 0 };
+  /** Panels whose directories have been told they are showing. */
+  private announced = new WeakSet<SceneFile>();
   /** True while at least one panel is still animating, so the frame loop can
    *  tell whether the picture is still changing on its own. */
   animating = false;
@@ -1114,6 +1169,7 @@ export class Scene {
         change: null,
         drawnAt: -1,
         ready: true,
+        waited: 0,
       });
       return;
     }
@@ -1134,6 +1190,7 @@ export class Scene {
       sig: signatures(data.lineCount, data.lineCols, data.spanStart, data.spans),
       change: null,
       drawnAt: -1,
+      waited: 0,
     };
     this.add(node.path, f);
     if (pool) {
@@ -1418,9 +1475,14 @@ export class Scene {
     b: InstanceBuffer, x: number, y: number, w: number, h: number,
     fill: number, fillA: number, border: number, borderPx: number,
   ): void {
+    const tf = this.tf;
+    // Something faded all the way out is not drawn at all. Its border would
+    // otherwise be drawn in the canvas colour below, which is not what is
+    // behind a panel inside a directory: every panel waiting to arrive showed
+    // as a dark outline on its directory's fill.
+    if (tf.alpha < 1 / 255) return;
     const o = b.alloc();
     const d = b.data;
-    const tf = this.tf;
     d[o] = x * tf.scale + tf.bx;
     d[o + 1] = y * tf.scale + tf.by;
     d[o + 2] = w * tf.scale;
@@ -1666,8 +1728,12 @@ export class Scene {
       }
     }
     dirIdx.sort((a, b) => a - b);
+    const arrival = { shown: 0, lacking: 0, dirs: 0 };
+    this.arrival = arrival;
     for (const i of dirIdx) {
       const d = dirs[i];
+      if (!this.shownDirs.has(d.path)) continue;
+      arrival.dirs++;
       this.tf = IDENTITY;
       const anim = this.dirAnims.get(d.path);
       if (anim) {
@@ -1715,7 +1781,20 @@ export class Scene {
       if (f.anim) {
         // A panel settling in waits, invisible, while the arrival is held;
         // see `holdAppear`. A relayout's slide does not.
-        f.anim.t += this.holdAppear && f.anim.a0 === 0 && !f.anim.out ? 0 : dt;
+        // And one arriving after that waits, invisible, for the detail it is
+        // to be shown with; see `ARRIVAL_WAIT_S`.
+        const arriving = f.anim.a0 === 0 && !f.anim.out;
+        const lacking = arriving && f.anim.t <= f.anim.delay && f.waited < ARRIVAL_WAIT_S
+          && this.lacksDetail(f, overviewFade, pxPerLine, cam.zoom);
+        if (this.holdAppear && arriving) {
+          // Held as a whole; see above.
+        } else if (lacking) {
+          // Its turn in the wave comes as it would, and then waits there.
+          if (f.anim.t >= f.anim.delay) f.waited += dt;
+          f.anim.t = Math.min(f.anim.t + dt, f.anim.delay);
+        } else {
+          f.anim.t += dt;
+        }
         if (finished(f.anim)) {
           f.anim = null;
           this.animated.delete(f);
@@ -1729,6 +1808,13 @@ export class Scene {
       // Marked before culling: advancing the animation twice in one frame,
       // once from each list, would run it at double speed.
       f.drawnAt = frame;
+      if (this.tf.alpha >= 1 / 255 && !this.announced.has(f)) {
+        this.announce(f);
+        if (f.anim && f.anim.a0 === 0 && !f.anim.out) {
+          arrival.shown++;
+          if (this.lacksDetail(f, overviewFade, pxPerLine, cam.zoom)) arrival.lacking++;
+        }
+      }
 
       // The rect as it will actually be drawn.
       const drawn = this.tf === IDENTITY ? n : applyTo(this.tf, n);
@@ -2091,13 +2177,12 @@ export class Scene {
     const n = f.node;
     const m = n.media;
     if (!m) return;
-    const availW = n.w - 2 * metrics.panelPadX;
-    const availH = n.h - metrics.titleHeight - 2 * metrics.panelPadY;
+    const { left, top, availW, availH } = mediaArea(n, zoom);
     if (availW <= 0 || availH <= 0 || availH * zoom < 2) return;
     const mw = m.w > 0 ? m.w : 595;
     const mh = m.h > 0 ? m.h : 842;
     if (m.kind === 'document' && m.expanded && m.pages > 1) {
-      this.pushPages(n, m, zoom, availW, availH, mw, mh);
+      this.pushPages(n, m, zoom, left, top, availW, availH, mw, mh);
       return;
     }
     // Contained, so the proportion is the picture's and the panel keeps its
@@ -2105,8 +2190,8 @@ export class Scene {
     const scale = Math.min(availW / mw, availH / mh);
     const w = mw * scale;
     const h = mh * scale;
-    const x = n.x + metrics.panelPadX + (availW - w) / 2;
-    const y = n.y + metrics.titleHeight + metrics.panelPadY + (availH - h) / 2;
+    const x = left + (availW - w) / 2;
+    const y = top + (availH - h) / 2;
 
     this.pushPicture(mediaKey(n.path, m.version), n.path, m, x, y, w, h, mw, mh, zoom);
   }
@@ -2122,15 +2207,16 @@ export class Scene {
    * of paper, not four hundred of each.
    */
   private pushPages(
-    n: FileNode, m: MediaSize, zoom: number, availW: number, availH: number, pw: number, ph: number,
+    n: FileNode, m: MediaSize, zoom: number,
+    left: number, top: number, availW: number, availH: number, pw: number, ph: number,
   ): void {
     const { cols, rows } = pageGrid(m.pages, pw / ph);
     const gap = PAGE_GAP * pw;
     const gridW = cols * pw + (cols - 1) * gap;
     const gridH = rows * ph + (rows - 1) * gap;
     const s = Math.min(availW / gridW, availH / gridH);
-    const x0 = n.x + metrics.panelPadX + (availW - gridW * s) / 2;
-    const y0 = n.y + metrics.titleHeight + metrics.panelPadY + (availH - gridH * s) / 2;
+    const x0 = left + (availW - gridW * s) / 2;
+    const y0 = top + (availH - gridH * s) / 2;
     const stepX = (pw + gap) * s;
     const stepY = (ph + gap) * s;
     const [vx0, vy0, vx1, vy1] = this.viewRect;
@@ -2421,6 +2507,51 @@ export class Scene {
    * pixels, on whichever axis gives out first. Vertically a texel row stands
    * for one or more screen rows, horizontally 128 texels span a column.
    */
+  /**
+   * A panel has started to show: every directory it is in that has not shown
+   * yet arrives now, fading in alongside it, or at once when the panel is not
+   * arriving but simply there.
+   */
+  private announce(f: SceneFile): void {
+    this.announced.add(f);
+    const path = f.node.path;
+    const arriving = f.anim !== null && f.anim.a0 === 0 && !f.anim.out;
+    for (let cut = path.lastIndexOf('/'); ; cut = path.lastIndexOf('/', cut - 1)) {
+      const dir = cut < 0 ? '' : path.slice(0, cut);
+      if (this.dirIndex.has(dir) && !this.shownDirs.has(dir)) {
+        this.shownDirs.add(dir);
+        if (arriving) {
+          this.dirAnims.set(dir, { s0: 1, dx0: 0, dy0: 0, a0: 0, delay: 0, dur: timing.appear, t: 0 });
+        }
+      }
+      if (cut <= 0) break;
+    }
+  }
+
+  /**
+   * Whether a panel is not yet what it will look like at this zoom: its
+   * overview coarser than its size on screen asks for, or its picture not
+   * decoded. Asked of a panel about to arrive; see `ARRIVAL_WAIT_S`. The
+   * frame it is asked in also asks for what is missing, since the panel is
+   * still drawn, invisibly, while it waits.
+   */
+  private lacksDetail(f: SceneFile, overviewFade: number, pxPerLine: number, zoom: number): boolean {
+    const n = f.node;
+    if (n.stub) return false;
+    const m = n.media;
+    if (m) {
+      // An expanded document is many pictures, asked for page by page as
+      // they come into view; the panel does not wait for all of them.
+      if (m.kind === 'document' && m.expanded && m.pages > 1) return false;
+      // Nor for a picture too small to be fetched at all.
+      if (n.w * zoom < (m.kind === 'image' ? MEDIA_MIN_PX : PAGE_MIN_PX)) return false;
+      return this.media !== null && this.media.have(mediaKey(n.path, m.version)) === null;
+    }
+    if (overviewFade <= 0.004) return false;
+    const need = this.levelNeeded(f, pxPerLine, zoom, f.rows[f.data.lineCount]);
+    return need < BASE_LEVEL && (!f.detail || f.detail.level > need);
+  }
+
   private levelNeeded(f: SceneFile, pxPerLine: number, zoom: number, totalRows: number): number {
     const scale = this.dpr * this.tf.scale;
     const rowPx = pxPerLine * scale;
@@ -3333,6 +3464,7 @@ export class Scene {
     for (const i of this.dirGrid.near(vx0, vy0, vx1, vy1, this.nearDirs)) {
       const d = dirs[i];
       if (d.w * zoom < MIN_LABELLED.w || d.h * zoom < MIN_LABELLED.h) continue;
+      if (!this.shownDirs.has(d.path)) continue;
       const anim = this.dirAnims.get(d.path);
       const r = anim ? applyTo(transformFor(d, anim), d) : d;
       list.push({

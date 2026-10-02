@@ -63,17 +63,16 @@ const asksAt = async (fit) => {
     else {
       // The first slide filling the view, where `pushPages` puts it.
       const { pageGrid, PAGE_GAP } = await import('/src/lib/canvas/layout/tree.ts');
-      const { metrics } = await import('/src/lib/metrics.ts');
+      const { mediaArea } = await import('/src/lib/canvas/renderer/scene.ts');
       const pw = n.media.w;
       const ph = n.media.h;
       const { cols, rows } = pageGrid(n.media.pages, pw / ph);
-      const availW = n.w - 2 * metrics.panelPadX;
-      const availH = n.h - metrics.titleHeight - 2 * metrics.panelPadY;
+      const { left, top, availW, availH } = mediaArea(n, app.cam.zoom);
       const gridW = cols * pw + (cols - 1) * PAGE_GAP * pw;
       const gridH = rows * ph + (rows - 1) * PAGE_GAP * pw;
       const k = Math.min(availW / gridW, availH / gridH);
-      const x0 = n.x + metrics.panelPadX + (availW - gridW * k) / 2;
-      const y0 = n.y + metrics.titleHeight + metrics.panelPadY + (availH - gridH * k) / 2;
+      const x0 = left + (availW - gridW * k) / 2;
+      const y0 = top + (availH - gridH * k) / 2;
       app.cam.fit(x0, y0, x0 + pw * k, y0 + ph * k, 0.02);
     }
     for (let i = 0; i < 30; i++) {
@@ -83,17 +82,16 @@ const asksAt = async (fit) => {
     await app.scene.media.settled();
     // Which pages are on screen, from the same geometry `pushPages` uses.
     const { pageGrid, PAGE_GAP } = await import('/src/lib/canvas/layout/tree.ts');
-    const { metrics } = await import('/src/lib/metrics.ts');
+    const { mediaArea } = await import('/src/lib/canvas/renderer/scene.ts');
     const pw = n.media.w;
     const ph = n.media.h;
     const { cols, rows } = pageGrid(n.media.pages, pw / ph);
-    const availW = n.w - 2 * metrics.panelPadX;
-    const availH = n.h - metrics.titleHeight - 2 * metrics.panelPadY;
+    const { left, top, availW, availH } = mediaArea(n, app.cam.zoom);
     const k = Math.min(availW / (cols * pw + (cols - 1) * PAGE_GAP * pw), availH / (rows * ph + (rows - 1) * PAGE_GAP * pw));
     const gw = cols * pw + (cols - 1) * PAGE_GAP * pw;
     const gh = rows * ph + (rows - 1) * PAGE_GAP * pw;
-    const x0 = n.x + metrics.panelPadX + (availW - gw * k) / 2;
-    const y0 = n.y + metrics.titleHeight + metrics.panelPadY + (availH - gh * k) / 2;
+    const x0 = left + (availW - gw * k) / 2;
+    const y0 = top + (availH - gh * k) / 2;
     const [vx0, vy0, vx1, vy1] = app.cam.visibleRect(0);
     window.__visible = [];
     for (let p = 0; p < n.media.pages; p++) {
