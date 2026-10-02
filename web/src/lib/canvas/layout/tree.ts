@@ -337,6 +337,13 @@ export interface Layout {
   /** What a fresh layout of about these entries came to, for the next
    *  relayout to be weighed against; see `computeLayout`. */
   reference?: Reference;
+  /** Its own stats, where they were taken anyway; see `statsOf`. */
+  stats?: LayoutStats;
+}
+
+/** A layout's stats, taken once. */
+export function statsOf(l: Layout): LayoutStats {
+  return (l.stats ??= layoutStats(l));
 }
 
 /** The stats of a layout from scratch, and the project they were taken of. */
@@ -1169,11 +1176,11 @@ export function computeLayout(
     // since the estimates it started from had shaped it, and every panel
     // jumped at once; and the fresh one doubled what each relayout cost.
     const carried = layoutFrom(entries, viewport, before, true);
-    if (drawable(layoutStats(carried))) return carried;
+    if (drawable(statsOf(carried))) return carried;
   }
   if (!before) return withReference(layoutFrom(entries, viewport, null));
   const carried = layoutFrom(entries, viewport, before);
-  const carriedStats = layoutStats(carried);
+  const carriedStats = statsOf(carried);
   // Weighed against the fresh layout the last one was weighed against, while
   // the project is still about the one it was taken of. A fresh layout costs
   // six times a carried one, 485 ms against 83 at 20,000 files, and a save
@@ -1208,7 +1215,7 @@ function stillReference(ref: Reference, l: Layout): boolean {
 
 /** A layout from scratch, carrying itself as the reference. */
 function withReference(l: Layout): Layout {
-  l.reference = { stats: layoutStats(l), files: l.files.length, lines: l.totalLines, uses: 0 };
+  l.reference = { stats: statsOf(l), files: l.files.length, lines: l.totalLines, uses: 0 };
   return l;
 }
 

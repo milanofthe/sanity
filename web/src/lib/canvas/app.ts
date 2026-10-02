@@ -7,7 +7,7 @@
 import { Camera } from '$lib/canvas/camera';
 import { advanceClock, clock, holdClock, releaseClock } from '$lib/canvas/clock';
 import {
-  computeLayout, layoutStats, passesUsed,
+  computeLayout, layoutStats, passesUsed, statsOf,
   type FileEntry, type FileNode, type Layout,
 } from '$lib/canvas/layout/tree';
 import { decodeFile, type FileData } from '$lib/canvas/data/wire';
@@ -363,7 +363,7 @@ export class CanvasApp {
       filling,
     );
     this.nodeByPath = new Map(this.layout.files.map((f) => [f.path, f]));
-    const st = layoutStats(this.layout);
+    const st = statsOf(this.layout);
     this.fill = st.fill;
     // Logged rather than hidden: fill, overlaps and off-grid edges are the
     // three numbers that say whether the layout is doing its job, and they
