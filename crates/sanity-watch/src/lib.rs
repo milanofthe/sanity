@@ -355,7 +355,17 @@ where
                 if pending.pending() && pending.ready(Instant::now()) {
                     let batch = pending.take(&thread_root);
                     if !batch.is_empty() {
-                        emit(batch);
+                        // A panic in the host's handling must not end the
+                        // thread: that was the watch going quiet for good with
+                        // nothing to say so. What the batch said is lost, so
+                        // the whole folder is compared again, once; a full
+                        // comparison that panics as well is left to the next
+                        // event rather than retried in a loop.
+                        let whole = batch.dirs.iter().any(String::is_empty);
+                        let sent = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| emit(batch)));
+                        if sent.is_err() && !whole {
+                            pending.push_resync(Instant::now());
+                        }
                     }
                 }
             }
@@ -496,6 +506,40 @@ mod tests {
             batch.changed.contains(&"src/a.rs".to_string()),
             "the written file has to be in the batch: {batch:?}"
         );
+
+        drop(watch);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A handler that panics loses its batch, not the watch: the next write
+    /// still arrives, and the lost one is made good by comparing the whole
+    /// folder again.
+    #[test]
+    fn a_panicking_handler_does_not_end_the_watch() {
+        let dir = std::env::temp_dir().join(format!("sanity-panic-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), b"a\n").unwrap();
+        let dir = dir.canonicalize().unwrap();
+
+        let (tx, rx) = mpsc::channel::<Batch>();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let watch = start(dir.clone(), move |b| {
+            if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                panic!("the first batch panics, on purpose");
+            }
+            let _ = tx.send(b);
+        })
+        .expect("the watch has to start");
+
+        std::thread::sleep(Duration::from_millis(400));
+        std::fs::write(dir.join("a.txt"), b"a again\n").unwrap();
+        let resync = rx.recv_timeout(Duration::from_secs(5)).expect("the lost batch is made good");
+        assert_eq!(resync.dirs, vec![String::new()], "by comparing the whole folder: {resync:?}");
+
+        std::fs::write(dir.join("b.txt"), b"b\n").unwrap();
+        let next = rx.recv_timeout(Duration::from_secs(5)).expect("the watch is still running");
+        assert!(next.changed.iter().any(|p| p.ends_with("b.txt")), "{next:?}");
 
         drop(watch);
         std::fs::remove_dir_all(&dir).ok();

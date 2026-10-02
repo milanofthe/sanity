@@ -341,17 +341,28 @@ pub fn data_from_bytes(rel: &str, bytes: &[u8], byte_len: u64, mtime: u128) -> (
     // output still renders correctly: what the zoomed-out levels show is
     // indentation and line length, and only the colour is missing.
     let ext = extension_of(rel);
-    let data = if let Some(nb) = notebook.as_ref() {
-        crate::notebook::tokenize(nb)
-    } else if let Some(grammar) = ext.and_then(grammar_for_extension) {
-        tokenize(text, grammar)
-    } else if let Some((id, _, syn)) = ext.and_then(crate::lang::syntax_for_extension) {
-        crate::simple::lex(text, id, syn)
-    } else {
+    let plain = || {
         let mut d = plain_file_data(text);
         d.flags |= FLAG_NO_GRAMMAR;
         d
     };
+    // The colouring runs grammars and parsers over whatever is in the file,
+    // half written ones included, and a panic in one of them is a file drawn
+    // without colour rather than a read that never answers: in the app that
+    // left the window waiting on a save for good. The panic hook still
+    // reports it.
+    let coloured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(nb) = notebook.as_ref() {
+            crate::notebook::tokenize(nb)
+        } else if let Some(grammar) = ext.and_then(grammar_for_extension) {
+            tokenize(text, grammar)
+        } else if let Some((id, _, syn)) = ext.and_then(crate::lang::syntax_for_extension) {
+            crate::simple::lex(text, id, syn)
+        } else {
+            plain()
+        }
+    }));
+    let data = coloured.unwrap_or_else(|_| plain());
     let scanned = ScannedFile {
         path: rel.to_string(),
         line_count: data.line_count() as u32,

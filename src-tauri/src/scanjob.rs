@@ -215,6 +215,12 @@ fn read_behind(app: tauri::AppHandle, root: PathBuf, paths: Vec<String>, id: u64
     }
 }
 
+/// Whether the folder open now has been read in full, so what is held is the
+/// whole of it.
+pub fn finished(state: &AppState) -> bool {
+    state.scan.0.locked().done
+}
+
 /// What has been read since the last call, as a raw body:
 /// `[u32 header length][header][payloads]`, the header holding the rows, the
 /// dropped paths and how far the reading is, the payloads packed as

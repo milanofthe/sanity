@@ -822,6 +822,33 @@ fn settle_batch(app: &tauri::AppHandle, batch: watch::Batch) -> watch::Batch {
     watch::Batch { changed, removed, dirs: Vec::new() }
 }
 
+/// Catch the window up with the folder and watch it afresh.
+///
+/// For when the window has reason to think it missed something: a batch it
+/// could not apply, or the person clicking the live indicator. The watch is
+/// started again, so a watch that has gone quiet for whatever reason is
+/// replaced, and the whole folder is compared with what is held, which comes
+/// to the window as an ordinary batch of what differs. Nothing to do while a
+/// folder is still being read: the watch starts once it is, from what was
+/// read.
+#[tauri::command]
+async fn resync_watch(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if !scanjob::finished(&state) {
+        return Ok(());
+    }
+    let root = state.repo.locked().root.clone();
+    if root.as_os_str().is_empty() {
+        return Err("no folder open".into());
+    }
+    let fresh = start_watch(&app, &root)?;
+    *state.watch.0.locked() = Some(fresh);
+    let batch = settle_batch(&app, watch::Batch { dirs: vec![String::new()], ..Default::default() });
+    if !batch.is_empty() {
+        app.emit("sanity://changed", batch).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Stop watching. Used when the window closes or a folder is closed without
 /// another being opened.
 #[tauri::command]
@@ -1223,6 +1250,37 @@ fn read_text(root: &Path, rel: &str) -> Result<String, String> {
     Ok(scan::display_text(rel, &bytes))
 }
 
+/// Write every panic to `path` as well as to stderr.
+///
+/// The app is started from the Dock, where stderr goes nowhere, so a panic
+/// used to leave no trace at all: only its consequence, the watch or the
+/// history going quiet. With the message, the thread and a backtrace in a
+/// file, the next one says where it was.
+fn log_panics(path: PathBuf) {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let when = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let thread = std::thread::current();
+        let entry = format!(
+            "--- {when} (unix seconds), sanity {}, thread {}\n{info}\n{}\n",
+            env!("CARGO_PKG_VERSION"),
+            thread.name().unwrap_or("unnamed"),
+            std::backtrace::Backtrace::force_capture(),
+        );
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            let _ = f.write_all(entry.as_bytes());
+        }
+        default(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Before the builder, which is what makes the window and its webview:
@@ -1236,6 +1294,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            if let Ok(dir) = app.path().app_log_dir() {
+                log_panics(dir.join("panic.log"));
+            }
             app.manage(AppState {
                 repo: Mutex::new(Repo::default()),
                 watch: watch::WatchSlot::default(),
@@ -1258,6 +1319,7 @@ pub fn run() {
             open_in_editor,
             refresh_files,
             stop_watch,
+            resync_watch,
             drop_files,
             repo_index,
             stage_save,
