@@ -307,14 +307,15 @@ const HIT_MIX_CURRENT = 0.55;
 const FLASH_WASH = 0.55;
 
 /** On-screen floor for a stub panel, in CSS pixels. */
-/** CSS pixels of panel width below which a picture is not fetched at all.
+/** CSS pixels of picture width below which a picture is not fetched at all.
  *
- *  Small, because a thumbnail is cheap: 24 pixels still shows the colour and
- *  the rough shape of a plot, which is worth having, and the panels this rules
- *  out are the ones where a picture would be two pixels of mush. The rule
- *  earns its keep on the projects where a directory holds hundreds of
- *  renders. */
-const MEDIA_MIN_PX = 24;
+ *  Only what would be a dot. It was 24, from when a small picture meant a
+ *  decode of its source; but both sources hold a thumbnail of every picture
+ *  by the time it is on screen (see sources/thumbs.ts), so a small one is a
+ *  128 pixel decode, and leaving it out left a project's pictures as empty
+ *  sheets at the overview zoom until somebody zoomed in. Four pixels still
+ *  shows the colour of a plot. */
+const MEDIA_MIN_PX = 4;
 
 /**
  * How much of a line box a token bar is worth, as ink.
@@ -2199,8 +2200,12 @@ export class Scene {
     const back = paper ? this.pal.surface.paper : this.pal.surface.reducedBg;
     this.pushRect(this.bgRects, x, y, w, h, back, 1, 0, 0);
     if (held) {
+      // Where the panel is drawn this frame rather than where it is going: a
+      // panel sliding to a new place in a relayout carries its picture with
+      // it. The rects above are moved by `pushRect`; this one is not a rect.
+      const at = tf === IDENTITY ? { x, y, w, h } : applyTo(tf, { x, y, w, h });
       this.imageDraws.push({
-        tex: held.tex, x, y, w, h, fade: this.tf.alpha,
+        tex: held.tex, x: at.x, y: at.y, w: at.w, h: at.h, fade: tf.alpha,
         prev: held.prev, mix: this.media?.mix(held) ?? 1,
         // 1:1 only when it was made for exactly the pixels this rect covers
         // right now; otherwise it is scaled onto the rect like any level.
