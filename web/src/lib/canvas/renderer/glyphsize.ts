@@ -17,7 +17,7 @@ export const BASELINE_RATIO = 1.05;
  * screen, 18.9 percent of edge pixels mid-ramp against 18.0 drawn 1:1.
  */
 const MIN_SIZE = 4;
-const MAX_SIZE = 240;
+export const MAX_SIZE = 240;
 
 /** The size an exact atlas for this em is built at, in device pixels. */
 export function exactSize(emPixels: number): number {
