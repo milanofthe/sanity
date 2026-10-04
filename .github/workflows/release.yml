@@ -1,6 +1,6 @@
 name: Release
 
-# A tag builds the installers and opens a draft release with them attached.
+# A tag builds the installers and publishes the release with them attached.
 # `workflow_dispatch` runs the same build without publishing anything, which
 # is how a change to this file or to the platform code gets checked before a
 # version number is spent on it.
