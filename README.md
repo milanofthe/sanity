@@ -143,6 +143,17 @@ Arch's libraries, and stops early when `patchelf` is missing, which
 linuxdeploy's GStreamer step needs. When the build still ends in nothing more
 than `failed to run linuxdeploy`, `--verbose` shows the real error.
 
+## Releasing
+
+```sh
+npm run release -- 1.13.2 notes.md --dry-run   # the release as it would read
+npm run release -- 1.13.2 notes.md
+```
+
+From an up to date `main`, this sets the version, pushes it and publishes the
+release with `notes.md` as its changes. Publishing starts the Release
+workflow, which attaches the installers about fifteen minutes later.
+
 The web demo is the same app reading pre-built dumps of public repositories
 over HTTP:
 

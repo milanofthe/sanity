@@ -13,6 +13,7 @@
 		"check": "npm --prefix web run check && npm --prefix web exec svelte-check -- --threshold error && cargo clippy --workspace --all-targets -- -D warnings",
 		"test": "npm --prefix web test && cargo test --workspace",
 		"demo": "node scripts/demo.mjs",
+		"release": "node scripts/release.mjs",
 		"shots": "node web/scripts/shot.mjs",
 		"ui-shots": "node web/scripts/ui-shots.mjs",
 		"layout-check": "node web/scripts/layout-check.mjs",
