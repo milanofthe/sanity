@@ -500,7 +500,8 @@ export class Scene {
   /**
    * A line over the bottom of the frame, in screen space and over everything:
    * the commit a video is showing. A picture rather than glyphs, since a
-   * commit's subject can hold anything and the atlas holds ASCII.
+   * commit's subject can hold anything, emoji and CJK included, and the atlas
+   * has a few hundred cells.
    */
   private caption: { tex: WebGLTexture; w: number; h: number } | null = null;
 
@@ -2047,7 +2048,7 @@ export class Scene {
     const em = metrics.charWidth / this.atlas.advanceRatio;
     const n = Math.min(str.length, maxChars);
     for (let i = 0; i < n; i++) {
-      const idx = GlyphAtlas.index(str.charCodeAt(i));
+      const idx = this.atlas.index(str.charCodeAt(i));
       if (idx < 0) continue;
       const o = b.alloc();
       const d = b.data;
@@ -2067,7 +2068,7 @@ export class Scene {
    *
    * One line tall, laid out by what fits. The name always wins; the type badge
    * and then the path appear as the panel gets wider. Truncation is two dots
-   * rather than an ellipsis because the glyph atlas is ASCII.
+   * rather than an ellipsis, from when the glyph atlas held ASCII only.
    */
   private pushHeader(f: SceneFile, zoom: number, hovered: boolean): void {
     const n = f.node;
@@ -3357,7 +3358,7 @@ export class Scene {
         // rule for the arithmetic rather than a policy about precedence.
         let cursor = s0;
         for (let k = from; k < to; k++) {
-          const idx = GlyphAtlas.index(text.charCodeAt(k));
+          const idx = this.atlas.index(text.charCodeAt(k));
           if (idx < 0) continue;
           // Advance past spans that end before this column. They are sorted by
           // column, so this walks each span at most once per row.
@@ -3385,7 +3386,7 @@ export class Scene {
     const { gl } = this;
     const em = (metrics.charWidth / this.atlas.advanceRatio) * (pxPerLine / metrics.lineHeight);
     // While the camera is moving, one of the fixed levels: rasterising a new
-    // atlas per zoom step would be a canvas of 95 glyphs every frame. Once it
+    // atlas per zoom step would be a canvas of glyphs every frame. Once it
     // is still, the exact size, which is what makes the text sharp.
     const exact = this.cameraStill && this.exactGlyphAtlas;
     const level = this.atlas.pick(em * dpr, exact);
@@ -3427,7 +3428,7 @@ export class Scene {
         : level.size / Math.max(1e-6, scalePx),
     );
     gl.uniform1f(this.uGlyph.uGridCols, GlyphAtlas.gridCols);
-    gl.uniform1f(this.uGlyph.uGridRows, GlyphAtlas.gridRows);
+    gl.uniform1f(this.uGlyph.uGridRows, level.rows);
     // Only a glyph drawn 1:1 lands where a phase can be chosen for it; a
     // scaled one is resampled anyway and takes the first grid.
     gl.uniform1f(this.uGlyph.uPhases, oneToOne ? level.phases : 1);
@@ -3540,7 +3541,7 @@ export class Scene {
     }
     const advance = this.atlas.advanceRatio * size;
     for (let i = 0; i < str.length; i++) {
-      const idx = GlyphAtlas.index(str.charCodeAt(i));
+      const idx = this.atlas.index(str.charCodeAt(i));
       if (idx < 0) continue;
       const o = b.alloc();
       const d = b.data;
@@ -3567,7 +3568,7 @@ export class Scene {
     gl.uniform2f(this.uGlyph.uBoxPx, level.cellW, level.cellH);
     gl.uniform1f(this.uGlyph.uEmWorld, one ? size : level.size / dpr);
     gl.uniform1f(this.uGlyph.uGridCols, GlyphAtlas.gridCols);
-    gl.uniform1f(this.uGlyph.uGridRows, GlyphAtlas.gridRows);
+    gl.uniform1f(this.uGlyph.uGridRows, level.rows);
     gl.uniform1f(this.uGlyph.uPhases, one ? level.phases : 1);
     gl.uniform2f(this.uGlyph.uViewport, this.viewW, this.viewH);
     gl.activeTexture(gl.TEXTURE0);

@@ -86,7 +86,6 @@ const compare = async () =>
     const app = window.__sanity.app;
     const sc = app.scene;
     const { spanCol, spanLen, spanKind } = await import('/src/lib/canvas/data/wire.ts');
-    const { GlyphAtlas } = await import('/src/lib/canvas/renderer/glyphatlas.ts');
 
     // What is drawn, grouped by row through the y it was placed at.
     const STRIDE = 6;
@@ -140,7 +139,7 @@ const compare = async () =>
 
           const want = [];
           for (let k = from; k < to; k++) {
-            if (GlyphAtlas.index(text.charCodeAt(k)) < 0) continue;
+            if (sc.atlas.index(text.charCodeAt(k)) < 0) continue;
             want.push({ col: k, kind: kinds.has(k) ? kinds.get(k) : 0 });
           }
           if (want.length === 0) continue;
