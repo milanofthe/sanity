@@ -17,11 +17,13 @@ export const BASELINE_RATIO = 1.05;
  * screen, 18.9 percent of edge pixels mid-ramp against 18.0 drawn 1:1.
  */
 const MIN_SIZE = 4;
-const MAX_SIZE = 240;
+export const MAX_SIZE = 240;
 
-/** The size an exact atlas for this em is built at, in device pixels. */
-export function exactSize(emPixels: number): number {
-  return Math.max(MIN_SIZE, Math.min(MAX_SIZE, Math.round(emPixels)));
+/** The size an exact atlas for this em is built at, in device pixels. `max`
+ *  is lower than `MAX_SIZE` on a context whose textures cannot hold an atlas
+ *  that large; see `GlyphAtlas.maxExact`. */
+export function exactSize(emPixels: number, max = MAX_SIZE): number {
+  return Math.max(MIN_SIZE, Math.min(max, Math.round(emPixels)));
 }
 
 /**
@@ -30,8 +32,8 @@ export function exactSize(emPixels: number): number {
  * clamped and has to be scaled to the em again: drawn 1:1 there, text at
  * three pixels an em would come out at four.
  */
-export function oneToOne(emPixels: number): boolean {
-  return exactSize(emPixels) === Math.round(emPixels);
+export function oneToOne(emPixels: number, max = MAX_SIZE): boolean {
+  return exactSize(emPixels, max) === Math.round(emPixels);
 }
 
 /** Where the baseline sits in a cell rasterised at `size`, in its pixels. */

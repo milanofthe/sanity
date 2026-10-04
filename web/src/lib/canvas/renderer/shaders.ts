@@ -238,6 +238,7 @@ in vec4 aPosGlyph;  // world x, y, glyph index, token kind
 in vec2 aSizeFade;  // em size in world units, alpha
 uniform vec3 uKind[16];
 uniform vec2 uCell;      // cell size in atlas uv
+uniform vec2 uPitch;     // cell plus the gap to the next, in atlas uv
 uniform vec2 uBoxPx;      // the atlas cell, in device pixels
 uniform float uEmWorld;   // the em that is drawn as exactly the cell, in world units
 uniform float uGridCols;
@@ -279,7 +280,7 @@ void main() {
   vec2 originPx = vec2(baseX, floor(exactPx.y + 0.5)) + uPxOrigin.xy;
   float idx = aPosGlyph.z + phase * uGridCols * uGridRows;
   vec2 cell = vec2(mod(idx, uGridCols), floor(idx / uGridCols));
-  vUv = (cell + aCorner) * uCell;
+  vUv = cell * uPitch + aCorner * uCell;
   // Y flips between the two: world y grows downwards and uPxScale turns that
   // into device pixels, where it grows upwards. Adding the box in pixels without
   // that flip draws every glyph upside down.

@@ -8,15 +8,73 @@
 // hides which of the two is in use.
 
 import { font } from '$lib/metrics';
-import { BASELINE_RATIO, CELL_RATIO, baselineAt, exactSize, oneToOne } from './glyphsize';
+import { BASELINE_RATIO, CELL_RATIO, MAX_SIZE, baselineAt, exactSize, oneToOne } from './glyphsize';
 
-/** First and last code point in the atlas. Printable ASCII covers essentially
- *  all of what code looks like at a glance; anything else renders as a box. */
-const FIRST = 32;
-const LAST = 126;
-export const GLYPH_COUNT = LAST - FIRST + 1;
-const GRID_COLS = 16;
+/**
+ * The code points in the atlas, in cell order.
+ *
+ * Printable ASCII first, so its cells are where they always were. Then what
+ * comments, strings and documentation hold once they are written in anything
+ * but English: the Latin-1 and Latin Extended-A letters (German, French,
+ * Spanish, the Nordic and Central European languages, Turkish), the four
+ * Romanian ones from Extended-B, and Greek, which scientific code names its
+ * variables in. Last the punctuation, arrows, mathematical signs and box
+ * drawing that Markdown and doc comments use.
+ *
+ * With only ASCII in it, an `ä` or an em dash was skipped, and German prose
+ * came out with holes in its words. Anything still missing is skipped the same
+ * way and keeps its column.
+ */
+const RANGES: readonly (readonly [number, number])[] = [
+  [0x20, 0x7e],
+  [0xa0, 0xff],
+  [0x100, 0x17f],
+  [0x218, 0x21b],
+  [0x391, 0x3a1],
+  [0x3a3, 0x3a9],
+  [0x3b1, 0x3c9],
+];
+const SYMBOLS =
+  '‐–—‘’‚“”„†‡•…‰′″‹›€™' +
+  '←↑→↓↔↕⇐⇒⇔' +
+  '∀∂∃∅∇∈∉∑−√∞∧∨∩∪∫≈≠≡≤≥⋅' +
+  '─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬╭╮╯╰' +
+  '█░▒▓■□▲▶▼◀●○★☆✓✔✗✘';
+
+const CODES: readonly number[] = [
+  ...RANGES.flatMap(([a, b]) => Array.from({ length: b - a + 1 }, (_, i) => a + i)),
+  ...Array.from(SYMBOLS, (c) => c.codePointAt(0)!),
+];
+export const GLYPH_COUNT = CODES.length;
+/** How many cells the printable ASCII takes, at the front. */
+const ASCII = 0x7e - 0x20 + 1;
+/** Wide enough that the grid is about square at the cell's proportions, so
+ *  the largest atlas is bounded on both sides rather than tall and thin. */
+const GRID_COLS = 32;
 const GRID_ROWS = Math.ceil(GLYPH_COUNT / GRID_COLS);
+
+/** Cell index by code point, -1 for none. A table rather than a map, since
+ *  it is read once per character drawn. */
+const CELL = new Int16Array(Math.max(...CODES) + 1).fill(-1);
+CODES.forEach((c, i) => (CELL[c] = i));
+
+/**
+ * The tallest or widest texture an atlas is built as, below what the context
+ * allows. At the largest size one grid is about 4800 by 5100 pixels, a
+ * hundred megabytes with its mips; letting the subpixel phases stack on top
+ * of that up to a 16384 limit would be three times as much for a size where
+ * a quarter of a pixel is invisible anyway.
+ */
+const TEX_ROOM = 8192;
+
+/**
+ * Empty texels between neighbouring cells. The ASCII glyphs keep well clear
+ * of their cell's edges, but box drawing and the shade blocks are drawn to
+ * the full height of the line, and sampled at a cell's edge they picked up
+ * the edge of the glyph in the next row: a bar under `≤` from the `▓` below
+ * it, dots under `≠` from the `░`. The quad still covers only the cell.
+ */
+const GAP = 2;
 
 /**
  * Rasterisation sizes, in device pixels of em height.
@@ -39,6 +97,9 @@ interface Level {
   tex: WebGLTexture;
   cellW: number;
   cellH: number;
+  /** Cell plus `GAP`: how far apart the cells sit in the texture. */
+  pitchW: number;
+  pitchH: number;
   texW: number;
   texH: number;
 }
@@ -69,12 +130,70 @@ export class GlyphAtlas {
   capRatio = 0.72;
   descenderRatio = 0.21;
 
-  /** Largest texture side the context takes, for fitting the phases in. */
-  private maxTexSize: number;
+  /**
+   * Each glyph's own width as a multiple of the advance, and the scale that
+   * keeps its ink inside the cell's height. One for everything the monospace
+   * font has; a character it lacks is drawn from whatever font the browser
+   * falls back to, which is rarely the same width and, for the mathematical
+   * signs, often taller than the line. Either way it would reach into a
+   * neighbouring cell and show up as a stray mark under or beside another
+   * glyph, so a wider one is squeezed into the cell, a taller one scaled
+   * down to it, and a narrower one centred in it. ASCII is left as it always
+   * was drawn.
+   */
+  private widths = new Float32Array(GLYPH_COUNT).fill(1);
+  private heights = new Float32Array(GLYPH_COUNT).fill(1);
+
+  /** Largest texture side an atlas is built as; see `TEX_ROOM`. */
+  private room: number;
+
+  /**
+   * The largest exact size whose grid fits a texture. `MAX_SIZE` wherever
+   * textures go to 8192, which is everywhere this is meant to run; on a
+   * context limited to 4096 it is about 190, and text larger than that is
+   * scaled from it rather than drawn from an atlas that cannot be built.
+   */
+  readonly maxExact: number;
 
   constructor(private gl: WebGL2RenderingContext) {
-    this.maxTexSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
-    for (const size of SIZES) this.levels.push(this.build(size, 1));
+    this.room = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number, TEX_ROOM);
+    this.measure(SIZES[SIZES.length - 1]);
+    let max = MAX_SIZE;
+    while (max > SIZES[0] && !this.fits(max)) max--;
+    this.maxExact = max;
+    for (const size of SIZES) if (size <= max || size === SIZES[0]) this.levels.push(this.build(size, 1));
+  }
+
+  /** The font's metrics, and every glyph's width against them. */
+  private measure(size: number): void {
+    const ctx = document.createElement('canvas').getContext('2d')!;
+    ctx.font = `${size}px ${font.mono}`;
+    const advance = ctx.measureText('M').width;
+    this.advanceRatio = advance / size;
+    this.capRatio = ctx.measureText('M').actualBoundingBoxAscent / size;
+    this.descenderRatio = ctx.measureText('gyjpq').actualBoundingBoxDescent / size;
+    // A pixel of the reference size to spare on either side, for the
+    // rounding of the baseline at smaller ones.
+    const above = BASELINE_RATIO - 1 / size;
+    const below = CELL_RATIO - BASELINE_RATIO - 1 / size;
+    for (let i = ASCII; i < GLYPH_COUNT; i++) {
+      const m = ctx.measureText(String.fromCodePoint(CODES[i]));
+      if (m.width > 0) this.widths[i] = m.width / advance;
+      this.heights[i] = Math.min(
+        1,
+        above / Math.max(1e-6, m.actualBoundingBoxAscent / size),
+        below / Math.max(1e-6, m.actualBoundingBoxDescent / size),
+      );
+    }
+  }
+
+  /** Whether one grid at `size` fits a texture, with a pixel to spare on the
+   *  advance for the difference between measuring at this size and at the
+   *  reference one. */
+  private fits(size: number): boolean {
+    const pitchW = Math.ceil(this.advanceRatio * size + 1) + 4 + GAP;
+    const pitchH = Math.ceil(size * CELL_RATIO) + GAP;
+    return pitchW * GRID_COLS <= this.room && pitchH * GRID_ROWS <= this.room;
   }
 
   private build(size: number, wantPhases: number): Level {
@@ -83,35 +202,41 @@ export class GlyphAtlas {
     const ctx = canvas.getContext('2d')!;
     ctx.font = `${size}px ${font.mono}`;
     const advance = ctx.measureText('M').width;
-    if (size === SIZES[SIZES.length - 1]) {
-      this.advanceRatio = advance / size;
-      const caps = ctx.measureText('M');
-      const tails = ctx.measureText('gyjpq');
-      this.capRatio = caps.actualBoundingBoxAscent / size;
-      this.descenderRatio = tails.actualBoundingBoxDescent / size;
-    }
 
     // Generous cell padding: descenders and the odd wide glyph must not bleed
     // into the neighbouring cell once the texture is filtered.
     const cellW = Math.ceil(advance) + 4;
     const cellH = Math.ceil(size * CELL_RATIO);
-    // Each phase is a full grid of glyphs below the previous one. As many as
-    // fit the context's largest texture: WebGL2 promises 2048, and at the
-    // largest size four grids are 8064 pixels tall.
-    const phases = Math.max(1, Math.min(wantPhases, Math.floor(this.maxTexSize / (cellH * GRID_ROWS))));
-    canvas.width = cellW * GRID_COLS;
-    canvas.height = cellH * GRID_ROWS * phases;
+    const pitchW = cellW + GAP;
+    const pitchH = cellH + GAP;
+    // Each phase is a full grid of glyphs below the previous one, as many as
+    // fit the texture.
+    const phases = Math.max(1, Math.min(wantPhases, Math.floor(this.room / (pitchH * GRID_ROWS))));
+    canvas.width = pitchW * GRID_COLS;
+    canvas.height = pitchH * GRID_ROWS * phases;
 
     ctx.font = `${size}px ${font.mono}`;
     ctx.fillStyle = '#fff';
     ctx.textBaseline = 'alphabetic';
     const baseline = GlyphAtlas.baselineAt(size);
     for (let p = 0; p < phases; p++) {
-      const top = p * GRID_ROWS * cellH;
+      const top = p * GRID_ROWS * pitchH;
       for (let i = 0; i < GLYPH_COUNT; i++) {
-        const gx = (i % GRID_COLS) * cellW;
-        const gy = top + Math.floor(i / GRID_COLS) * cellH;
-        ctx.fillText(String.fromCharCode(FIRST + i), gx + 2 + p / phases, gy + baseline);
+        const gx = (i % GRID_COLS) * pitchW + 2 + p / phases;
+        const gy = top + Math.floor(i / GRID_COLS) * pitchH + baseline;
+        const ch = String.fromCodePoint(CODES[i]);
+        const w = this.widths[i];
+        const h = this.heights[i];
+        if (w === 1 && h === 1) {
+          ctx.fillText(ch, gx, gy);
+        } else {
+          // Scaled about the glyph's own origin on the baseline, so a glyph
+          // made smaller stays on the line.
+          const sx = Math.min(h, 1 / w);
+          ctx.setTransform(sx, 0, 0, h, gx + (advance * (1 - w * sx)) / 2, gy * (1 - h));
+          ctx.fillText(ch, 0, gy);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+        }
       }
     }
 
@@ -125,7 +250,7 @@ export class GlyphAtlas {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    return { size, phases, tex, cellW, cellH, texW: canvas.width, texH: canvas.height };
+    return { size, phases, tex, cellW, cellH, pitchW, pitchH, texW: canvas.width, texH: canvas.height };
   }
 
   /**
@@ -139,11 +264,11 @@ export class GlyphAtlas {
    *
    * Without it, the smallest fixed level at least as large as the size asked
    * for, so glyphs are minified rather than magnified. That is what a moving
-   * camera gets, since an atlas per zoom step is 95 glyphs rasterised per
-   * frame.
+   * camera gets, since an atlas per zoom step is every glyph in it rasterised
+   * per frame.
    */
   pick(emPixels: number, exact = false): Level {
-    const want = GlyphAtlas.exactSize(emPixels);
+    const want = this.exactSize(emPixels);
     if (exact) {
       const held = this.exact.get(want);
       if (held) {
@@ -168,7 +293,7 @@ export class GlyphAtlas {
    * own size are five, against a cache of four.
    */
   label(emPixels: number): Level {
-    const want = GlyphAtlas.exactSize(emPixels);
+    const want = this.exactSize(emPixels);
     const held = this.labels.get(want);
     if (held) return held;
     const built = this.build(want, SUBPIXEL_PHASES);
@@ -200,13 +325,20 @@ export class GlyphAtlas {
     }
   }
 
-  static readonly exactSize = exactSize;
-  static readonly oneToOne = oneToOne;
+  /** `exactSize` and `oneToOne` from glyphsize.ts, held to the largest atlas
+   *  this context can build. */
+  exactSize(emPixels: number): number {
+    return exactSize(emPixels, this.maxExact);
+  }
+  oneToOne(emPixels: number): boolean {
+    return oneToOne(emPixels, this.maxExact);
+  }
+
   static readonly baselineAt = baselineAt;
 
   /** Index into the atlas for a code point, or -1 when it has no glyph. */
   static index(code: number): number {
-    return code >= FIRST && code <= LAST ? code - FIRST : -1;
+    return code < CELL.length ? CELL[code] : -1;
   }
 
   static readonly gridCols = GRID_COLS;

@@ -870,7 +870,7 @@ export class Scene {
     ]);
     this.uSpan = uniforms(gl, this.progSpan, ['uView', 'uKind[0]']);
     this.uGlyph = uniforms(gl, this.progGlyph, [
-      'uPxScale', 'uPxOrigin', 'uKind[0]', 'uAtlas', 'uCell', 'uGridCols', 'uGridRows',
+      'uPxScale', 'uPxOrigin', 'uKind[0]', 'uAtlas', 'uCell', 'uPitch', 'uGridCols', 'uGridRows',
       'uPhases', 'uViewport', 'uBoxPx', 'uEmWorld',
     ]);
 
@@ -2010,8 +2010,8 @@ export class Scene {
   private measureInk(zoom: number, dpr: number): void {
     const nominal = metrics.charWidth / this.atlas.advanceRatio;
     const scalePx = zoom * dpr;
-    if (this.cameraStill && this.exactGlyphAtlas && GlyphAtlas.oneToOne(nominal * scalePx)) {
-      const size = GlyphAtlas.exactSize(nominal * scalePx);
+    if (this.cameraStill && this.exactGlyphAtlas && this.atlas.oneToOne(nominal * scalePx)) {
+      const size = this.atlas.exactSize(nominal * scalePx);
       this.inkEm = size / scalePx;
       this.inkBaseline = GlyphAtlas.baselineAt(size) / scalePx;
     } else {
@@ -3385,7 +3385,7 @@ export class Scene {
     const { gl } = this;
     const em = (metrics.charWidth / this.atlas.advanceRatio) * (pxPerLine / metrics.lineHeight);
     // While the camera is moving, one of the fixed levels: rasterising a new
-    // atlas per zoom step would be a canvas of 95 glyphs every frame. Once it
+    // atlas per zoom step would be a canvas of every glyph each frame. Once it
     // is still, the exact size, which is what makes the text sharp.
     const exact = this.cameraStill && this.exactGlyphAtlas;
     const level = this.atlas.pick(em * dpr, exact);
@@ -3399,6 +3399,7 @@ export class Scene {
       level.cellW / level.texW,
       level.cellH / level.texH,
     );
+    gl.uniform2f(this.uGlyph.uPitch, level.pitchW / level.texW, level.pitchH / level.texH);
     // The cell in device pixels, and the world-space em that stands for it:
     // a glyph asking for that em is drawn as the cell, texel on pixel, and one
     // asking for less, in a panel still animating in, is scaled down with it.
@@ -3419,7 +3420,7 @@ export class Scene {
     //   rounded, drawn 1:1           13.9  17.3    11.8  13.6
     const scalePx = (pxPerLine / metrics.lineHeight) * dpr;
     gl.uniform2f(this.uGlyph.uBoxPx, level.cellW, level.cellH);
-    const oneToOne = exact && GlyphAtlas.oneToOne(em * dpr);
+    const oneToOne = exact && this.atlas.oneToOne(em * dpr);
     gl.uniform1f(
       this.uGlyph.uEmWorld,
       oneToOne
@@ -3527,9 +3528,9 @@ export class Scene {
     ink: number, alpha: number,
   ): void {
     const px = size * dpr;
-    const one = GlyphAtlas.oneToOne(px);
-    const em = one ? GlyphAtlas.exactSize(px) / dpr : size;
-    const baseline = one ? GlyphAtlas.baselineAt(GlyphAtlas.exactSize(px)) / dpr : size * BASELINE_RATIO;
+    const one = this.atlas.oneToOne(px);
+    const em = one ? this.atlas.exactSize(px) / dpr : size;
+    const baseline = one ? GlyphAtlas.baselineAt(this.atlas.exactSize(px)) / dpr : size * BASELINE_RATIO;
     const cap = baseline - em * this.atlas.capRatio;
     const tail = baseline + em * this.atlas.descenderRatio;
     const top = plate.y + (plate.h - (tail - cap)) / 2 - cap;
@@ -3558,12 +3559,13 @@ export class Scene {
     const { gl } = this;
     const px = size * dpr;
     const level = this.atlas.label(px);
-    const one = GlyphAtlas.oneToOne(px);
+    const one = this.atlas.oneToOne(px);
     gl.useProgram(this.progGlyph);
     this.pixelUniforms(this.uGlyph);
     gl.uniform3fv(this.uGlyph['uKind[0]'], this.labelInk);
     gl.uniform1i(this.uGlyph.uAtlas, 0);
     gl.uniform2f(this.uGlyph.uCell, level.cellW / level.texW, level.cellH / level.texH);
+    gl.uniform2f(this.uGlyph.uPitch, level.pitchW / level.texW, level.pitchH / level.texH);
     gl.uniform2f(this.uGlyph.uBoxPx, level.cellW, level.cellH);
     gl.uniform1f(this.uGlyph.uEmWorld, one ? size : level.size / dpr);
     gl.uniform1f(this.uGlyph.uGridCols, GlyphAtlas.gridCols);
