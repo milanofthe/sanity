@@ -149,7 +149,10 @@ expect(Math.abs(r.duration - r.plan.seconds) < 0.05, `as long as planned (${r.du
 expect(JSON.stringify(r.shown) === JSON.stringify([r.plan.start, ...r.plan.targets]), `every step shown, in order (${r.shown.join(' ')})`);
 expect(r.middle.sd > 8, `the project is in the frame (spread ${r.middle.sd.toFixed(1)})`);
 expect(r.bottom.sd > 3 && Math.abs(r.bottom.mean - r.middle.mean) < 60, `the commit line is along the bottom (mean ${r.bottom.mean.toFixed(0)}, spread ${r.bottom.sd.toFixed(1)})`);
-expect(r.startDiff < 0.5, `the video starts at rest, its first frame the intro's last (mean difference ${r.startDiff.toFixed(2)})`);
+// Encoded by bitrate, the still intro comes out a little soft at first and
+// sharpens over its frames, about 1.3 on this scale; the jump to the first
+// commit shown as a change was 36.
+expect(r.startDiff < 3, `the video starts at rest, its first frame the intro's last (mean difference ${r.startDiff.toFixed(2)})`);
 expect(r.after.w === r.before.w && r.after.h === r.before.h, 'the canvas is its own size again');
 expect(r.after.x === r.before.x && r.after.y === r.before.y && r.after.zoom === r.before.zoom, 'the camera is where it was');
 // A video renders faster than it plays, and the clock keeps the lead rather
