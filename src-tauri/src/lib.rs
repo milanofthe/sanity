@@ -295,7 +295,7 @@ fn groups_from<'a>(files: impl IntoIterator<Item = &'a FileInfo>) -> Vec<GroupIn
             }),
         }
     }
-    groups.sort_by(|a, b| b.lines.cmp(&a.lines));
+    groups.sort_by_key(|g| std::cmp::Reverse(g.lines));
     groups
 }
 
