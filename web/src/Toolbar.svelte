@@ -17,6 +17,7 @@
 	import ViewOptions from './ViewOptions.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { project } from '$lib/state/project.svelte';
+	import { recent } from '$lib/state/recent.svelte';
 	import { THEMES } from '$lib/theme';
 	import type { DemoRepo } from '$lib/sources/demo';
 	import { inTauri } from '$lib/sources/tauri';
@@ -113,9 +114,9 @@
 				{/each}
 			</MenuSection>
 		{/if}
-		{#if project.recent.length > 0}
+		{#if recent.roots.length > 0}
 			<MenuSection title="Recent">
-				{#each project.recent as path (path)}
+				{#each recent.roots as path (path)}
 					<MenuItem
 						label={short(path)}
 						hint={path === project.root ? 'open' : ''}

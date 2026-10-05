@@ -8,6 +8,9 @@
 // full, kept as a placeholder that shows the file exists without claiming any
 // area proportional to its size, or dropped entirely.
 
+import { recent, type Settings } from './recent.svelte';
+import { ui } from './ui.svelte';
+
 export type ViewMode = 'full' | 'reduced' | 'off';
 
 /** Where the ignored-files switch is kept between sessions. */
@@ -58,8 +61,6 @@ class ProjectState {
 	 *  nothing that writes or watches applies. */
 	demo = $state(false);
 	groups = $state<FileGroup[]>([]);
-	/** Recently opened folders, most recent first. */
-	recent = $state<string[]>([]);
 
 	/**
 	 * Take in the files git ignores.
@@ -90,6 +91,31 @@ class ProjectState {
 		} catch {
 			// A session without storage keeps it for as long as it runs.
 		}
+		recent.set({ includeIgnored: on });
+	}
+
+	/** Take the switches a folder was last shown with, before it is scanned:
+	 *  whether the files git ignores are listed is part of the scan. The file
+	 *  types follow in `load`, once there are groups to set. */
+	recall(root: string) {
+		const s = recent.settings(root);
+		if (!s) return;
+		this.includeIgnored = s.includeIgnored;
+		ui.adopt(s);
+	}
+
+	/** What is chosen for the folder on screen, as `recent` keeps it. */
+	private settings(): Settings {
+		return {
+			modes: Object.fromEntries(
+				this.groups.filter((g) => g.mode !== 'full').map((g) => [g.id, g.mode])
+			),
+			includeIgnored: this.includeIgnored,
+			tintLanguages: ui.tintLanguages,
+			dirLabels: ui.dirLabels,
+			historyFollow: ui.historyFollow,
+			expandDocuments: ui.expandDocuments
+		};
 	}
 
 	setIgnoredCounts(total: number, shown: number) {
@@ -131,13 +157,26 @@ class ProjectState {
 	stubbedLines = $derived(
 		this.groups.filter((g) => g.mode === 'reduced').reduce((s, g) => s + g.lines, 0)
 	);
-	/** Build the picker rows from a scan, defaulting artefacts to placeholders
-	 *  rather than to hidden: the point of the mode is that you can see they
-	 *  are there. */
+	/** Take a scanned folder, with the file types drawn as they were the last
+	 *  time it was open. */
 	load(root: string, rows: Omit<FileGroup, 'mode'>[], synthetic = false, demo = false) {
 		this.root = root;
 		this.synthetic = synthetic;
 		this.demo = demo;
+		this.group(rows);
+		// Only real folders are remembered: the list exists to reopen one, and
+		// neither a generated repo nor a demo snapshot is a folder.
+		if (synthetic || demo || !root) {
+			recent.current = '';
+			return;
+		}
+		const modes = recent.settings(root)?.modes ?? {};
+		for (const g of this.groups) g.mode = modes[g.id] ?? 'full';
+		recent.opened(root, this.settings());
+	}
+
+	/** Build the picker rows from a scan, every type drawn in full. */
+	private group(rows: Omit<FileGroup, 'mode'>[]) {
 		const total = rows.reduce((s, r) => s + r.lines, 0) || 1;
 		const totalFiles = rows.reduce((s, r) => s + r.files, 0) || 1;
 		const groups: FileGroup[] = [];
@@ -158,31 +197,23 @@ class ProjectState {
 		}
 		if (minor && minor.files > 0) groups.push(minor);
 		this.groups = groups;
-
-		// Only real folders go into the recent list: it exists to reopen one,
-		// and neither a generated repo nor a demo snapshot is a folder.
-		if (!synthetic && !demo && root) {
-			this.recent = [root, ...this.recent.filter((r) => r !== root)].slice(0, 8);
-		}
 	}
 
-	/**
-	 * Take a new set of rows while keeping what the user chose.
-	 *
-	 * Used when the watcher adds or removes a file: the counts move, but a
-	 * group the user switched to reduced has to stay reduced. `load` resets
-	 * every mode to its default, which is right for opening a project and
-	 * wrong for a file being saved.
-	 */
 	/** Record that a batch of changes arrived, for the status bar. */
 	sawChanges(changed: number) {
 		this.changed = changed;
 		this.lastChangeAt = performance.now();
 	}
 
+	/**
+	 * Take a new set of rows while keeping what the user chose.
+	 *
+	 * Used when the watcher adds or removes a file: the counts move, but a
+	 * group the user switched to reduced has to stay reduced.
+	 */
 	refreshGroups(rows: Omit<FileGroup, 'mode'>[]) {
 		const chosen = new Map(this.groups.map((g) => [g.id, g.mode]));
-		this.load(this.root, rows, this.synthetic, this.demo);
+		this.group(rows);
 		for (const g of this.groups) {
 			const was = chosen.get(g.id);
 			if (was) g.mode = was;
@@ -195,10 +226,12 @@ class ProjectState {
 
 	setMode(id: string, mode: ViewMode) {
 		this.groups = this.groups.map((g) => (g.id === id ? { ...g, mode } : g));
+		recent.set({ modes: this.settings().modes });
 	}
 
 	setAll(mode: ViewMode) {
 		this.groups = this.groups.map((g) => ({ ...g, mode }));
+		recent.set({ modes: this.settings().modes });
 	}
 
 	/** Mode for a path, by extension. The layout asks this per file. */
