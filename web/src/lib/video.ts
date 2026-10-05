@@ -15,7 +15,7 @@ import {
   CanvasSource,
   Mp4OutputFormat,
   Output,
-  QUALITY_HIGH,
+  Quality,
   StreamTarget,
   type StreamTargetChunk,
   type VideoCodec,
@@ -31,6 +31,18 @@ export const VIDEO_SIZES = {
 export type VideoSize = keyof typeof VIDEO_SIZES;
 
 export const VIDEO_FPS = 60;
+
+/**
+ * How well a video is encoded: mediabunny's "high", always as a bitrate.
+ *
+ * Left to itself, "high" is a fixed quantizer wherever the encoder takes one
+ * and a bitrate where it does not. The hardware encoder behind WebView2 on
+ * Windows takes one, and there a 45 second 1080p video came out at 430 MB,
+ * 76 Mbit/s, against about 6 for the videos written by bitrate. As a bitrate
+ * everywhere, a video is about the same size on every machine: some 6 Mbit/s
+ * at 1080p and 23 at 4K in H.264, less in VP9 and AV1.
+ */
+const QUALITY = new Quality({ quality: 'high', preferBitrate: true });
 
 /**
  * Codecs a video is written in, the first that works on this machine.
@@ -82,7 +94,7 @@ async function encodes(codec: VideoCodec, width: number, height: number): Promis
     if (!g) return false;
     const target = new BufferTarget();
     const output = new Output({ format: new Mp4OutputFormat(), target });
-    const source = new CanvasSource(canvas, { codec, quality: QUALITY_HIGH });
+    const source = new CanvasSource(canvas, { codec, quality: QUALITY });
     output.addVideoTrack(source, { frameRate: VIDEO_FPS });
     await output.start();
     for (let i = 0; i < 2; i++) {
@@ -195,7 +207,7 @@ export async function renderReplay(
     });
     const video = new CanvasSource(frames.canvas, {
       codec: opts.codec ?? 'avc',
-      quality: QUALITY_HIGH,
+      quality: QUALITY,
       keyFrameInterval: 2,
     });
     output.addVideoTrack(video, { frameRate: fps, maximumPacketCount: plan.frames });
