@@ -15,13 +15,12 @@ import {
   CanvasSource,
   Mp4OutputFormat,
   Output,
-  QUALITY_HIGH,
+  Quality,
   StreamTarget,
   type StreamTargetChunk,
   type VideoCodec,
 } from 'mediabunny';
 import type { CanvasApp } from '$lib/canvas/app';
-import { isWebKitGTK } from './platform.ts';
 
 /** Frame sizes offered, 16:9. The project is fitted inside with the margin the
  *  fit always leaves, whatever its own shape. */
@@ -32,6 +31,18 @@ export const VIDEO_SIZES = {
 export type VideoSize = keyof typeof VIDEO_SIZES;
 
 export const VIDEO_FPS = 60;
+
+/**
+ * How well a video is encoded: mediabunny's "high", always as a bitrate.
+ *
+ * Left to itself, "high" is a fixed quantizer wherever the encoder takes one
+ * and a bitrate where it does not. The hardware encoder behind WebView2 on
+ * Windows takes one, and there a 45 second 1080p video came out at 430 MB,
+ * 76 Mbit/s, against about 6 for the videos written by bitrate. As a bitrate
+ * everywhere, a video is about the same size on every machine: some 6 Mbit/s
+ * at 1080p and 23 at 4K in H.264, less in VP9 and AV1.
+ */
+const QUALITY = new Quality({ quality: 'high', preferBitrate: true });
 
 /**
  * Codecs a video is written in, the first that works on this machine.
@@ -83,7 +94,7 @@ async function encodes(codec: VideoCodec, width: number, height: number): Promis
     if (!g) return false;
     const target = new BufferTarget();
     const output = new Output({ format: new Mp4OutputFormat(), target });
-    const source = new CanvasSource(canvas, { codec, quality: QUALITY_HIGH });
+    const source = new CanvasSource(canvas, { codec, quality: QUALITY });
     output.addVideoTrack(source, { frameRate: VIDEO_FPS });
     await output.start();
     for (let i = 0; i < 2; i++) {
@@ -184,7 +195,7 @@ export async function renderReplay(
   const [width, height] = VIDEO_SIZES[opts.size];
   const dt = 1 / fps;
   const canvas = app.beginCapture(width, height);
-  const frames = upright(canvas);
+  const frames = copied(canvas);
   let keep = false;
   let output: Output | null = null;
   try {
@@ -196,7 +207,7 @@ export async function renderReplay(
     });
     const video = new CanvasSource(frames.canvas, {
       codec: opts.codec ?? 'avc',
-      quality: QUALITY_HIGH,
+      quality: QUALITY,
       keyFrameInterval: 2,
     });
     output.addVideoTrack(video, { frameRate: fps, maximumPacketCount: plan.frames });
@@ -215,9 +226,11 @@ export async function renderReplay(
     };
 
     // The first commit, arrived at before the video starts: getting there
-    // from the present is a jump across the whole range, not part of it.
+    // from the present is a jump across the whole range, not part of it, so
+    // what it changed is not shown as changed.
     const band = captionHeight(height);
     await source.go(plan.start);
+    app.forgetChanges();
     app.setCaption(caption(source.caption(plan.start), width, height));
     app.captureFit(0, band);
     await app.captureSettle();
@@ -246,29 +259,24 @@ export async function renderReplay(
 }
 
 /**
- * The canvas the encoder reads, with the frame the right way up.
+ * The canvas the encoder reads: a 2D copy of the WebGL one, made per frame.
  *
- * WebKitGTK encodes a WebGL canvas upside down: the frame it takes from one
- * keeps GL's origin at the bottom, and the video came out mirrored top to
- * bottom. A 2D canvas it gets right, and drawing the WebGL one into it puts
- * the picture the right way up, so there each frame is copied across before
- * it is added. Everywhere else the canvas is read as it is.
+ * Not the WebGL canvas itself, which two of the engines do not hand over
+ * intact. Chromium on Windows cannot make a VideoFrame from it at all while
+ * the context is `desynchronized` (see renderer/gl.ts), and the export failed
+ * there with "Failed to create video frame", whatever the codec or size.
+ * WebKitGTK takes one but keeps GL's origin at the bottom, and the video came
+ * out mirrored top to bottom. A 2D canvas every engine reads the right way
+ * up, and it is what `videoCodec` tries the encoders on as well. The copy is
+ * about two milliseconds a frame at 4K.
  */
-function upright(canvas: HTMLCanvasElement): { canvas: HTMLCanvasElement; copy(): void } {
-  const direct = { canvas, copy() {} };
-  if (!isWebKitGTK()) return direct;
+function copied(canvas: HTMLCanvasElement): { canvas: HTMLCanvasElement; copy(): void } {
   const flat = document.createElement('canvas');
   flat.width = canvas.width;
   flat.height = canvas.height;
   const g = flat.getContext('2d');
-  if (!g) return direct;
-  return {
-    canvas: flat,
-    copy() {
-      g.clearRect(0, 0, flat.width, flat.height);
-      g.drawImage(canvas, 0, 0);
-    },
-  };
+  if (!g) throw new Error('no 2D canvas to encode from');
+  return { canvas: flat, copy: () => g.drawImage(canvas, 0, 0) };
 }
 
 /** How long the camera takes to fit a step's layout, in the video's time. */

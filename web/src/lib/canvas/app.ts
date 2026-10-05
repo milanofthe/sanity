@@ -1456,6 +1456,13 @@ export class CanvasApp {
     await this.captureFrame(0);
   }
 
+  /** Show what the canvas holds as at rest, nothing marked as changed; see
+   *  `Scene.forgetChanges`. */
+  forgetChanges(): void {
+    this.scene?.forgetChanges();
+    this.invalidate();
+  }
+
   /** Show `image` along the bottom of the frame, or nothing. */
   setCaption(image: HTMLCanvasElement | OffscreenCanvas | null): void {
     this.scene?.setCaption(image);

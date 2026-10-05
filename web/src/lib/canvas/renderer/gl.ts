@@ -9,6 +9,8 @@ export function createContext(canvas: HTMLCanvasElement): GL {
     antialias: false,
     depth: false,
     stencil: false,
+    // Chromium on Windows cannot make a VideoFrame from a desynchronized
+    // canvas, so the video export encodes from a copy; see video.ts.
     desynchronized: true,
     powerPreference: 'high-performance',
     // So a frame can be skipped when nothing changed. WebGL clears the drawing

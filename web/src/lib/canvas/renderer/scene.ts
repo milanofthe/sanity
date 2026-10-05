@@ -1448,6 +1448,30 @@ export class Scene {
    *  see `markCreated`. */
   private toMark = new Map<string, number>();
 
+  /**
+   * Every file shown as what it is, with nothing marked as having changed:
+   * changes still playing finished at once, flashes and marks gone, created
+   * files not marked when they arrive.
+   *
+   * For a video, which reaches its first commit in one jump across the whole
+   * range. That jump changes nearly every file, and played like any other
+   * step the video opened with all of it lit up as new.
+   */
+  forgetChanges(): void {
+    for (const f of this.active) {
+      if (f.change?.pending) this.applyData(f, f.change.pending);
+      f.change = null;
+      f.since = Infinity;
+      f.shownMark = 0;
+      f.data.lineState.fill(LineState.Unchanged);
+      f.state = LineState.Unchanged;
+      this.invalidateTiles(f);
+    }
+    this.active.clear();
+    this.toMark.clear();
+    this.changing = false;
+  }
+
   private markAdded(f: SceneFile, delay = 0): void {
     this.active.add(f);
     this.warmUp(f, delay);
