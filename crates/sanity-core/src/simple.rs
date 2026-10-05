@@ -83,14 +83,7 @@ fn next_token(chars: &[char], i: usize, syn: &Syntax, line: LineState) -> Token 
     // Matching a literal at a position, on chars rather than bytes: the file
     // may be UTF-8 and a byte index into a comment marker would be wrong.
     let at = |k: usize, lit: &str| -> bool {
-        let mut k = k;
-        for ch in lit.chars() {
-            if chars.get(k) != Some(&ch) {
-                return false;
-            }
-            k += 1;
-        }
-        true
+        (k..).zip(lit.chars()).all(|(k, ch)| chars.get(k) == Some(&ch))
     };
 
     // Comments first: everything inside one is a comment whatever it looks

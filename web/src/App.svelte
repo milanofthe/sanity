@@ -169,6 +169,12 @@
 			unwatch = null;
 			await stopWatching();
 
+			// The folder's switches as it was left, before the scan, which
+			// they decide part of. Taken as given rather than as a change, so
+			// the folder being replaced is not laid out again for them.
+			project.recall(target);
+			lastExpand = ui.expandDocuments;
+
 			// First the layout, from estimates, then the contents as they are
 			// read: the project is on screen at once and fills in, rather than
 			// appearing after all of it has been read. See `fillRepo`.

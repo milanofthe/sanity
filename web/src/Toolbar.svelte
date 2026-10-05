@@ -17,6 +17,7 @@
 	import ViewOptions from './ViewOptions.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { project } from '$lib/state/project.svelte';
+	import { recent } from '$lib/state/recent.svelte';
 	import { THEMES } from '$lib/theme';
 	import type { DemoRepo } from '$lib/sources/demo';
 	import { inTauri } from '$lib/sources/tauri';
@@ -74,7 +75,7 @@
 	 *  where it came from. */
 	const REPO_URL = 'https://github.com/milanofthe/sanity';
 
-	const short = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
+	const short = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 	/** Thousands as k, so a hint stays a hint. */
 	const kilo = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
 	const shown = $derived(demos.find((d) => project.demo && d.id === project.root) ?? null);
@@ -113,9 +114,9 @@
 				{/each}
 			</MenuSection>
 		{/if}
-		{#if project.recent.length > 0}
+		{#if recent.roots.length > 0}
 			<MenuSection title="Recent">
-				{#each project.recent as path (path)}
+				{#each recent.roots as path (path)}
 					<MenuItem
 						label={short(path)}
 						hint={path === project.root ? 'open' : ''}

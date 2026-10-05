@@ -4,12 +4,14 @@
 
 import { applyTheme, storedTheme, type ThemeId } from '$lib/theme';
 import { isWebKitGTK } from '$lib/platform';
+import { recent, type Settings } from './recent.svelte';
 
 /** Widest a window is taken for a phone's: past it the four menus fit side
  *  by side with the search field, at it they do not. */
 const NARROW_PX = 640;
 
-/** Where the optional view switches are kept between sessions. */
+/** Where the optional view switches are kept between sessions; per folder
+ *  they are in `recent`. */
 const TINT_KEY = 'sanity.tintLanguages';
 const LABELS_KEY = 'sanity.dirLabels';
 const FOLLOW_KEY = 'sanity.historyFollow';
@@ -128,30 +130,36 @@ class UiState {
 
 	setTintLanguages(on: boolean) {
 		this.tintLanguages = on;
-		try {
-			localStorage.setItem(TINT_KEY, on ? '1' : '0');
-		} catch {
-			// A session without storage keeps the switch for as long as it runs.
-		}
+		storeFlag(TINT_KEY, on);
+		recent.set({ tintLanguages: on });
 	}
 
 	setDirLabels(on: boolean) {
 		this.dirLabels = on;
-		try {
-			localStorage.setItem(LABELS_KEY, on ? '1' : '0');
-		} catch {
-			// As for the tint.
-		}
+		storeFlag(LABELS_KEY, on);
+		recent.set({ dirLabels: on });
 	}
 
 	setHistoryFollow(on: boolean) {
 		this.historyFollow = on;
 		storeFlag(FOLLOW_KEY, on);
+		recent.set({ historyFollow: on });
 	}
 
 	setExpandDocuments(on: boolean) {
 		this.expandDocuments = on;
 		storeFlag(EXPAND_KEY, on);
+		recent.set({ expandDocuments: on });
+	}
+
+	/** The View switches as a folder was last shown with. The stored flags
+	 *  stay the last ones switched, which is what a folder opened for the
+	 *  first time starts from. */
+	adopt(s: Settings) {
+		this.tintLanguages = s.tintLanguages;
+		this.dirLabels = s.dirLabels;
+		this.historyFollow = s.historyFollow;
+		this.expandDocuments = s.expandDocuments;
 	}
 
 	apply() {
