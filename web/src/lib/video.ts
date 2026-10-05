@@ -21,7 +21,6 @@ import {
   type VideoCodec,
 } from 'mediabunny';
 import type { CanvasApp } from '$lib/canvas/app';
-import { isWebKitGTK } from './platform.ts';
 
 /** Frame sizes offered, 16:9. The project is fitted inside with the margin the
  *  fit always leaves, whatever its own shape. */
@@ -184,7 +183,7 @@ export async function renderReplay(
   const [width, height] = VIDEO_SIZES[opts.size];
   const dt = 1 / fps;
   const canvas = app.beginCapture(width, height);
-  const frames = upright(canvas);
+  const frames = copied(canvas);
   let keep = false;
   let output: Output | null = null;
   try {
@@ -246,29 +245,24 @@ export async function renderReplay(
 }
 
 /**
- * The canvas the encoder reads, with the frame the right way up.
+ * The canvas the encoder reads: a 2D copy of the WebGL one, made per frame.
  *
- * WebKitGTK encodes a WebGL canvas upside down: the frame it takes from one
- * keeps GL's origin at the bottom, and the video came out mirrored top to
- * bottom. A 2D canvas it gets right, and drawing the WebGL one into it puts
- * the picture the right way up, so there each frame is copied across before
- * it is added. Everywhere else the canvas is read as it is.
+ * Not the WebGL canvas itself, which two of the engines do not hand over
+ * intact. Chromium on Windows cannot make a VideoFrame from it at all while
+ * the context is `desynchronized` (see renderer/gl.ts), and the export failed
+ * there with "Failed to create video frame", whatever the codec or size.
+ * WebKitGTK takes one but keeps GL's origin at the bottom, and the video came
+ * out mirrored top to bottom. A 2D canvas every engine reads the right way
+ * up, and it is what `videoCodec` tries the encoders on as well. The copy is
+ * about two milliseconds a frame at 4K.
  */
-function upright(canvas: HTMLCanvasElement): { canvas: HTMLCanvasElement; copy(): void } {
-  const direct = { canvas, copy() {} };
-  if (!isWebKitGTK()) return direct;
+function copied(canvas: HTMLCanvasElement): { canvas: HTMLCanvasElement; copy(): void } {
   const flat = document.createElement('canvas');
   flat.width = canvas.width;
   flat.height = canvas.height;
   const g = flat.getContext('2d');
-  if (!g) return direct;
-  return {
-    canvas: flat,
-    copy() {
-      g.clearRect(0, 0, flat.width, flat.height);
-      g.drawImage(canvas, 0, 0);
-    },
-  };
+  if (!g) throw new Error('no 2D canvas to encode from');
+  return { canvas: flat, copy: () => g.drawImage(canvas, 0, 0) };
 }
 
 /** How long the camera takes to fit a step's layout, in the video's time. */
