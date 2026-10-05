@@ -1166,6 +1166,17 @@ pub struct Startup {
     pub lod: Option<String>,
 }
 
+/// A path as the folder dialog gives it. `canonicalize` on Windows answers
+/// in the `\\?\C:\...` form, which is the same folder under another name to
+/// everything that compares paths, the list of recent folders among them.
+fn plain(p: PathBuf) -> String {
+    let s = p.to_string_lossy().into_owned();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_owned(),
+        _ => s,
+    }
+}
+
 #[tauri::command]
 fn startup() -> Startup {
     // The directory test belongs in the search rather than after it. `find`
@@ -1192,7 +1203,7 @@ fn startup() -> Startup {
         .or_else(|| std::env::var("SANITY_OPEN").ok().map(resolve))
         // Still needed: `SANITY_OPEN` has not been tested by the search.
         .filter(|p| p.is_dir())
-        .map(|p| p.canonicalize().unwrap_or(p).to_string_lossy().into_owned());
+        .map(|p| plain(p.canonicalize().unwrap_or(p)));
     let lod = std::env::var("SANITY_LOD").ok().filter(|v| !v.trim().is_empty());
     Startup { repo, lod }
 }
@@ -1464,6 +1475,14 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_is_named_as_the_folder_dialog_names_it() {
+        assert_eq!(plain(r"\\?\C:\Repositories\sanity".into()), r"C:\Repositories\sanity");
+        // A share has no plain form with the same meaning, so it is left.
+        assert_eq!(plain(r"\\?\UNC\host\share".into()), r"\\?\UNC\host\share");
+        assert_eq!(plain("/home/me/repo".into()), "/home/me/repo");
+    }
 
     #[test]
     fn a_comparison_finds_what_the_watch_missed_and_nothing_else() {

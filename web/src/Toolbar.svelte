@@ -75,7 +75,7 @@
 	 *  where it came from. */
 	const REPO_URL = 'https://github.com/milanofthe/sanity';
 
-	const short = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
+	const short = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 	/** Thousands as k, so a hint stays a hint. */
 	const kilo = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
 	const shown = $derived(demos.find((d) => project.demo && d.id === project.root) ?? null);
