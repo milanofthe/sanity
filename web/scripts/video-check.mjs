@@ -10,6 +10,8 @@
 //   the steps   every commit of the plan shown, in order, oldest first
 //   a frame     the project in it, and the commit line along the bottom in
 //               the theme's colours
+//   the start   at rest: the jump to the first commit, which in the app
+//               changes every file, not shown as a change
 //   after       the canvas and the camera back as they were, and the clock
 //               running on without going back in time
 //   cancel      nothing kept, and the canvas back all the same
@@ -40,8 +42,17 @@ const r = await page.evaluate(async () => {
   };
 
   const shown = [];
+  // The first step stands for the jump from the present to the first commit,
+  // which in the app touches every file and creates some: all of them lit.
+  const paths = [...app.scene.files.keys()];
   const source = {
-    go: async (i) => { shown.push(i); },
+    go: async (i) => {
+      if (shown.length === 0) {
+        for (const p of paths) app.touch(p);
+        app.scene.markCreated(paths.slice(0, 5));
+      }
+      shown.push(i);
+    },
     caption: (i) => ({ meta: `2026-09-${String(24 - i).padStart(2, '0')}  c${i}`, subject: `commit number ${i}` }),
   };
   const fps = 30;
@@ -81,6 +92,20 @@ const r = await page.evaluate(async () => {
   const middle = lum(200, 800);
   const bottom = lum(1080 - band + 4, 1080 - 4);
 
+  // The first frame against the last of the intro, which hold the same
+  // commit with the camera still: anything between them is a change playing.
+  const pixels = async (t) => {
+    const w = await frames.getCanvas(t);
+    return w.canvas.getContext('2d').getImageData(0, 0, w.canvas.width, w.canvas.height).data;
+  };
+  const first = await pixels(0.5 / fps);
+  const settled = await pixels((plan.introFrames - 0.5) / fps);
+  let startDiff = 0;
+  for (let i = 0; i < first.length; i += 4) {
+    startDiff += Math.abs(first[i] - settled[i]) + Math.abs(first[i + 1] - settled[i + 1]) + Math.abs(first[i + 2] - settled[i + 2]);
+  }
+  startDiff /= (first.length / 4) * 3;
+
   const after = {
     w: app.canvas.width, h: app.canvas.height, x: app.cam.x, y: app.cam.y, zoom: app.cam.zoom,
   };
@@ -106,7 +131,7 @@ const r = await page.evaluate(async () => {
   return {
     where, took, plan: { frames: plan.frames, seconds: plan.seconds, start: plan.start, targets: plan.targets },
     shown: shownOnce, packets: stats.packetCount, duration, codec, width: track.displayWidth, height: track.displayHeight,
-    found: found?.codec ?? null, fallback, middle, bottom, before, after, cancelled, kept: sink2.bytes(), afterCancel,
+    found: found?.codec ?? null, fallback, middle, bottom, startDiff, before, after, cancelled, kept: sink2.bytes(), afterCancel,
     // The app's own clock module, not a second copy of it.
     clockAhead: await (async () => {
       const u = performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('canvas/clock.ts'));
@@ -124,6 +149,7 @@ expect(Math.abs(r.duration - r.plan.seconds) < 0.05, `as long as planned (${r.du
 expect(JSON.stringify(r.shown) === JSON.stringify([r.plan.start, ...r.plan.targets]), `every step shown, in order (${r.shown.join(' ')})`);
 expect(r.middle.sd > 8, `the project is in the frame (spread ${r.middle.sd.toFixed(1)})`);
 expect(r.bottom.sd > 3 && Math.abs(r.bottom.mean - r.middle.mean) < 60, `the commit line is along the bottom (mean ${r.bottom.mean.toFixed(0)}, spread ${r.bottom.sd.toFixed(1)})`);
+expect(r.startDiff < 0.5, `the video starts at rest, its first frame the intro's last (mean difference ${r.startDiff.toFixed(2)})`);
 expect(r.after.w === r.before.w && r.after.h === r.before.h, 'the canvas is its own size again');
 expect(r.after.x === r.before.x && r.after.y === r.before.y && r.after.zoom === r.before.zoom, 'the camera is where it was');
 // A video renders faster than it plays, and the clock keeps the lead rather

@@ -214,9 +214,11 @@ export async function renderReplay(
     };
 
     // The first commit, arrived at before the video starts: getting there
-    // from the present is a jump across the whole range, not part of it.
+    // from the present is a jump across the whole range, not part of it, so
+    // what it changed is not shown as changed.
     const band = captionHeight(height);
     await source.go(plan.start);
+    app.forgetChanges();
     app.setCaption(caption(source.caption(plan.start), width, height));
     app.captureFit(0, band);
     await app.captureSettle();
