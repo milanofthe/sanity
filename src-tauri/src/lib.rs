@@ -1020,20 +1020,22 @@ async fn drop_files(paths: Vec<String>, state: State<'_, AppState>) -> Result<()
 /// looks like one is skipped in favour of the platform handler.
 const TERMINAL_EDITORS: &[&str] = &["vi", "vim", "nvim", "nano", "emacs", "helix", "hx", "micro"];
 
-#[tauri::command]
-async fn open_in_editor(path: String, state: State<'_, AppState>) -> Result<String, String> {
-    let root = {
-        let repo = state.repo.locked();
-        repo.root.clone()
-    };
-    // Same containment check as reading: a path from the frontend is not
-    // trusted just because the frontend is ours.
-    let full = root.join(&path);
-    let canonical = full.canonicalize().map_err(|e| e.to_string())?;
+/// A path the frontend names, as a file on disk inside the open folder. The
+/// same containment check as reading: a path from the frontend is not
+/// trusted just because the frontend is ours.
+fn in_folder(path: &str, state: &AppState) -> Result<PathBuf, String> {
+    let root = state.repo.locked().root.clone();
+    let canonical = root.join(path).canonicalize().map_err(|e| e.to_string())?;
     let root_canonical = root.canonicalize().map_err(|e| e.to_string())?;
     if !canonical.starts_with(&root_canonical) {
         return Err("path outside the open folder".into());
     }
+    Ok(canonical)
+}
+
+#[tauri::command]
+async fn open_in_editor(path: String, state: State<'_, AppState>) -> Result<String, String> {
+    let canonical = in_folder(&path, &state)?;
 
     let configured = ["SANITY_EDITOR", "VISUAL", "EDITOR"]
         .iter()
@@ -1089,6 +1091,39 @@ fn platform_open(path: &Path) -> Result<String, String> {
         .spawn()
         .map(|_| "start".to_string())
         .map_err(|e| e.to_string())
+}
+
+/// Show a file in the platform's file manager, selected where the file
+/// manager can be asked to.
+#[tauri::command]
+async fn show_in_folder(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let file = in_folder(&path, &state)?;
+    reveal(&file).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn reveal(file: &Path) -> std::io::Result<()> {
+    process::command("open").arg("-R").arg(file).spawn().map(drop)
+}
+
+/// Explorer reads its command line itself rather than as arguments, so
+/// `/select,` and the path go in as written, and the path in its plain form:
+/// Explorer does not take the `\\?\` one `canonicalize` gives.
+#[cfg(target_os = "windows")]
+fn reveal(file: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    process::command("explorer")
+        .raw_arg(format!("/select,\"{}\"", plain(file.to_path_buf())))
+        .spawn()
+        .map(drop)
+}
+
+/// The folder the file is in. Selecting it would take the FileManager1 D-Bus
+/// interface, which not every desktop's file manager has.
+#[cfg(target_os = "linux")]
+fn reveal(file: &Path) -> std::io::Result<()> {
+    let dir = file.parent().unwrap_or(file);
+    process::command("xdg-open").arg(dir).spawn().map(drop)
 }
 
 /// Take WebKitGTK off its DMA-BUF renderer where that renderer cannot work.
@@ -1453,6 +1488,7 @@ pub fn run() {
             find_text,
             startup,
             open_in_editor,
+            show_in_folder,
             refresh_files,
             stop_watch,
             resync_watch,
