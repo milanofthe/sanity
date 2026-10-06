@@ -47,7 +47,8 @@ Or open a folder from the Project menu.
 - The left and right arrow keys, or `[` and `]`, step through the git history.
 - Clicking a panel header opens the file in `$SANITY_EDITOR`, `$VISUAL`,
   `$EDITOR` or the system default.
-- Right click exports the view or the whole project as a 4K PNG.
+- Right click exports the view or the whole project as a 4K PNG, and on a
+  panel shows the file in its folder.
 - The Files menu sets which file types are shown and whether files ignored by
   git are listed. The View menu sets whether files are coloured by language,
   whether directories are named over the canvas, whether documents show all

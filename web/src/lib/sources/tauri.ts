@@ -188,6 +188,11 @@ export async function openInEditor(path: string): Promise<string> {
   return invoke<string>('open_in_editor', { path });
 }
 
+/** Show a file in the system's file manager. */
+export async function showInFolder(path: string): Promise<void> {
+  await invoke('show_in_folder', { path });
+}
+
 export interface Startup {
   repo?: string;
   lod?: string;

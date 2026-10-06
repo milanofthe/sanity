@@ -21,7 +21,7 @@
 	} from '$lib/sources/demo';
 	import {
 		fillRepo, historyGo, inTauri, loadHistory, loadRepo, loadedRoot, openInEditor, openLoaded, pickFolder,
-		resyncWatch, startup, stopWatching, watchRepo,
+		resyncWatch, showInFolder, startup, stopWatching, watchRepo,
 	} from '$lib/sources/tauri';
 	import type { UnlistenFn } from '@tauri-apps/api/event';
 	import { bandsFromQuery, setBands } from '$lib/canvas/lod';
@@ -74,12 +74,15 @@
 
 	const fileName = (p: string) => p.split('/').pop() ?? p;
 
-	function openFile(path: string) {
+	/** Hand a file to something outside the app: the editor or the file
+	 *  manager. Only a folder on disk has files to hand over. */
+	function handOver(path: string, to: (path: string) => Promise<unknown>) {
 		if (!inTauri() || !loadedRoot()) return;
-		openInEditor(path).catch((e) => {
+		to(path).catch((e) => {
 			error = e instanceof Error ? e.message : String(e);
 		});
 	}
+	const openFile = (path: string) => handOver(path, openInEditor);
 
 	// Re-open the scene whenever the set of drawn types changes. The layout is
 	// a pure function of the file list, so this is the whole implementation of
@@ -459,6 +462,15 @@
 				disabled={!inTauri() || !loadedRoot()}
 				onclick={() => {
 					if (ctx?.path) openFile(ctx.path);
+					ctx = null;
+				}}
+			/>
+			<MenuItem
+				label="Show in folder"
+				icon="folder"
+				disabled={!inTauri() || !loadedRoot()}
+				onclick={() => {
+					if (ctx?.path) handOver(ctx.path, showInFolder);
 					ctx = null;
 				}}
 			/>
